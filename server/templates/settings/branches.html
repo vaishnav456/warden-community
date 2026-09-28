@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Settings — Branches{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Branches</span>{% endblock %}
+
+{% block content %}
+{% set settings_section = 'branches' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="flex-1 min-w-0" x-data="slidePanel">
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="text-base font-semibold text-ink-100">Branches</h2>
+        <p class="text-xs text-ink-500 mt-0.5">Logical grouping of endpoints within your company</p>
+      </div>
+      <button @click="show('Create Branch')" class="btn btn-primary btn-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Add Branch
+      </button>
+    </div>
+    <div class="w-table-wrap">
+      <table class="w-table">
+        <thead><tr><th>Name</th><th>City</th><th>Time zone</th><th>Endpoints</th><th>Created</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>
+          {% for branch in branches %}
+          <tr>
+            <td class="text-sm font-medium text-ink-100">{{ branch.name }}</td>
+            <td class="text-xs text-ink-500">{{ branch.city or '—' }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('settings.update_branch_timezone', id=branch.id) }}" class="flex items-center gap-2">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <select name="timezone" class="form-input form-select min-w-48" aria-label="Time zone for {{ branch.name }}">
+                  {% for label, zone_id in windows_time_zones.items() %}
+                  <option value="{{ zone_id }}" {% if (branch.timezone or 'UTC') == zone_id %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+              </form>
+            </td>
+            <td class="text-xs text-ink-300">{{ branch.endpoint_count }}</td>
+            <td class="text-xs text-ink-500">{{ branch.created_at | timeago }}</td>
+            <td class="text-right">
+              <button class="btn btn-secondary btn-sm"
+                      hx-delete="{{ url_for('settings.delete_branch', id=branch.id) }}"
+                      hx-confirm="Delete branch {{ branch.name }}? Endpoints must be removed first."
+                      hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6"><div class="empty-state py-10"><p class="text-sm text-ink-500">No branches yet</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Create branch slide panel -->
+    <template x-if="open">
+      <div>
+        <div class="slide-overlay" @click="close()"></div>
+        <div class="slide-panel slide-in-right">
+          <div class="slide-panel-header">
+            <h3 class="text-sm font-semibold" x-text="title"></h3>
+            <button @click="close()" class="btn-icon btn"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+          </div>
+          <form id="create-branch-form" method="POST" action="{{ url_for('settings.create_branch') }}" class="slide-panel-body space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div>
+              <label class="form-label">Branch Name <span class="text-status-critical">*</span></label>
+              <input type="text" name="name" required class="form-input" placeholder="e.g. Main Office">
+            </div>
+            <div>
+              <label class="form-label">City</label>
+              <input type="text" name="city" class="form-input" placeholder="e.g. City">
+            </div>
+            <div>
+              <label class="form-label">Endpoint time zone</label>
+              <select name="timezone" class="form-input form-select">
+                {% for label, zone_id in windows_time_zones.items() %}
+                <option value="{{ zone_id }}" {% if zone_id == 'UTC' %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <p class="form-help">Windows endpoints in this branch apply this time zone automatically on heartbeat.</p>
+            </div>
+          </form>
+          <div class="slide-panel-footer">
+            <button @click="close()" class="btn btn-secondary">Cancel</button>
+            <button type="submit" form="create-branch-form" class="btn btn-primary">Create Branch</button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+{% endblock %}

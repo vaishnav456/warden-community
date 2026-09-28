@@ -1,0 +1,17 @@
+{
+  "node_id": "COPY-FROM-WARDEN",
+  "node_key": "COPY-ONCE-FROM-WARDEN",
+  "warden_url": "https://warden.example.com",
+  "server_public_key": "COPY-FROM-WARDEN",
+  "listen": ":9443",
+  "root": "D:/WardenHome",
+  "tls_cert": "",
+  "tls_key": "",
+  "client_ca": "",
+  "client_cert": "",
+  "client_key": "",
+  "encryption_key": "BASE64-ENCODED-32-BYTE-KEY",
+  "public_mode": false,
+  "replication": true,
+  "storage_cluster_id": ""
+}

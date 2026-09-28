@@ -1,0 +1,19 @@
+<div class="px-4 py-3 border-b border-base-700 flex items-center justify-between">
+  <span class="text-sm font-semibold text-ink-100">Notifications</span>
+  {% if unread_count > 0 %}
+  <span class="text-xs text-ink-700">{{ unread_count }} unread</span>
+  {% endif %}
+</div>
+{% for n in notifications %}
+<div class="px-4 py-3 flex items-start gap-3 {% if not n.is_read %}bg-accent-500/10{% endif %} hover:bg-white/[0.02]">
+  <div class="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0
+              {% if n.type == 'error' %}bg-status-critical{% elif n.type == 'warning' %}bg-status-warning{% else %}bg-accent-400{% endif %}"></div>
+  <div class="flex-1 min-w-0">
+    <div class="text-sm font-medium text-ink-100 truncate">{{ n.title }}</div>
+    <div class="text-xs text-ink-500 mt-0.5">{{ n.message }}</div>
+    <div class="text-xs text-ink-700 mt-1">{{ n.created_at | timeago }}</div>
+  </div>
+</div>
+{% else %}
+<div class="px-4 py-8 text-center text-sm text-ink-700">No notifications</div>
+{% endfor %}

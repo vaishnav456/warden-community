@@ -1,0 +1,9 @@
+<span class="badge {{ 'badge-online' if endpoint.status == 'online' else 'badge-offline' }}"
+      id="endpoint-status-badge"
+      hx-get="/partials/endpoint-status/{{ endpoint.id }}"
+      hx-trigger="every 15s"
+      hx-sync="this:drop"
+      hx-swap="outerHTML">
+  <span class="status-dot {{ 'status-dot-online' if endpoint.status == 'online' else 'status-dot-offline' }}"></span>
+  {{ endpoint.status | title }}
+</span>

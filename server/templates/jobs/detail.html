@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Job Details{% endblock %}
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <a href="/jobs" class="text-ink-700 hover:text-ink-300">Jobs</a>
+  <span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100">{{ job.type.replace('_', ' ').title() }}</span>
+</nav>
+{% endblock %}
+{% block content %}
+{% macro display_value(value) %}
+  {% if value is mapping %}
+    <div class="audit-detail-grid">
+      {% for key, nested in value.items() %}
+      <span class="audit-detail"><b>{{ key | replace('_', ' ') }}</b><em>{{ display_value(nested) }}</em></span>
+      {% endfor %}
+    </div>
+  {% elif value is sequence and value is not string %}
+    <span>{{ value | length }} item{{ '' if value|length == 1 else 's' }}</span>
+  {% elif value is sameas true %}<span class="text-status-online">Yes</span>
+  {% elif value is sameas false %}<span class="text-status-critical">No</span>
+  {% elif value is none %}<span class="text-ink-700">Not provided</span>
+  {% else %}{{ value }}{% endif %}
+{% endmacro %}
+<div class="max-w-2xl">
+  {% include "partials/job_status_card.html" %}
+  {% if payload_data %}
+  <div class="w-table-wrap p-5 mb-4">
+    <div class="section-kicker">Request parameters</div>
+    <div class="audit-detail-grid mt-3">
+      {% for key, value in payload_data.items() %}
+      <span class="audit-detail"><b>{{ key | replace('_', ' ') }}</b><em>{{ display_value(value) }}</em></span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if job.log_output %}
+  <div>
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs text-ink-700 font-semibold uppercase">Output</span>
+    </div>
+    {% if output_data is mapping %}
+    <div class="structured-output">
+      {% for key, value in output_data.items() %}
+      <div class="structured-field">
+        <div class="structured-label">{{ key | replace('_', ' ') }}</div>
+        <div class="structured-value">{{ display_value(value) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% elif output_data is sequence and output_data is not string %}
+    <div class="structured-output">
+      {% for record in output_data %}
+      <div class="structured-field">
+        <div class="structured-label">Record {{ loop.index }}</div>
+        <div class="structured-value">{{ display_value(record) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <pre class="terminal"
+         id="job-log"
+         {% if job.status == 'running' %}
+         hx-get="/partials/job-log/{{ job.id }}"
+         hx-trigger="every 3s"
+         hx-sync="this:drop"
+         hx-swap="innerHTML"
+         {% endif %}>{{ job.log_output }}</pre>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

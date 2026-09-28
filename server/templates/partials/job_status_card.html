@@ -1,0 +1,18 @@
+<div id="job-status-card" class="w-table-wrap p-6 mb-4"
+     {% if job.status in ('pending', 'approved', 'running') %}
+     hx-get="/partials/job-status/{{ job.id }}" hx-trigger="every 3s"
+     hx-sync="this:drop" hx-swap="outerHTML"
+     {% endif %}>
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-lg font-semibold text-ink-100">{{ job.type.replace('_', ' ').title() }}</h1>
+    <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+  </div>
+  <dl class="grid grid-cols-2 gap-3 text-sm">
+    <div><dt class="text-ink-500">Endpoint</dt><dd class="text-ink-100 font-medium font-mono-data">{{ endpoint.hostname if endpoint else '—' }}</dd></div>
+    <div><dt class="text-ink-500">Exit Code</dt><dd class="text-ink-100 font-mono-data">{{ job.exit_code if job.exit_code is not none else '—' }}</dd></div>
+    <div><dt class="text-ink-500">Created</dt><dd class="text-ink-100">{{ job.created_at | timeago }}</dd></div>
+    <div><dt class="text-ink-500">Completed</dt><dd class="text-ink-100">{{ job.completed_at | timeago if job.completed_at else '—' }}</dd></div>
+  </dl>
+  {% if job.status in ('pending', 'approved', 'running') %}<p class="text-xs text-ink-500 mt-4">Live status · checking every 3 seconds</p>{% endif %}
+  {% if job.error_msg %}<div class="endpoint-job-error mt-4"><strong>Action failed</strong><p>{{ job.error_msg }}</p></div>{% endif %}
+</div>

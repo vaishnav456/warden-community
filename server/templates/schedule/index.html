@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}Scheduled Jobs{% endblock %}
+
+{% block breadcrumb %}
+<span class="text-ink-700">Schedule</span>
+{% endblock %}
+
+{% block content %}
+{# ── Interval formatter macro ── #}
+{% macro fmt_interval(seconds) %}
+  {%- if seconds == 3600 %}1h
+  {%- elif seconds == 21600 %}6h
+  {%- elif seconds == 43200 %}12h
+  {%- elif seconds == 86400 %}24h
+  {%- elif seconds == 604800 %}7d
+  {%- elif seconds < 3600 %}{{ (seconds / 60) | round(0) | int }}m
+  {%- elif seconds < 86400 %}{{ (seconds / 3600) | round(1) }}h
+  {%- else %}{{ (seconds / 86400) | round(1) }}d
+  {%- endif %}
+{%- endmacro %}
+
+<div x-data="scheduledJobsPage" data-default-job-type="{{ valid_job_types[0] if valid_job_types else 'COLLECT_SYSINFO' }}">
+
+{# ── Header ── #}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold text-ink-100 tracking-tight">Scheduled Jobs</h1>
+    <p class="text-sm text-ink-500 mt-0.5">Automate data collection and compliance scans</p>
+  </div>
+  <button @click="showNewJob = true" class="btn btn-primary">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+    </svg>
+    New Job
+  </button>
+</div>
+
+{# ── Jobs table ── #}
+<div class="w-table-wrap">
+  <div class="overflow-x-auto">
+    <table class="w-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Job Type</th>
+          <th>Interval</th>
+          <th>Target</th>
+          <th>Enabled</th>
+          <th>Last Run</th>
+          <th>Next Run</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="schedule-table-body">
+        {% for job in jobs %}
+        {% set br = branches | selectattr('id', 'equalto', job.branch_id) | first if job.branch_id else none %}
+        {% set ep = endpoints | selectattr('id', 'equalto', job.endpoint_id) | first if job.endpoint_id else none %}
+        <tr id="job-row-{{ job.id }}">
+          <td class="font-medium text-ink-100">{{ job.name }}</td>
+          <td>
+            <code class="text-xs bg-base-800 text-ink-300 px-2 py-0.5 rounded font-mono-data">{{ job.job_type }}</code>
+          </td>
+          <td class="text-ink-300">Every {{ fmt_interval(job.interval_seconds) }}</td>
+          <td class="text-ink-300">
+            {% if ep %}
+            <span class="text-accent-400">{{ ep.display_name or ep.hostname }}</span>
+            {% elif br %}
+            <span>Branch: {{ br.name }}</span>
+            {% else %}
+            <span class="text-ink-700">All endpoints</span>
+            {% endif %}
+          </td>
+          <td>
+            <button hx-post="/schedule/{{ job.id }}/toggle"
+                    hx-swap="none"
+                    @htmx:after-request="$el.querySelector('span').classList.toggle('bg-status-online'); $el.querySelector('span').classList.toggle('translate-x-4'); $el.querySelector('span').classList.toggle('translate-x-0')"
+                    class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none
+                           {{ 'bg-status-online' if job.enabled else 'bg-base-500' }}"
+                    title="{{ 'Enabled — click to disable' if job.enabled else 'Disabled — click to enable' }}">
+              <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-ink-100 shadow transition-transform
+                           {{ 'translate-x-4' if job.enabled else 'translate-x-0.5' }}"></span>
+            </button>
+          </td>
+          <td class="text-ink-700 text-xs">
+            {{ job.last_run_at | timeago if job.last_run_at else 'Never' }}
+          </td>
+          <td class="text-ink-700 text-xs">
+            {% if not job.enabled %}
+            <span class="text-ink-700">—</span>
+            {% elif job.next_run_at %}
+            {{ job.next_run_at | timeago }}
+            {% else %}
+            <span class="text-ink-700">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="flex items-center gap-1">
+              <button @click="runNow('{{ job.id }}')" class="btn btn-sm btn-secondary">
+                Run Now
+              </button>
+              <button hx-post="/schedule/{{ job.id }}/delete"
+                      hx-confirm="Delete schedule '{{ job.name }}'?"
+                      hx-target="closest tr"
+                      hx-swap="outerHTML"
+                      class="px-2.5 py-1 text-xs text-status-critical hover:bg-status-critical/10 rounded-lg transition-colors">
+                Delete
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8"><div class="empty-state py-12"><p class="text-sm text-ink-500">No scheduled jobs yet.
+            <button @click="showNewJob = true" class="text-accent-400 hover:underline ml-1">Create one</button></p></div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── New Job Modal ── #}
+<div x-show="showNewJob"
+     x-cloak
+     class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+     @keydown.escape.window="showNewJob = false">
+  <div class="absolute inset-0" @click="showNewJob = false"></div>
+  <div class="relative bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md z-10">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-base-600">
+      <h3 class="text-base font-semibold text-ink-100">New Scheduled Job</h3>
+      <button @click="showNewJob = false" class="text-ink-500 hover:text-ink-100">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="px-6 py-4 space-y-4">
+      {# Name #}
+      <div>
+        <label class="form-label">Job Name <span class="text-status-critical">*</span></label>
+        <input x-model="jobName" type="text" placeholder="e.g. Daily System Info Collection"
+               class="form-input">
+      </div>
+
+      {# Job Type #}
+      <div>
+        <label class="form-label">Job Type</label>
+        <select x-model="jobType" class="form-input form-select">
+          {% for jt in valid_job_types %}
+          <option value="{{ jt }}">{{ jt | replace('_', ' ') | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# Interval #}
+      <div>
+        <label class="form-label">Interval</label>
+        <select x-model="jobInterval" class="form-input form-select">
+          <option value="3600">Every 1 hour</option>
+          <option value="21600">Every 6 hours</option>
+          <option value="43200">Every 12 hours</option>
+          <option value="86400" selected>Every 24 hours (daily)</option>
+          <option value="604800">Every 7 days (weekly)</option>
+        </select>
+      </div>
+
+      {# Target #}
+      <div>
+        <label class="form-label mb-2">Target</label>
+        <div class="space-y-2">
+          <label class="flex items-center gap-3 px-3 py-2 rounded-lg bg-base-800 hover:bg-base-700 cursor-pointer">
+            <input type="radio" x-model="jobTarget" value="all"
+                   class="border-base-500 text-accent-500 focus:ring-accent-500">
+            <span class="text-sm text-ink-300">All endpoints</span>
+          </label>
+          <label class="flex items-center gap-3 px-3 py-2 rounded-lg bg-base-800 hover:bg-base-700 cursor-pointer">
+            <input type="radio" x-model="jobTarget" value="branch"
+                   class="border-base-500 text-accent-500 focus:ring-accent-500">
+            <span class="text-sm text-ink-300">By branch</span>
+          </label>
+          <div x-show="jobTarget === 'branch'" class="pl-6">
+            <select x-model="jobBranch" class="form-input form-select">
+              <option value="">Select branch…</option>
+              {% for b in branches %}
+              <option value="{{ b.id }}">{{ b.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <label class="flex items-center gap-3 px-3 py-2 rounded-lg bg-base-800 hover:bg-base-700 cursor-pointer">
+            <input type="radio" x-model="jobTarget" value="endpoint"
+                   class="border-base-500 text-accent-500 focus:ring-accent-500">
+            <span class="text-sm text-ink-300">Specific endpoint</span>
+          </label>
+          <div x-show="jobTarget === 'endpoint'" class="pl-6">
+            <select x-model="jobEndpoint" class="form-input form-select">
+              <option value="">Select endpoint…</option>
+              {% for ep in endpoints %}
+              <option value="{{ ep.id }}">{{ ep.display_name or ep.hostname }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-base-600">
+      <button @click="showNewJob = false" class="btn btn-secondary">
+        Cancel
+      </button>
+      <button @click="saveJob()"
+              :disabled="saving || !jobName.trim()"
+              class="btn btn-primary">
+        <span x-show="!saving">Create Schedule</span>
+        <span x-show="saving">Saving…</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+</div>{# /x-data #}
+{% endblock %}

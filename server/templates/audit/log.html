@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Audit Log</span>{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-bold text-ink-100">Audit Log</h1>
+  <p class="text-sm text-ink-700">Tamper-evident. Read-only.</p>
+</div>
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead><tr>
+      <th>Time</th>
+      <th>Actor</th>
+      <th>Action</th>
+      <th>Endpoint</th>
+      <th>Detail</th>
+    </tr></thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td class="text-ink-500 whitespace-nowrap font-mono-data">{{ e.created_at | timeago }}</td>
+        <td class="text-ink-300">{{ e._actor.full_name if e._actor else (e.actor_id or 'system') }}</td>
+        <td><span class="font-mono-data text-xs text-ink-100">{{ e.action }}</span></td>
+        <td class="text-ink-500 font-mono-data">{{ e._endpoint.hostname if e._endpoint else '—' }}</td>
+        <td class="max-w-md">
+          {% if e.detail %}
+          <div class="audit-detail-grid">
+            {% for key, value in e.detail.items() %}
+            <span class="audit-detail"><b>{{ key | replace('_', ' ') }}</b><em>{{ value }}</em></span>
+            {% endfor %}
+          </div>
+          {% else %}<span class="text-ink-700">—</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="py-12 text-center text-ink-700">No audit entries found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if has_more %}
+<div class="mt-4 text-center">
+  <a href="/audit?page={{ page + 1 }}" class="text-sm text-accent-400 hover:underline">Load more →</a>
+</div>
+{% endif %}
+{% endblock %}

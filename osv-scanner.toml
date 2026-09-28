@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2026-12-31
+reason = "Warden reaches x/crypto only through Pion DTLS cryptobyte; no module imports the advisory's unmaintained openpgp packages. Re-evaluate on dependency updates."

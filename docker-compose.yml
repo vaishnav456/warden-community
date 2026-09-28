@@ -1,0 +1,170 @@
+# Warden Community — single-organization endpoint management server
+# Run from the repository root.
+#   docker compose up -d
+#
+# Fronted by a reverse proxy over a Docker network (nginx/Caddy/whatever the
+# deployment host runs) rather than loopback — warden-server binds HOST=0.0.0.0
+# (see gunicorn.conf.py, services/ws_proxy.py) and is reached by container
+# name, never via a published host port. Attach the fronting proxy's network
+# via docker-compose.override.yml (host-specific and gitignored).
+#
+# postgres + postgrest replace the old hosted-Supabase backend with a plain,
+# project-owned Postgres — db.py already speaks PostgREST's wire protocol
+# (Accept-Profile/Content-Profile headers), so no application code needed to
+# change. See db-init/ for the roles/schema PostgREST needs.
+
+services:
+  storage-init:
+    image: alpine:3.20
+    container_name: warden-storage-init
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - >-
+        mkdir -p /uploads/apps /uploads/branding /agent-dist &&
+        chown -R 10001:10001 /uploads /agent-dist &&
+        chmod -R u=rwX,g=,o= /uploads /agent-dist
+    volumes:
+      - warden-uploads:/uploads
+      - warden-agent-dist:/agent-dist
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+
+  postgres:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    image: warden-postgres:16-hardened
+    container_name: warden-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: warden
+      POSTGRES_USER: warden_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - warden-pg-data:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+      # Keep migrations outside the read-only init directory. Docker Desktop
+      # cannot create a nested mount point below another read-only bind mount.
+      - ./migrations:/migrations:ro
+    networks: [warden-db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warden_admin -d warden"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: warden-postgrest
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://postgrest_authenticator:${POSTGREST_AUTHENTICATOR_PASSWORD}@postgres:5432/warden
+      PGRST_DB_SCHEMAS: endpt
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${POSTGREST_JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [warden-db]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  warden-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: warden-community-server:local
+    container_name: warden-server
+    restart: unless-stopped
+    depends_on:
+      postgrest:
+        condition: service_started
+      storage-init:
+        condition: service_completed_successfully
+    networks: [warden-db, warden-services, warden-ingress]
+    env_file:
+      - path: ./server/.env
+        required: false
+    volumes:
+      - warden-uploads:/app/../uploads
+      - warden-agent-dist:/app/../agent-dist
+      - warden-device-ca:/var/lib/warden/device-ca
+      - ./home-node/dist:/app/../home-node-dist:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      # gunicorn.conf.py reads HOST at process start, before config.py has
+      # parsed server/.env into os.environ — must be a real container env
+      # var, not just an .env entry, or gunicorn silently falls back to
+      # 127.0.0.1 while everything imported later (e.g. ws_proxy.py) sees
+      # the .env value fine. Loopback-only Caddy deployments should override
+      # this back to 127.0.0.1.
+      - HOST=0.0.0.0
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:35020/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  build-service:
+    build:
+      context: ./build-service
+      dockerfile: Dockerfile
+    image: warden-community-build-service:local
+    container_name: warden-build-service
+    restart: unless-stopped
+    depends_on:
+      warden-server:
+        condition: service_healthy
+    networks: [warden-db, warden-services]
+    env_file:
+      - path: ./build-service/.env
+        required: false
+    volumes:
+      # Read-only: build-service only compiles from this source, never
+      # writes to it — always builds from whatever's currently on disk,
+      # no image rebuild needed after an agent-go code change.
+      - ./agent-go:/agent-go:ro
+      - ./agent-posix:/agent-posix:ro
+      - ./windows-credential-provider:/windows-credential-provider:ro
+      - warden-build-output:/build-output
+      # Code-signing cert (see build-service/.env.example's SIGN_PFX_PATH).
+      # ./certs is gitignored — never commit a real cert here.
+      - ./certs:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777,uid=10002,gid=10002
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+networks:
+  warden-db:
+    driver: bridge
+    internal: true
+  warden-services:
+    driver: bridge
+  warden-ingress:
+    driver: bridge
+
+volumes:
+  warden-pg-data:
+  warden-build-output:
+  warden-uploads:
+  warden-agent-dist:
+  warden-device-ca:

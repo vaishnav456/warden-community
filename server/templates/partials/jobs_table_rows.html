@@ -1,0 +1,12 @@
+{% for j in jobs %}
+<tr>
+  <td class="font-medium text-ink-100">{{ j.type.replace('_', ' ').title() }}</td>
+  <td class="text-ink-500 font-mono-data">{{ j._endpoint.hostname if j._endpoint else '—' }}</td>
+  <td><span class="badge badge-{{ j.status }}">{{ j.status }}</span></td>
+  <td class="text-ink-500">{{ j.created_at | timeago }}</td>
+  <td class="text-ink-500">{{ j.completed_at | timeago if j.completed_at else '—' }}</td>
+  <td><a href="/jobs/{{ j.id }}" class="text-xs text-accent-400 hover:underline">Details</a></td>
+</tr>
+{% else %}
+<tr><td colspan="6" class="py-12 text-center text-ink-700">No jobs found.</td></tr>
+{% endfor %}

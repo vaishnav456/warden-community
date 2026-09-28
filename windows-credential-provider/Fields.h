@@ -1,0 +1,37 @@
+#pragma once
+
+#include <credentialprovider.h>
+
+enum WARDEN_FIELD_ID : DWORD
+{
+    WFI_TITLE = 0,
+    WFI_USERNAME,
+    WFI_PASSWORD,
+    WFI_STATUS,
+    WFI_SUBMIT,
+    WFI_NUM_FIELDS
+};
+
+struct FIELD_STATE_PAIR
+{
+    CREDENTIAL_PROVIDER_FIELD_STATE state;
+    CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE interactiveState;
+};
+
+inline const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR kWardenFieldDescriptors[WFI_NUM_FIELDS] =
+{
+    {WFI_TITLE,    CPFT_LARGE_TEXT,    const_cast<PWSTR>(L"Warden sign-in"), CLSID_NULL},
+    {WFI_USERNAME, CPFT_EDIT_TEXT,     const_cast<PWSTR>(L"Email"),          CLSID_NULL},
+    {WFI_PASSWORD, CPFT_PASSWORD_TEXT, const_cast<PWSTR>(L"Password"),       CLSID_NULL},
+    {WFI_STATUS,   CPFT_SMALL_TEXT,    const_cast<PWSTR>(L"Use your Warden account"), CLSID_NULL},
+    {WFI_SUBMIT,   CPFT_SUBMIT_BUTTON, const_cast<PWSTR>(L"Sign in"),        CLSID_NULL},
+};
+
+inline const FIELD_STATE_PAIR kWardenFieldStates[WFI_NUM_FIELDS] =
+{
+    {CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE},
+    {CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_FOCUSED},
+    {CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE},
+    {CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE},
+    {CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE},
+};

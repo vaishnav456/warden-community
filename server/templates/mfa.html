@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Two-Factor Authentication — Warden</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/warden.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/workbench.css') }}?v={{ asset_v }}">
+</head>
+<body class="h-full flex items-center justify-center bg-base-900 bg-[radial-gradient(circle_at_50%_-10%,rgba(34,211,238,0.08),transparent_45%)]">
+<div class="w-full max-w-sm px-6">
+  <div class="flex flex-col items-center mb-8">
+    <div class="w-12 h-12 rounded-2xl bg-accent-500 flex items-center justify-center mb-4 shadow-[0_0_28px_rgba(34,211,238,0.35)]">
+      <svg class="w-7 h-7 text-base-950" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+      </svg>
+    </div>
+    <h1 class="text-xl font-semibold text-ink-100 tracking-tight">Two-Factor Authentication</h1>
+    <p class="text-sm text-ink-500 mt-1 text-center">Enter the 6-digit code from your authenticator app</p>
+  </div>
+
+  {% if error %}
+  <div class="mb-4 px-4 py-3 bg-status-critical/10 border border-status-critical/25 rounded-lg text-sm text-status-critical">{{ error }}</div>
+  {% endif %}
+
+  <form action="/mfa" method="POST" class="bg-base-850 rounded-2xl shadow-panel border border-base-600 p-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+      <label class="form-label" for="code">Authentication Code</label>
+      <input type="text" id="code" name="code" required autocomplete="one-time-code"
+             inputmode="numeric" maxlength="8" pattern="[0-9A-Fa-f]+"
+             class="form-input text-center text-xl tracking-widest font-mono-data"
+             placeholder="000000" autofocus>
+    </div>
+    <button type="submit" class="btn btn-primary w-full justify-center py-2.5">
+      Verify
+    </button>
+  </form>
+  <p class="text-center text-xs text-ink-700 mt-4">
+    <form method="post" action="/auth/logout" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="text-accent-400 hover:text-accent-400/80 hover:underline">Back to login</button>
+    </form>
+  </p>
+</div>
+<script nonce="{{ csp_nonce }}" defer src="/static/js/form-ui.js?v={{ asset_v }}"></script>
+</body>
+</html>

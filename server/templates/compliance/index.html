@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}Compliance{% endblock %}
+
+{% block breadcrumb %}
+<span class="text-ink-700">Compliance</span>
+{% endblock %}
+
+{% block content %}
+{# ── Compute stats ── #}
+{% set ns = namespace(compliant=0, non_compliant=0, not_scanned=0) %}
+{% for ep in endpoints %}
+  {% set cr = result_map.get(ep.id) %}
+  {% if not cr %}
+    {% set ns.not_scanned = ns.not_scanned + 1 %}
+  {% elif cr.overall_status == 'compliant' %}
+    {% set ns.compliant = ns.compliant + 1 %}
+  {% else %}
+    {% set ns.non_compliant = ns.non_compliant + 1 %}
+  {% endif %}
+{% endfor %}
+
+<div x-data="compliancePage" data-all-checks="{{ all_checks | tojson | forceescape }}">
+
+{# ── Header ── #}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold text-ink-100 tracking-tight">Compliance</h1>
+    <p class="text-sm text-ink-500 mt-0.5">
+      {{ ns.compliant }}/{{ endpoints | length }} endpoints compliant
+    </p>
+  </div>
+  <button @click="scanAll()" :disabled="scanning" class="btn btn-primary">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    Scan All
+  </button>
+</div>
+
+{# ── Stats bar ── #}
+<div class="grid grid-cols-4 gap-4 mb-6">
+  <div class="stat-card">
+    <div class="stat-card-label">Total Endpoints</div>
+    <div class="stat-card-value">{{ endpoints | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card-label">Compliant</div>
+    <div class="stat-card-value text-status-online">{{ ns.compliant }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card-label">Non-Compliant</div>
+    <div class="stat-card-value text-status-critical">{{ ns.non_compliant }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card-label">Not Scanned</div>
+    <div class="stat-card-value text-ink-700">{{ ns.not_scanned }}</div>
+  </div>
+</div>
+
+{# ── Endpoints table ── #}
+<div class="w-table-wrap mb-6">
+  <div class="px-5 py-3 border-b border-base-600">
+    <h2 class="text-sm font-semibold text-ink-100">Endpoint Compliance Status</h2>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-table">
+      <thead>
+        <tr>
+          <th>Endpoint</th>
+          <th>Branch</th>
+          <th>Status</th>
+          <th>Compliance</th>
+          <th>Score</th>
+          <th>Last Scanned</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ep in endpoints %}
+        {% set cr = result_map.get(ep.id) %}
+        {% set br = branches | selectattr('id', 'equalto', ep.branch_id) | first if ep.branch_id else none %}
+        <tr>
+          <td>
+            <a href="/endpoints/{{ ep.id }}?tab=compliance"
+               class="font-medium text-ink-100 hover:text-accent-400 font-mono-data">
+              {{ ep.display_name or ep.hostname }}
+            </a>
+          </td>
+          <td class="text-ink-300">{{ br.name if br else '—' }}</td>
+          <td>
+            {% if ep.status == 'online' %}
+            <span class="badge badge-online">
+              <span class="status-dot status-dot-online"></span>Online
+            </span>
+            {% elif ep.status == 'offline' %}
+            <span class="badge badge-offline">
+              <span class="status-dot status-dot-offline"></span>Offline
+            </span>
+            {% else %}
+            <span class="badge badge-offline">
+              <span class="status-dot status-dot-offline"></span>{{ ep.status | title }}
+            </span>
+            {% endif %}
+          </td>
+          <td>
+            {% if cr %}
+              {% if cr.overall_status == 'compliant' %}
+              <span class="badge badge-online">Compliant</span>
+              {% elif cr.overall_status == 'non_compliant' %}
+              <span class="badge badge-critical">Non-Compliant</span>
+              {% else %}
+              <span class="badge badge-warning">{{ cr.overall_status | replace('_',' ') | title }}</span>
+              {% endif %}
+            {% else %}
+            <span class="badge badge-offline">Unknown</span>
+            {% endif %}
+          </td>
+          <td class="text-ink-300 font-medium font-mono-data">
+            {% if cr and cr.score is not none %}{{ cr.score }}/100{% else %}—{% endif %}
+          </td>
+          <td class="text-ink-700 text-xs">
+            {% if cr %}{{ cr.scanned_at | timeago }}{% else %}Never{% endif %}
+          </td>
+          <td>
+            <button hx-post="/compliance/scan/{{ ep.id }}"
+                    hx-swap="none"
+                    @htmx:after-request="wardenToast('Scan dispatched', 'success')"
+                    class="btn btn-sm btn-secondary">
+              Scan
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7"><div class="empty-state py-10"><p class="text-sm text-ink-500">No endpoints enrolled yet.</p></div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Policies panel ── #}
+<div class="w-table-wrap">
+  <button @click="showPolicies = !showPolicies"
+          class="w-full flex items-center justify-between px-5 py-3 text-sm font-semibold text-ink-100 hover:bg-white/[0.02] transition-colors">
+    <span>Compliance Policies ({{ policies | length }})</span>
+    <svg class="w-4 h-4 text-ink-500 transition-transform" :class="showPolicies ? 'rotate-180' : ''"
+         fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+    </svg>
+  </button>
+
+  <div x-show="showPolicies">
+    <div class="border-t border-base-600 px-5 py-4 space-y-2">
+      {% for p in policies %}
+      <div class="flex items-center gap-4 px-3 py-2.5 rounded-lg bg-base-800 hover:bg-base-700">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium text-ink-100">{{ p.name }}</div>
+          {% if p.description %}
+          <div class="text-xs text-ink-700 mt-0.5 truncate">{{ p.description }}</div>
+          {% endif %}
+          {% if p.branch_id %}
+          {% set pb = branches | selectattr('id', 'equalto', p.branch_id) | first %}
+          {% if pb %}<div class="text-xs text-accent-400 mt-0.5">Branch: {{ pb.name }}</div>{% endif %}
+          {% endif %}
+        </div>
+        {% set check_list = p.checks if p.checks is iterable else [] %}
+        <div class="text-xs text-ink-700">{{ check_list | length }} checks</div>
+        {% if p.enabled %}
+        <span class="badge badge-online">Enabled</span>
+        {% else %}
+        <span class="badge badge-offline">Disabled</span>
+        {% endif %}
+        <button hx-post="/compliance/policies/{{ p.id }}/delete"
+                hx-confirm="Delete policy '{{ p.name }}'?"
+                hx-target="closest div.flex"
+                hx-swap="outerHTML"
+                class="text-xs text-status-critical hover:bg-status-critical/10 px-2 py-1 rounded transition-colors">
+          Delete
+        </button>
+      </div>
+      {% else %}
+      <p class="text-sm text-ink-700 text-center py-4">No policies yet. Create one to start scanning.</p>
+      {% endfor %}
+
+      <div class="pt-2">
+        <button @click="showNewPolicy = true" class="btn btn-primary">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+          </svg>
+          New Policy
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── New Policy Modal ── #}
+<div x-show="showNewPolicy"
+     x-cloak
+     class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+     @keydown.escape.window="showNewPolicy = false">
+  <div class="absolute inset-0" @click="showNewPolicy = false"></div>
+  <div class="relative bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-lg max-h-[90vh] overflow-y-auto z-10">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-base-600">
+      <h3 class="text-base font-semibold text-ink-100">New Compliance Policy</h3>
+      <button @click="showNewPolicy = false" class="text-ink-500 hover:text-ink-100">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="px-6 py-4 space-y-4">
+      {# Name #}
+      <div>
+        <label class="form-label">Policy Name <span class="text-status-critical">*</span></label>
+        <input x-model="policyName" type="text" placeholder="e.g. Standard Workstation Policy"
+               class="form-input">
+      </div>
+
+      {# Description #}
+      <div>
+        <label class="form-label">Description</label>
+        <textarea x-model="policyDesc" rows="2" placeholder="Optional description..."
+                  class="form-input resize-none"></textarea>
+      </div>
+
+      {# Branch #}
+      <div>
+        <label class="form-label">Branch (optional — leave blank to apply to all)</label>
+        <select x-model="policyBranch" class="form-input form-select">
+          <option value="">All branches</option>
+          {% for b in branches %}
+          <option value="{{ b.id }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# Checks #}
+      <div>
+        <label class="form-label mb-2">Checks to enforce</label>
+        <div class="space-y-2">
+          {% set friendly = {
+            'bitlocker_enabled': 'BitLocker Drive Encryption',
+            'firewall_enabled': 'Windows Firewall',
+            'antivirus_present': 'Antivirus Protection',
+            'screen_lock_enabled': 'Screen Lock (≤15 min)',
+            'auto_update_enabled': 'Automatic Windows Updates',
+            'password_min_length': 'Password Min Length (≥8 chars)',
+            'guest_account_disabled': 'Guest Account Disabled',
+            'disk_encryption_enabled': 'FileVault Disk Encryption (macOS)'
+          } %}
+          {% for check in all_checks %}
+          <label class="flex items-center gap-3 px-3 py-2 rounded-lg bg-base-800 hover:bg-base-700 cursor-pointer">
+            <input type="checkbox"
+                   :checked="policyChecks.includes('{{ check }}')"
+                   @change="toggleCheck('{{ check }}')"
+                   class="rounded border-base-500 text-accent-500 focus:ring-accent-500">
+            <span class="text-sm text-ink-300">{{ friendly.get(check, check | replace('_', ' ') | title) }}</span>
+            <code class="ml-auto text-xs text-ink-700 font-mono-data">{{ check }}</code>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-base-600">
+      <button @click="showNewPolicy = false" class="btn btn-secondary">
+        Cancel
+      </button>
+      <button @click="savePolicy()"
+              :disabled="saving || !policyName.trim()"
+              class="btn btn-primary">
+        <span x-show="!saving">Create Policy</span>
+        <span x-show="saving">Saving…</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+</div>{# /x-data #}
+{% endblock %}

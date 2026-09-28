@@ -1,0 +1,71 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+!**/.env.example
+config.yml
+config.json
+!home-node/warden-home.example.json
+db-init/01-roles.sql
+db-init/04-bootstrap-admin.sql
+/certs/
+/.local-vm-access/
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.crt
+*.cer
+*.csr
+*.mobileconfig
+*.ovpn
+*.conf.private
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.bak
+
+# Local-machine compose overrides (host-specific paths, not the deployment target)
+docker-compose.override.yml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime bind-mount targets (populated at container runtime)
+/uploads/*
+!/uploads/.gitkeep
+/agent-dist/*
+!/agent-dist/.gitkeep
+/windows-credential-provider/x64/
+/windows-credential-provider/dist/*.dll
+/home-node/dist/
+
+# Generated audit/SBOM/recovery evidence. Recovery dumps contain tenant data;
+# retain them only in the approved encrypted evidence store, never in Git.
+/artifacts/
+/build-output/
+/dist/
+/tmp/
+/scripts/admx-catalog.json
+/scripts/policy_catalog_normalized.json
+
+# IDEs
+.idea/
+.vscode/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+.DS_Store

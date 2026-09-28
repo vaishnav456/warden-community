@@ -1,0 +1,130 @@
+{% set uptime = server_status.uptime_sec %}
+{% set uptime_h = (uptime // 3600) %}
+{% set uptime_m = ((uptime % 3600) // 60) %}
+{% set uptime_s = (uptime % 60) %}
+
+<!-- Server uptime strip -->
+<div class="flex items-center gap-3 bg-base-800 border border-base-600 rounded-lg px-4 py-2.5 mb-6">
+  <svg class="w-4 h-4 text-ink-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+  </svg>
+  <span class="text-ink-300 text-sm">Server uptime:
+    <span class="font-mono-data font-semibold text-ink-100">
+      {{ "%02d"|format(uptime_h) }}h {{ "%02d"|format(uptime_m) }}m {{ "%02d"|format(uptime_s) }}s
+    </span>
+  </span>
+  <span class="ml-auto text-ink-700 text-xs">
+    {{ server_status.active_connections }} active WS connection{{ 's' if server_status.active_connections != 1 else '' }}
+  </span>
+</div>
+
+<!-- Background service health cards -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+  {% for svc in server_status.services %}
+  {% set healthy = svc.healthy %}
+  <div class="bg-base-800 rounded-xl border {{ 'border-status-online/30' if healthy else 'border-status-critical/30' }} p-4">
+    <div class="flex items-start justify-between mb-2">
+      <div>
+        <div class="text-sm font-semibold text-ink-100">{{ svc.name | replace('_', ' ') | title }}</div>
+        <div class="text-xs text-ink-700 mt-0.5">Background service</div>
+      </div>
+      <span class="badge {{ 'badge-online' if healthy else 'badge-critical' }}">
+        <span class="status-dot {{ 'status-dot-online' if healthy else 'status-dot-unresponsive' }}"></span>
+        {{ 'Healthy' if healthy else 'Down' }}
+      </span>
+    </div>
+    <div class="text-xs text-ink-500 space-y-0.5">
+      <div>Ticks: <span class="font-mono-data font-medium text-ink-300">{{ svc.ticks }}</span></div>
+      {% if svc.age_sec is not none %}
+      <div>Last tick: <span class="font-mono-data font-medium {{ 'text-ink-300' if healthy else 'text-status-critical' }}">{{ svc.age_sec }}s ago</span></div>
+      {% else %}
+      <div class="text-status-warning font-medium">Not started yet</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Endpoint fleet + Job queue -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+
+  <!-- Endpoint summary -->
+  <div class="bg-base-800 rounded-xl border border-base-600 p-4">
+    <div class="flex items-center gap-2 mb-3">
+      <svg class="w-4 h-4 text-ink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+      </svg>
+      <span class="text-sm font-semibold text-ink-100">Endpoint Fleet</span>
+      <span class="ml-auto text-xs text-ink-700">{{ endpoint_summary.total }} total</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="text-center">
+        <div class="text-2xl font-bold text-status-online">{{ endpoint_summary.online }}</div>
+        <div class="text-xs text-ink-500">Online</div>
+      </div>
+      <div class="text-center">
+        <div class="text-2xl font-bold text-status-critical">{{ endpoint_summary.offline }}</div>
+        <div class="text-xs text-ink-500">Offline</div>
+      </div>
+      <div class="text-center">
+        <div class="text-2xl font-bold text-status-warning">{{ endpoint_summary.pending }}</div>
+        <div class="text-xs text-ink-500">Pending</div>
+      </div>
+      <div class="flex-1">
+        {% if endpoint_summary.total > 0 %}
+        {% set pct = (endpoint_summary.online / endpoint_summary.total * 100) | int %}
+        <div class="flex justify-between text-xs text-ink-500 mb-1">
+          <span>Online rate</span><span>{{ pct }}%</span>
+        </div>
+        <div class="w-full bg-base-700 rounded-full h-2">
+          <div id="online-rate-bar" class="h-2 rounded-full {{ 'bg-status-online' if pct >= 80 else ('bg-status-warning' if pct >= 50 else 'bg-status-critical') }}"></div>
+        </div>
+        <style nonce="{{ csp_nonce }}">#online-rate-bar { width: {{ pct }}%; }</style>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Job queue (last 24 h) -->
+  <div class="bg-base-800 rounded-xl border border-base-600 p-4">
+    <div class="flex items-center gap-2 mb-3">
+      <svg class="w-4 h-4 text-ink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <span class="text-sm font-semibold text-ink-100">Job Queue</span>
+      <span class="ml-auto text-xs text-ink-700">last 24 h</span>
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <div class="flex items-center gap-2 bg-status-warning/10 rounded-lg px-3 py-2">
+        <span class="w-2 h-2 rounded-full bg-status-warning"></span>
+        <div>
+          <div class="text-lg font-bold text-status-warning">{{ job_stats.pending }}</div>
+          <div class="text-xs text-ink-500">Pending</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 bg-accent-500/10 rounded-lg px-3 py-2">
+        <span class="w-2 h-2 rounded-full bg-accent-400 animate-pulse"></span>
+        <div>
+          <div class="text-lg font-bold text-accent-400">{{ job_stats.running }}</div>
+          <div class="text-xs text-ink-500">Running</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 bg-status-online/10 rounded-lg px-3 py-2">
+        <span class="w-2 h-2 rounded-full bg-status-online"></span>
+        <div>
+          <div class="text-lg font-bold text-status-online">{{ job_stats.completed }}</div>
+          <div class="text-xs text-ink-500">Completed</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 bg-status-critical/10 rounded-lg px-3 py-2">
+        <span class="w-2 h-2 rounded-full bg-status-critical"></span>
+        <div>
+          <div class="text-lg font-bold text-status-critical">{{ job_stats.failed }}</div>
+          <div class="text-xs text-ink-500">Failed</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

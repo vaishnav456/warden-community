@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Effective policy{% endblock %}
+{% block breadcrumb %}<span class="text-ink-700">Effective policy</span>{% endblock %}
+{% block content %}
+<div class="fleet-page-header"><div><h1>Effective policy</h1><p>Explain the final configuration produced by organization, branch, group and endpoint assignments.</p></div></div>
+
+<div class="grid lg:grid-cols-3 gap-5 mb-6">
+  <section class="w-card lg:col-span-2 p-5">
+    <form method="get" class="flex flex-wrap items-end gap-3 mb-5">
+      <div class="flex-1 min-w-64"><label class="form-label">Inspect endpoint</label><select name="endpoint_id" class="form-input form-select" required>
+        <option value="">Choose an endpoint</option>{% for endpoint in endpoints %}<option value="{{ endpoint.id }}" {{ 'selected' if selected_endpoint and selected_endpoint.id == endpoint.id }}>{{ endpoint.display_name or endpoint.hostname }}</option>{% endfor %}
+      </select></div><button class="btn btn-primary">Resolve policy</button>
+    </form>
+    {% if resolution %}
+    <div class="grid grid-cols-3 gap-3 mb-5"><div class="stat-card"><div class="stat-card-label">Settings</div><div class="stat-card-value">{{ resolution.settings|length }}</div></div><div class="stat-card"><div class="stat-card-label">Assignments</div><div class="stat-card-value">{{ resolution.assignments|length }}</div></div><div class="stat-card"><div class="stat-card-label">Conflicts</div><div class="stat-card-value {{ 'text-status-critical' if resolution.conflicts else 'text-status-online' }}">{{ resolution.conflicts|length }}</div></div></div>
+    <form method="post" action="/effective-policy/deploy" class="flex justify-end mb-4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="endpoint_id" value="{{ selected_endpoint.id }}"><button class="btn btn-primary" {{ 'disabled' if resolution.conflicts or not resolution.settings }}>Deploy resolved policy</button></form>
+    <div class="overflow-x-auto"><table class="w-table"><thead><tr><th>Setting</th><th>Effective value</th><th>Winning source</th><th>Chain</th></tr></thead><tbody>
+      {% for key, value in resolution.settings|dictsort %}{% set chain = resolution.provenance[key] %}{% set winner = chain[-1] %}<tr><td class="font-medium text-ink-100">{{ key|replace('_',' ')|title }}</td><td><code>{{ value|tojson }}</code></td><td><span class="badge badge-online">{{ winner.scope_type }}</span> {{ winner.template_name }}</td><td class="text-xs text-ink-500">{% for source in chain %}{{ source.scope_type }}: {{ source.template_name }}{% if not loop.last %} → {% endif %}{% endfor %}</td></tr>{% else %}<tr><td colspan="4"><div class="empty-state py-8"><p>No policy assignments apply to this endpoint.</p></div></td></tr>{% endfor %}
+    </tbody></table></div>
+    {% if resolution.conflicts %}<div class="mt-4 rounded-xl border border-status-critical/30 bg-status-critical/5 p-4"><h3 class="font-semibold text-status-critical">Equal-precedence conflicts</h3><p class="text-xs text-ink-500 mt-1">Warden selected deterministically, but change priority or scope before deployment.</p>{% for conflict in resolution.conflicts %}<p class="text-sm mt-2"><strong>{{ conflict.setting }}</strong> — {{ conflict.sources[0].template_name }} conflicts with {{ conflict.sources[1].template_name }}</p>{% endfor %}</div>{% endif %}
+    {% else %}<div class="empty-state py-12"><p>Select an endpoint to see its final settings and every source that contributed.</p></div>{% endif %}
+  </section>
+  <section class="w-card p-5"><h2 class="text-sm font-semibold text-ink-100">Assign a template</h2><p class="text-xs text-ink-500 mt-1 mb-4">Precedence: endpoint → group/tag → branch → organization. Priority resolves assignments at the same level.</p>
+    <form method="post" action="/effective-policy/assignments" class="space-y-3"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div><label class="form-label">Template</label><select name="template_id" class="form-input form-select" required>{% for template in templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}</select></div>
+      <div><label class="form-label">Scope</label><select name="scope_type" class="form-input form-select" required><option value="tenant">Organization default</option><option value="branch">Branch</option><option value="tag">Endpoint group / tag</option><option value="endpoint">Specific endpoint</option></select></div>
+      <div><label class="form-label">Branch</label><select name="branch_id" class="form-input form-select"><option value="">Choose when scope is Branch</option>{% for branch in branches %}<option value="{{ branch.id }}">{{ branch.name }}</option>{% endfor %}</select></div>
+      <div><label class="form-label">Endpoint group / tag</label><input name="tag" maxlength="64" class="form-input" placeholder="Choose when scope is Group / tag"></div>
+      <div><label class="form-label">Specific endpoint</label><select name="endpoint_id" class="form-input form-select"><option value="">Choose when scope is Specific endpoint</option>{% for endpoint in endpoints %}<option value="{{ endpoint.id }}">{{ endpoint.display_name or endpoint.hostname }}</option>{% endfor %}</select><p class="form-help">Only the field matching the selected scope is used.</p></div>
+      <div><label class="form-label">Priority</label><input name="priority" type="number" min="-1000" max="1000" value="0" class="form-input"></div>
+      <button class="btn btn-primary w-full" {{ 'disabled' if not templates }}>Create assignment</button>
+    </form>
+  </section>
+</div>
+
+<section class="w-table-wrap"><div class="px-5 py-3 border-b border-base-600"><h2 class="text-sm font-semibold text-ink-100">Active assignments</h2></div><div class="overflow-x-auto"><table class="w-table"><thead><tr><th>Template</th><th>Scope</th><th>Value</th><th>Priority</th><th></th></tr></thead><tbody>{% for assignment in assignments %}<tr><td class="font-medium text-ink-100">{{ assignment.template.name }}</td><td><span class="badge badge-offline">{{ assignment.scope_type }}</span></td><td class="font-mono-data text-xs">{{ assignment.scope_value or 'All endpoints' }}</td><td>{{ assignment.priority }}</td><td class="text-right"><button class="btn btn-ghost btn-sm" hx-delete="/effective-policy/assignments/{{ assignment.id }}" hx-confirm="Delete this assignment?" hx-target="closest tr" hx-swap="outerHTML">Delete</button></td></tr>{% else %}<tr><td colspan="5"><div class="empty-state py-8"><p>No persistent assignments yet.</p></div></td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Alerts</span>{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-bold text-ink-100">Alerts</h1>
+  <div class="flex gap-2">
+    <a href="/alerts" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if not show_resolved and not show_snoozed %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Open</a>
+    <a href="/alerts?snoozed=true" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if show_snoozed %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Snoozed</a>
+    <a href="/alerts?resolved=true" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if show_resolved %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Resolved</a>
+  </div>
+</div>
+<div class="space-y-2">
+  {% for a in alerts %}
+  <div class="bg-base-800 border border-base-600 rounded-xl p-4 flex items-start gap-4" id="alert-{{ a.id }}">
+    <div class="w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0
+                {% if a.severity == 'critical' %}bg-status-critical
+                {% elif a.severity == 'warning' %}bg-status-warning
+                {% else %}bg-accent-400{% endif %}"></div>
+    <div class="flex-1">
+      <div class="font-semibold text-ink-100 text-sm">{{ a.title }}</div>
+      <div class="text-sm text-ink-500 mt-0.5">{{ a.message }}</div>
+      <div class="flex items-center gap-3 mt-2 text-xs text-ink-700 font-mono-data">
+        <span>{{ a._endpoint.hostname if a._endpoint else '—' }}</span>
+        <span>•</span>
+        <span>{{ a.created_at | timeago }}</span>
+        {% if a.is_resolved %}
+        <span class="text-status-online">Resolved {{ a.resolved_at | timeago }}</span>
+        {% endif %}
+        {% if a.assigned_to %}<span>Assigned to {% for admin in admins %}{% if admin.id|string == a.assigned_to|string %}{{ admin.full_name }}{% endif %}{% endfor %}</span>{% endif %}
+        {% if a.snoozed_until %}<span class="text-status-warning">Snoozed until {{ a.snoozed_until }}</span>{% endif %}
+      </div>
+    </div>
+    {% if not a.is_resolved %}
+    <div x-data="alertResolveWidget" data-alert-id="{{ a.id }}">
+      <button @click="showNote = !showNote" class="text-xs text-ink-500 hover:text-ink-100 px-2 py-1 hover:bg-base-700 rounded">Resolve</button>
+      <div x-show="showNote" x-cloak class="mt-2 flex gap-2">
+        <input x-model="note" type="text" placeholder="Resolution note (optional)"
+               class="form-input flex-1 text-xs !py-1">
+        <button @click="resolve()" :disabled="resolving" class="btn btn-sm btn-primary"><span x-show="!resolving">OK</span><span x-show="resolving">Saving…</span></button>
+      </div>
+    </div>
+    <form hx-post="/alerts/{{ a.id }}/assign" hx-swap="none" @htmx:after-request="window.location.reload()">
+      <select name="admin_id" class="form-input form-select text-xs !py-1" title="Assign alert" onchange="this.form.requestSubmit()">
+        <option value="">Unassigned</option>{% for admin in admins %}<option value="{{ admin.id }}" {{ 'selected' if admin.id|string == a.assigned_to|string }}>{{ admin.full_name }}</option>{% endfor %}
+      </select>
+    </form>
+    {% if show_snoozed %}
+    <button hx-post="/alerts/{{ a.id }}/unsnooze" hx-swap="none" @htmx:after-request="window.location.reload()" class="btn btn-secondary btn-sm">Unsnooze</button>
+    {% else %}<form hx-post="/alerts/{{ a.id }}/snooze" hx-swap="none" @htmx:after-request="window.location.reload()">
+      <select name="hours" class="form-input form-select text-xs !py-1" onchange="this.form.requestSubmit()"><option value="">Snooze…</option><option value="1">1 hour</option><option value="4">4 hours</option><option value="24">1 day</option><option value="168">1 week</option></select>
+    </form>{% endif %}
+    {% else %}
+    <button hx-post="/alerts/{{ a.id }}/reopen" hx-swap="none" @htmx:after-request="window.location.reload()" class="btn btn-secondary btn-sm">Reopen</button>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state bg-base-850 border border-base-600 rounded-xl">
+    <p class="text-sm text-ink-700">No {{ 'resolved' if show_resolved else ('snoozed' if show_snoozed else 'open') }} alerts</p>
+  </div>
+  {% endfor %}
+</div>
+{% if has_more %}
+<div class="mt-4 text-center">
+  <a href="/alerts?page={{ page + 1 }}{% if show_resolved %}&resolved=true{% elif show_snoozed %}&snoozed=true{% endif %}" class="text-sm text-accent-400 hover:underline">Load more →</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Asset lifecycle{% endblock %}
+{% block breadcrumb %}<span class="text-ink-700">Asset lifecycle</span>{% endblock %}
+
+{% block content %}
+{% set ns = namespace(stock=0, service=0, attention=0, warranty=0) %}
+{% for asset in assets %}
+  {% if asset.asset_state == 'stock' %}{% set ns.stock = ns.stock + 1 %}{% endif %}
+  {% if asset.asset_state == 'in_service' %}{% set ns.service = ns.service + 1 %}{% endif %}
+  {% if asset.asset_state in ['repair','lost'] %}{% set ns.attention = ns.attention + 1 %}{% endif %}
+  {% if asset.warranty_expiry and asset.warranty_expiry < today %}{% set ns.warranty = ns.warranty + 1 %}{% endif %}
+{% endfor %}
+<div class="fleet-page-header">
+  <div><h1>Asset lifecycle</h1><p>Assignments, custody, warranty and disposition remain visible even after an endpoint leaves the active fleet.</p></div>
+</div>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+  <div class="stat-card"><div class="stat-card-label">Registered assets</div><div class="stat-card-value">{{ assets|length }}</div></div>
+  <div class="stat-card"><div class="stat-card-label">In service</div><div class="stat-card-value text-status-online">{{ ns.service }}</div></div>
+  <div class="stat-card"><div class="stat-card-label">Stock</div><div class="stat-card-value">{{ ns.stock }}</div></div>
+  <div class="stat-card"><div class="stat-card-label">Needs attention</div><div class="stat-card-value text-status-critical">{{ ns.attention + ns.warranty }}</div></div>
+</div>
+
+<div class="w-table-wrap">
+  <div class="overflow-x-auto">
+    <table class="w-table">
+      <thead><tr><th>Asset</th><th>State</th><th>Assigned to</th><th>Location</th><th>Warranty</th><th>Agent</th></tr></thead>
+      <tbody>
+      {% for asset in assets %}
+        <tr>
+          <td><a href="/endpoints/{{ asset.id }}?tab=overview" class="font-medium text-ink-100 hover:text-accent-500">{{ asset.asset_tag or asset.display_name or asset.hostname }}</a><div class="text-xs text-ink-500 mt-1">{{ asset.display_name or asset.hostname }}</div></td>
+          <td><span class="badge {{ 'badge-critical' if asset.asset_state in ['lost','repair'] else ('badge-online' if asset.asset_state == 'in_service' else 'badge-offline') }}">{{ (asset.asset_state or 'in_service')|replace('_',' ')|title }}</span></td>
+          <td>{{ asset.assigned_to or 'Unassigned' }}</td>
+          <td>{{ (asset.asset_metadata or {}).get('location') or '—' }}</td>
+          <td><span class="{{ 'text-status-critical font-semibold' if asset.warranty_expiry and asset.warranty_expiry < today else 'text-ink-500' }}">{{ asset.warranty_expiry or 'Not recorded' }}</span></td>
+          <td><span class="badge {{ 'badge-online' if asset.is_active else 'badge-offline' }}">{{ 'Active' if asset.is_active else 'Removed' }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6"><div class="empty-state py-10"><p>No assets are registered yet.</p></div></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

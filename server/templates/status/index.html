@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% set active_page = "status" %}
+
+{% block title %}System Status{% endblock %}
+
+{% block breadcrumb %}
+<span class="text-ink-100 font-medium">System Status</span>
+{% endblock %}
+
+{% block content %}
+<div class="flex-1 overflow-y-auto">
+  <div class="max-w-5xl mx-auto px-6 py-6">
+
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-xl font-bold text-ink-100">System Status</h1>
+        <p class="text-sm text-ink-500 mt-0.5">Real-time health of server services and agent fleet</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-ink-700">
+        <span class="w-1.5 h-1.5 rounded-full bg-status-online animate-pulse"></span>
+        Auto-refreshes every 15 s
+      </div>
+    </div>
+
+    <!-- Live-updating cards via HTMX -->
+    <div id="status-cards"
+         hx-get="/status/partial"
+         hx-trigger="load, every 15s"
+         hx-sync="this:drop"
+         hx-swap="innerHTML">
+      {% include "status/_cards.html" %}
+    </div>
+
+    <!-- Agent fleet table -->
+    <div class="w-table-wrap">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-base-600">
+        <span class="text-sm font-semibold text-ink-100">Agent Health</span>
+        <a href="/endpoints" class="text-xs text-accent-400 hover:underline">View all endpoints →</a>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-table">
+          <thead>
+            <tr>
+              <th>Hostname</th>
+              <th>Status</th>
+              <th>Agent version</th>
+              <th class="text-right">Memory</th>
+              <th class="text-right">Uptime</th>
+              <th class="text-right">Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ep in endpoints %}
+            <tr>
+              <td>
+                <a href="/endpoints/{{ ep.id }}" class="font-medium text-accent-400 hover:underline font-mono-data">{{ ep.hostname or ep.id[:8] }}</a>
+                {% if ep.branch_name %}<span class="ml-1.5 text-xs text-ink-700">{{ ep.branch_name }}</span>{% endif %}
+              </td>
+              <td>
+                {% if ep.status == 'online' %}
+                <span class="badge badge-online">
+                  <span class="status-dot status-dot-online"></span>Online
+                </span>
+                {% elif ep.status == 'offline' %}
+                <span class="badge badge-offline">
+                  <span class="status-dot status-dot-offline"></span>Offline
+                </span>
+                {% else %}
+                <span class="badge badge-warning">
+                  <span class="status-dot status-dot-maintenance"></span>{{ ep.status | title }}
+                </span>
+                {% endif %}
+              </td>
+              <td class="font-mono-data text-xs text-ink-500">{{ ep.agent_version or '—' }}</td>
+              <td class="text-right font-mono-data text-xs text-ink-500">
+                {% if ep.agent_memory_mb %}{{ ep.agent_memory_mb }} MB{% else %}—{% endif %}
+              </td>
+              <td class="text-right font-mono-data text-xs text-ink-500">
+                {% if ep.agent_uptime_sec %}
+                  {% set h = (ep.agent_uptime_sec // 3600) %}
+                  {% set m = ((ep.agent_uptime_sec % 3600) // 60) %}
+                  {{ "%dh %02dm"|format(h, m) }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="text-right text-xs text-ink-700 font-mono-data">{{ ep.last_seen | timeago if ep.last_seen else '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="py-8 text-center text-sm text-ink-700">No endpoints enrolled yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

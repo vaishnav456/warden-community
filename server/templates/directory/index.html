@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% block title %}Directory{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Central Directory</span>{% endblock %}
+{% block content %}
+<div x-data="directoryPage">
+<div class="fleet-page-header">
+  <div>
+    <div class="section-kicker">Identity inventory</div>
+    <h1>Central Directory</h1>
+    <p>Windows accounts discovered across the managed fleet, matched by stable security identity.</p>
+  </div>
+  <div class="directory-header-actions">
+    {% if current_user.role == 'company_admin' %}<button type="button" class="btn btn-primary" @click="openWardenIdentity()">+ Add Warden identity</button>{% endif %}
+    <button type="button" class="btn btn-secondary" @click="openNew()">+ Add local user</button>
+    <a href="{{ export_url }}" class="btn btn-secondary">Export CSV</a>
+  </div>
+</div>
+
+<section class="mb-6" aria-labelledby="warden-identities-title">
+  <div class="flex items-end justify-between gap-4 mb-3">
+    <div><div class="section-kicker">Cloud identity · no AD required</div><h2 id="warden-identities-title" class="text-xl font-semibold text-ink-100">Warden identities</h2><p class="text-sm text-ink-500 mt-1">One password follows the user only to assigned Windows endpoints. Local accounts remain independent below.</p></div>
+  </div>
+  <div class="w-table-wrap fleet-table-wrap">
+    <table class="w-table fleet-table">
+      <thead><tr><th>Identity</th><th>Assigned endpoints</th><th>Sync state</th><th>Access</th><th></th></tr></thead>
+      <tbody>
+      {% for identity in warden_identities %}
+        <tr>
+          <td class="directory-identity-cell"><div class="directory-avatar">{% if identity.profile_photo_mime %}<img src="/directory/identities/{{ identity.id }}/photo" alt="">{% else %}{{ (identity.display_name or identity.login_email or identity.username)[:1] | upper }}{% endif %}</div><div class="directory-identity-copy"><div class="font-medium text-ink-100">{{ identity.display_name or identity.login_email or identity.username }}</div><div class="text-xs text-ink-500 font-mono-data">{{ identity.login_email or identity.username }}</div><div class="directory-sid">Password version {{ identity.password_version }}</div></div></td>
+          <td><div class="directory-endpoint-list">{% for assignment in identity.assignments %}<a href="/endpoints/{{ assignment.endpoint_id }}?tab=users" class="directory-endpoint-chip {{ 'is-online' if assignment.endpoint.status == 'online' else 'is-offline' }}" title="{{ assignment.status | capitalize }}"><i></i>{{ assignment.endpoint.hostname }}</a>{% else %}<span class="text-xs text-ink-500">No endpoints in your scope</span>{% endfor %}</div></td>
+          <td>{% set pending = identity.assignments | selectattr('status','equalto','pending') | list | length %}{% set failed = identity.assignments | selectattr('status','equalto','failed') | list | length %}{% if failed %}<span class="badge badge-offline">{{ failed }} failed</span>{% elif pending %}<span class="badge badge-pending">{{ pending }} pending</span>{% else %}<span class="badge badge-online">Synchronized</span>{% endif %}</td>
+          <td>{% if identity.is_admin %}<span class="badge badge-pending">Administrator</span>{% else %}<span class="badge">Standard</span>{% endif %}{% if not identity.is_enabled %}<span class="badge badge-offline">Disabled</span>{% endif %}</td>
+          <td class="text-right whitespace-nowrap">{% if current_user.role == 'company_admin' %}<button type="button" class="btn btn-secondary btn-sm" data-endpoints="{{ identity.assignments | rejectattr('status','equalto','revoked') | map(attribute='endpoint_id') | join(',') }}" @click="openWardenAssign('{{ identity.id }}', '{{ (identity.login_email or identity.username) | e }}', $el.dataset.endpoints)">Assign</button> <button type="button" class="btn btn-secondary btn-sm" @click="repairWardenIdentity('{{ identity.id }}', '{{ (identity.login_email or identity.username) | e }}')">Repair</button> <button type="button" class="btn btn-secondary btn-sm" @click="openWardenPassword('{{ identity.id }}', '{{ (identity.login_email or identity.username) | e }}')">Password link</button> <button type="button" class="btn btn-secondary btn-sm" data-identity-id="{{ identity.id }}" data-username="{{ identity.login_email or identity.username }}" data-offline-hours="{{ identity.offline_access_hours }}" data-start-hour="{{ identity.conditional_access.utc_start_hour if identity.conditional_access.utc_start_hour is defined else '' }}" data-end-hour="{{ identity.conditional_access.utc_end_hour if identity.conditional_access.utc_end_hour is defined else '' }}" data-require-compliant="{{ '1' if identity.conditional_access.require_compliant else '0' }}" @click="openWardenSecurity($el.dataset)">Security</button> <button type="button" class="btn btn-secondary btn-sm" @click="setWardenState('{{ identity.id }}', {{ 'true' if not identity.is_enabled else 'false' }})">{{ 'Enable' if not identity.is_enabled else 'Disable' }}</button>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="px-4 py-8 text-center text-ink-700">No Warden identities yet. Add one to provide the same managed sign-in on selected PCs without Active Directory.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mb-6" aria-labelledby="warden-login-events-title">
+  <div class="section-kicker">Authentication audit</div><h2 id="warden-login-events-title" class="text-xl font-semibold text-ink-100 mb-3">Recent Warden sign-ins</h2>
+  <div class="w-table-wrap"><table class="w-table"><thead><tr><th>User</th><th>Endpoint</th><th>Outcome</th><th>Source</th><th>Time</th></tr></thead><tbody>{% for event in identity_login_events %}<tr><td class="font-mono-data">{{ event.username }}</td><td>{{ event.endpoints.hostname if event.endpoints else 'Removed endpoint' }}</td><td><span class="badge {{ 'badge-online' if event.outcome == 'success' else 'badge-offline' }}">{{ event.outcome | replace('_',' ') | title }}</span>{% if event.reason %}<div class="text-xs text-ink-500 mt-1">{{ event.reason }}</div>{% endif %}</td><td class="font-mono-data text-xs">{{ event.source_ip or '—' }}</td><td class="text-xs text-ink-500">{{ event.created_at | timeago }}</td></tr>{% else %}<tr><td colspan="5" class="px-4 py-8 text-center text-ink-700">No Warden sign-in attempts have been recorded yet.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+
+<div class="section-kicker">Local account inventory and management</div>
+
+<div class="fleet-summary-strip">
+  <div><small>Identities</small><strong>{{ summary.identities }}</strong><span>Unique users</span></div>
+  <div><small>Accounts</small><strong>{{ summary.accounts }}</strong><span>Endpoint records</span></div>
+  <div><small>Privileged</small><strong>{{ summary.privileged }}</strong><span>Administrator access</span></div>
+  <div class="attention"><small>Disabled</small><strong>{{ summary.disabled }}</strong><span>Needs review</span></div>
+</div>
+
+<form method="GET" action="/directory" class="fleet-toolbar directory-toolbar">
+  <div class="fleet-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+    <label class="sr-only" for="directory-search">Search directory</label>
+    <input id="directory-search" name="q" value="{{ query }}" placeholder="Search user, SID, domain or endpoint">
+  </div>
+  <label class="sr-only" for="directory-type">Account type</label>
+  <select id="directory-type" name="type" class="fleet-select">
+    <option value="">All account types</option>
+    {% for value, label in [('local','Local'),('domain','Active Directory'),('entra','Microsoft Entra'),('microsoft','Microsoft account'),('unknown','Unknown')] %}
+    <option value="{{ value }}" {{ 'selected' if selected_type == value }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <label class="sr-only" for="directory-access">Access status</label>
+  <select id="directory-access" name="access" class="fleet-select">
+    <option value="">All access levels</option>
+    <option value="admin" {{ 'selected' if selected_access == 'admin' }}>Administrators</option>
+    <option value="standard" {{ 'selected' if selected_access == 'standard' }}>Standard users</option>
+    <option value="disabled" {{ 'selected' if selected_access == 'disabled' }}>Disabled accounts</option>
+  </select>
+  <label class="sr-only" for="directory-sort">Sort directory</label>
+  <select id="directory-sort" name="sort" class="fleet-select">
+    <option value="name" {{ 'selected' if selected_sort == 'name' }}>Sort: Name</option>
+    <option value="access" {{ 'selected' if selected_sort == 'access' }}>Sort: Access risk</option>
+    <option value="endpoints" {{ 'selected' if selected_sort == 'endpoints' }}>Sort: Most endpoints</option>
+    <option value="recent" {{ 'selected' if selected_sort == 'recent' }}>Sort: Recently synced</option>
+  </select>
+  {% if branches | length > 1 or selected_branch %}
+  <select name="branch_id" class="fleet-select">
+    <option value="">All branches</option>
+    {% for branch in branches %}<option value="{{ branch.id }}" {{ 'selected' if selected_branch == branch.id | string }}>{{ branch.name }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if query or selected_type or selected_access or selected_sort != 'name' or selected_branch %}<a class="fleet-clear" href="/directory">Clear</a>{% endif %}
+</form>
+
+<div class="directory-result-bar">
+  <span>Showing <strong>{{ result_start }}–{{ result_end }}</strong> of <strong>{{ total }}</strong> matching identities</span>
+  <span>Click an endpoint to open its user-management view.</span>
+</div>
+
+<div class="w-table-wrap fleet-table-wrap">
+  <table class="w-table fleet-table">
+    <thead><tr><th>Identity</th><th>Type</th><th>Endpoints</th><th>Access</th><th>Last synchronized</th><th></th></tr></thead>
+    <tbody>
+      {% for identity in identities %}
+      <tr>
+        <td class="directory-identity-cell">
+          <div class="directory-avatar">{% if identity.profile_photo_user_id %}<img src="/endpoints/{{ identity.profile_photo_endpoint_id }}/users/{{ identity.profile_photo_user_id }}/photo" alt="">{% else %}{{ (identity.display_name or identity.username)[:1] | upper }}{% endif %}</div>
+          <div class="directory-identity-copy">
+            <div class="font-medium text-ink-100">{{ identity.display_name or identity.username }}</div>
+            <div class="text-xs text-ink-500 font-mono-data">{{ identity.principal_name }}</div>
+            {% if identity.sid %}<div class="directory-sid font-mono-data" title="{{ identity.sid }}">{{ identity.sid }}</div>{% else %}<div class="directory-sid">SID available after agent 2.1.28 sync</div>{% endif %}
+          </div>
+        </td>
+        <td><span class="badge badge-info capitalize">{{ {'entra':'Entra ID','domain':'Active Directory','microsoft':'Microsoft','local':'Local','unknown':'Unknown'}[identity.account_type] }}</span></td>
+        <td>
+          <div class="directory-endpoint-list">
+            {% for account in identity.accounts %}
+            <a href="/endpoints/{{ account.endpoint_id }}?tab=users" class="directory-endpoint-chip {{ 'is-online' if account.endpoint_status == 'online' else 'is-offline' }}" title="Open {{ account.hostname }} user management"><i></i>{{ account.hostname }}</a>
+            {% endfor %}
+          </div>
+        </td>
+        <td>
+          {% if identity.is_admin %}<span class="badge badge-pending">Administrator</span>{% else %}<span class="badge">Standard</span>{% endif %}
+          {% if not identity.all_enabled %}<span class="badge badge-offline">Disabled</span>{% endif %}
+        </td>
+        <td class="text-xs text-ink-500">{{ identity.last_synced | timeago if identity.last_synced else 'Not synchronized' }}</td>
+        <td class="text-right">
+          {% if identity.account_type == 'local' %}
+          <button type="button" class="btn btn-secondary btn-sm"
+                  data-username="{{ identity.username }}"
+                  data-full-name="{{ identity.display_name }}"
+                  data-endpoints="{{ identity.accounts | map(attribute='endpoint_id') | join(',') }}"
+                  data-is-admin="{{ '1' if identity.is_admin else '0' }}"
+                  @click="openAssign($el.dataset)">Assign</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="px-4 py-12 text-center text-ink-700">No directory accounts match these filters. Run “Collect Users” on an endpoint to populate the directory.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<nav class="directory-pagination" aria-label="Directory pages">
+  {% if prev_url %}<a href="{{ prev_url }}" class="btn btn-secondary btn-sm">Previous</a>{% else %}<span></span>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if next_url %}<a href="{{ next_url }}" class="btn btn-secondary btn-sm">Next</a>{% else %}<span></span>{% endif %}
+</nav>
+{% endif %}
+
+<div x-show="wardenModalOpen" x-cloak class="directory-modal-backdrop" @keydown.escape.window="closeWarden()">
+  <section class="directory-modal" role="dialog" aria-modal="true" aria-labelledby="warden-identity-modal-title" @click.outside="closeWarden()">
+    <div class="directory-modal-header"><div><div class="section-kicker">Warden identity</div><h2 id="warden-identity-modal-title" x-text="wardenMode === 'create' ? 'Add Warden identity' : (wardenMode === 'assign' ? 'Assign identity to PCs' : 'Create password setup link')"></h2></div><button type="button" class="directory-modal-close" aria-label="Close" @click="closeWarden()">×</button></div>
+    <div class="directory-account-note"><strong>Same sign-in, selected computers.</strong> The reusable Warden password is stored only as a bcrypt verifier. Each endpoint creates a separate machine-protected shadow credential; administrators never need the user's password to assign another PC.</div>
+    <div x-show="wardenMode === 'create'" class="directory-form-grid">
+      <div><label class="form-label" for="warden-identity-email">Login email</label><input id="warden-identity-email" class="form-input" type="email" x-model.trim="wardenLoginEmail" maxlength="254" autocomplete="email" placeholder="name@company.com"><p class="directory-help">This is what the user enters on the Windows Warden sign-in tile.</p></div>
+      <div><label class="form-label" for="warden-identity-name">Display name</label><input id="warden-identity-name" class="form-input" x-model.trim="wardenDisplayName" maxlength="256" autocomplete="off"></div>
+    </div>
+    <div x-show="wardenMode === 'create'" class="directory-photo-field">
+      <template x-if="wardenProfilePreview"><img :src="wardenProfilePreview" alt="Profile preview" class="directory-photo-preview"></template>
+      <div><label class="form-label" for="warden-identity-photo">Profile picture</label><input id="warden-identity-photo" type="file" accept="image/*" class="form-input" @change="selectWardenProfilePhoto($event)"><p class="directory-help">Optional. Cropped to a square and shown in Warden and on the Windows sign-in screen.</p></div>
+    </div>
+    <p x-show="wardenMode === 'create'" class="text-sm text-ink-400 mb-3">After assignment, send the one-time setup link to the user. They create their password privately.</p>
+    <p x-show="wardenMode === 'password'" class="text-sm text-ink-400 mb-3">Create a one-time password setup link for <strong x-text="wardenUsername"></strong>. Their current password remains valid until they save the new one.</p>
+    <p x-show="wardenMode === 'assign'" class="text-sm text-ink-400 mb-3">Select the PCs where <strong x-text="wardenUsername"></strong> may sign in. No user password is required or sent to an endpoint.</p>
+    <div x-show="wardenMode !== 'password'" class="directory-endpoint-picker mt-4">
+      <div class="directory-picker-heading"><div><strong>Allowed Windows endpoints</strong><span x-text="wardenEndpointIds.length + ' selected'"></span></div><div><button type="button" @click="selectAllWarden()">Select all</button><button type="button" @click="wardenEndpointIds = []">Clear</button></div></div>
+      <div class="directory-endpoint-options">{% for endpoint in directory_endpoints if endpoint.warden_identity_ready %}<label class="directory-endpoint-option warden-endpoint-option"><input type="checkbox" value="{{ endpoint.id }}" x-model="wardenEndpointIds"><span class="directory-endpoint-state {{ 'is-online' if endpoint.status == 'online' else 'is-offline' }}"></span><span><strong>{{ endpoint.hostname }}</strong><small>{{ endpoint.branch_name }} · {{ endpoint.status | capitalize }}{% if not endpoint.warden_signin_ready %} · Windows sign-in tile pending{% endif %}</small></span></label>{% else %}<p class="directory-empty-picker">No compatible endpoints yet. Update to Warden Agent 2.5 or later to enable secure managed identities.</p>{% endfor %}</div>
+    </div>
+    <div x-show="wardenMode === 'create'" class="directory-option-row"><label><input type="checkbox" x-model="wardenIsAdmin"> Local administrator on assigned endpoints</label></div>
+    <div x-show="wardenSetupUrl" class="directory-account-note mt-4">
+      <strong>One-time link — expires in 24 hours</strong>
+      <div class="flex gap-2 mt-2"><input class="form-input font-mono-data" readonly :value="wardenSetupUrl"><button type="button" class="btn btn-secondary" @click="copyWardenSetupUrl()">Copy</button></div>
+      <p class="directory-help">Send this directly to the user. It cannot be recovered after this dialog closes.</p>
+    </div>
+    <p x-show="wardenError" x-text="wardenError" class="text-sm text-status-critical mt-3"></p>
+    <div class="directory-modal-actions"><button type="button" class="btn btn-secondary" @click="closeWarden()" x-text="wardenSetupUrl ? 'Done' : 'Cancel'"></button><button x-show="!wardenSetupUrl" type="button" class="btn btn-primary" @click="submitWarden()" :disabled="wardenSubmitting || (wardenMode === 'create' && (!wardenLoginEmail || !wardenDisplayName || wardenEndpointIds.length === 0)) || (wardenMode === 'assign' && wardenEndpointIds.length === 0)"><span x-show="!wardenSubmitting" x-text="wardenMode === 'create' ? 'Create and assign' : (wardenMode === 'assign' ? 'Apply assignment' : 'Create setup link')"></span><span x-show="wardenSubmitting">Queueing…</span></button></div>
+  </section>
+</div>
+
+<div x-show="securityModalOpen" x-cloak class="directory-modal-backdrop" @keydown.escape.window="securityModalOpen = false">
+  <section class="directory-modal" role="dialog" aria-modal="true" aria-labelledby="warden-security-title" @click.outside="securityModalOpen = false">
+    <div class="directory-modal-header"><div><div class="section-kicker">Conditional access</div><h2 id="warden-security-title">Identity security</h2><p class="text-sm text-ink-500" x-text="securityUsername"></p></div><button type="button" class="directory-modal-close" aria-label="Close" @click="securityModalOpen = false">×</button></div>
+    <div class="directory-form-grid"><div><label class="form-label">Offline access hours</label><input class="form-input" type="number" min="0" max="720" x-model.number="securityOfflineHours"><p class="text-xs text-ink-500 mt-1">Use 0 to require an online sign-in every time.</p></div><div><label class="form-label">Compliance</label><label class="directory-account-note block"><input type="checkbox" x-model="securityRequireCompliant"> Require the endpoint’s latest compliance result to pass</label></div></div>
+    <div class="directory-form-grid mt-4"><div><label class="form-label">Allowed from (UTC hour)</label><input class="form-input" type="number" min="0" max="23" placeholder="Any time" x-model="securityStartHour"></div><div><label class="form-label">Allowed until (UTC hour)</label><input class="form-input" type="number" min="0" max="23" placeholder="Any time" x-model="securityEndHour"></div></div>
+    <div class="directory-account-note mt-4">Saving this policy revokes previously cached offline sessions. The next successful online authentication issues a fresh bounded grant.</div>
+    <p x-show="securityError" x-text="securityError" class="text-sm text-status-critical mt-3"></p>
+    <div class="directory-modal-actions"><button type="button" class="btn btn-secondary" @click="securityModalOpen = false">Cancel</button><button type="button" class="btn btn-primary" @click="submitWardenSecurity()" :disabled="securitySubmitting"><span x-show="!securitySubmitting">Save security policy</span><span x-show="securitySubmitting">Saving…</span></button></div>
+  </section>
+</div>
+
+<div x-show="modalOpen" x-cloak class="directory-modal-backdrop" @keydown.escape.window="close()">
+  <section class="directory-modal" role="dialog" aria-modal="true" aria-labelledby="directory-user-title" @click.outside="close()">
+    <div class="directory-modal-header">
+      <div>
+        <div class="section-kicker" x-text="editing ? 'Endpoint assignment' : 'New local identity'"></div>
+        <h2 id="directory-user-title" x-text="editing ? 'Assign user to endpoints' : 'Add local user'"></h2>
+      </div>
+      <button type="button" class="directory-modal-close" aria-label="Close" @click="close()">×</button>
+    </div>
+
+    <div class="directory-account-note">
+      <strong>Unique credentials for every endpoint.</strong>
+      Warden generates a separate one-time password for every new or rotated local account. Credentials are shown only after queueing. Use a Warden identity when one password should follow a user between assigned computers.
+    </div>
+
+    <div class="directory-form-grid">
+      <div>
+        <label class="form-label" for="directory-new-username">Username</label>
+        <input id="directory-new-username" class="form-input" x-model.trim="username" maxlength="20" :disabled="editing" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label" for="directory-new-name">Full name</label>
+        <input id="directory-new-name" class="form-input" x-model.trim="fullName" maxlength="256" autocomplete="off">
+      </div>
+    </div>
+    <div x-show="!editing" class="directory-photo-field">
+      <template x-if="profilePreview"><img :src="profilePreview" alt="Profile preview" class="directory-photo-preview"></template>
+      <div><label class="form-label" for="directory-new-photo">Profile picture</label><input id="directory-new-photo" type="file" accept="image/*" class="form-input" @change="selectProfilePhoto($event)"><p class="directory-help">Optional. Applied to the Windows local account and displayed on its endpoint card.</p></div>
+    </div>
+    <div class="directory-endpoint-picker">
+      <div class="directory-picker-heading">
+        <div><strong>Allowed endpoints</strong><span x-text="selectedEndpointIds.length + ' selected'"></span></div>
+        <div><button type="button" @click="selectAll()">Select all</button><button type="button" @click="selectedEndpointIds = []">Clear</button></div>
+      </div>
+      <div class="directory-endpoint-options">
+        {% for endpoint in directory_endpoints %}
+        <label class="directory-endpoint-option">
+          <input type="checkbox" value="{{ endpoint.id }}" x-model="selectedEndpointIds">
+          <span class="directory-endpoint-state {{ 'is-online' if endpoint.status == 'online' else 'is-offline' }}"></span>
+          <span><strong>{{ endpoint.hostname }}</strong><small>{{ endpoint.branch_name }} · {{ endpoint.status | capitalize }}</small></span>
+        </label>
+        {% else %}
+        <p class="directory-empty-picker">No active endpoints are available in your scope.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="directory-option-row">
+      <label><input type="checkbox" x-model="isAdmin" :disabled="editing"> Local administrator</label>
+      <label x-show="editing"><input type="checkbox" x-model="rotatePasswords"> Rotate each selected local account to a different one-time password</label>
+      <label x-show="editing"><input type="checkbox" x-model="deleteUnselected"> Delete this account from endpoints removed from the selection (approval required)</label>
+    </div>
+    <div x-show="completed && oneTimeCredentials.length" class="directory-account-note mt-3">
+      <div class="flex items-center justify-between gap-3">
+        <strong>Save these credentials now—they cannot be shown again.</strong>
+        <button type="button" class="btn btn-secondary" @click="copyCredentials()">Copy all</button>
+      </div>
+      <div class="mt-3 overflow-auto">
+        <table class="w-full text-sm">
+          <thead><tr><th class="text-left">Endpoint</th><th class="text-left">Username</th><th class="text-left">One-time password</th></tr></thead>
+          <tbody><template x-for="item in oneTimeCredentials" :key="item.endpoint_id"><tr><td x-text="item.hostname"></td><td x-text="item.username"></td><td class="font-mono" x-text="item.password"></td></tr></template></tbody>
+        </table>
+      </div>
+    </div>
+    <p x-show="error" x-text="error" class="text-sm text-status-critical mt-3"></p>
+    <div class="directory-modal-actions">
+      <a x-show="completed" href="/jobs" class="btn btn-secondary">View jobs</a>
+      <button type="button" class="btn btn-secondary" @click="close()" x-text="completed ? 'Close' : 'Cancel'"></button>
+      <button type="button" class="btn btn-primary" @click="submit()" :disabled="submitting || completed || !username || selectedEndpointIds.length === 0">
+        <span x-show="!submitting" x-text="editing ? 'Apply assignment' : 'Create on endpoints'"></span>
+        <span x-show="submitting">Queueing…</span>
+      </button>
+    </div>
+  </section>
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Saved Escalation Policies{% endblock %}
+
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <a href="/escalations" class="text-ink-700 hover:text-ink-300">Escalations</a>
+  <span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100">Saved Policies</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold text-ink-100 tracking-tight">Saved Escalation Policies</h1>
+    <p class="text-sm text-ink-500 mt-0.5">Reusable approvals — matching requests are auto-approved</p>
+  </div>
+</div>
+
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead>
+      <tr>
+        <th>Operation</th>
+        <th>Scope</th>
+        <th>Endpoint</th>
+        <th>User</th>
+        <th>Expires</th>
+        <th>Uses</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in policies %}
+      <tr id="policy-{{ p.id }}">
+        <td class="font-mono-data text-xs font-medium text-ink-100">{{ p.operation }}</td>
+        <td>
+          <span class="text-xs bg-accent-500/15 text-accent-400 px-2 py-0.5 rounded-full">{{ p.scope.replace('_', ' ') }}</span>
+        </td>
+        <td class="text-ink-300">{{ p._endpoint.hostname if p._endpoint else '—' }}</td>
+        <td class="text-ink-300">{{ p.windows_user or 'Any user' }}</td>
+        <td class="text-ink-300">{{ p.valid_until | timeago if p.valid_until else 'Never' }}</td>
+        <td class="text-ink-300">{{ p.use_count or 0 }}</td>
+        <td>
+          <button hx-post="/escalations/saved/{{ p.id }}/revoke"
+                  hx-confirm="Revoke this policy? Future requests will require manual approval."
+                  hx-target="#policy-{{ p.id }}"
+                  hx-swap="delete"
+                  class="text-xs text-status-critical hover:underline">Revoke</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7"><div class="empty-state py-12"><p class="text-sm text-ink-500">No saved policies yet. When approving an escalation, choose "Approve &amp; Save" to create a reusable policy.</p></div></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

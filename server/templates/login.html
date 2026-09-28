@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in{% if company %} — {{ company.name }}{% endif %} — {{ brand_name }}</title>
+  <meta name="theme-color" content="#F5F7FB">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}" type="image/svg+xml">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/warden.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/workbench.css') }}?v={{ asset_v }}">
+</head>
+<body class="login-body">
+<main class="login-shell{% if error %} login-error-state{% endif %}">
+  <header class="login-brand">
+    <span class="login-brand-mark">
+      {% if brand_logo_path %}<img src="{{ brand_logo_path }}" alt="">{% else %}
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <path class="login-logo-frame" d="M20 2.8 34 8.7v10.8c0 8.8-5.3 14.1-14 17.7-8.7-3.6-14-8.9-14-17.7V8.7Z"/>
+        <path class="login-logo-w" d="m11.5 13.2 4.1 14.1L20 18.8l4.4 8.5 4.1-14.1"/>
+        <path class="login-logo-spark" d="M20 7.8v4.3M17.8 10h4.4"/>
+      </svg>
+      {% endif %}
+    </span>
+    <span class="login-brand-copy"><strong>{{ brand_name | upper }}</strong><small>{{ brand_tagline }}</small></span>
+  </header>
+
+  <div class="login-perimeter" aria-hidden="true">
+    <span></span>
+    <span></span>
+    <span></span>
+    <svg viewBox="0 0 80 80">
+      <path d="M40 8 62 19v19c0 12-8.8 19.4-22 24-13.2-4.6-22-12-22-24V19Z"/>
+      <path d="m29 30 11 6 11-6M40 36v14"/>
+    </svg>
+  </div>
+
+  <section class="login-panel">
+    <div class="login-heading">
+      <p>Welcome back</p>
+      <h1>Sign in</h1>
+      <span>Use your organization administrator account.</span>
+    </div>
+
+    {% if error %}
+    <div class="login-error" role="alert">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 9v3m0 4h.01M10.3 4.7 2.8 18a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 4.7a2 2 0 0 0-3.4 0Z"/>
+      </svg>
+      <span><strong>Sign-in failed</strong>{{ error }}</span>
+    </div>
+    {% endif %}
+
+    <form action="/login" method="POST" class="login-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="login-field">
+        <label for="email">Email address</label>
+        <input type="email" id="email" name="email" required autocomplete="email"
+               placeholder="admin@company.com" autofocus>
+      </div>
+      <div class="login-field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password"
+               placeholder="Enter your password">
+      </div>
+      <button type="submit" class="login-submit">
+        <span>Sign in</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-5-5 5 5-5 5"/>
+        </svg>
+      </button>
+    </form>
+  </section>
+</main>
+<script nonce="{{ csp_nonce }}" defer src="/static/js/form-ui.js?v={{ asset_v }}"></script>
+<script nonce="{{ csp_nonce }}" defer src="/static/js/login.js?v={{ asset_v }}"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Settings</span>{% endblock %}
+{% block content %}
+{% set settings_section = 'account' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+<div class="flex-1 min-w-0 max-w-lg space-y-6">
+  <h1 class="text-xl font-bold text-ink-100">Settings</h1>
+
+  {# Profile card #}
+  <div class="bg-base-850 rounded-xl border border-base-600 p-5">
+    <h2 class="text-sm font-semibold text-ink-100 mb-4">Profile</h2>
+    <dl class="space-y-2 text-sm">
+      <div class="flex gap-3"><dt class="text-ink-500 w-28">Name</dt><dd class="text-ink-100">{{ current_user.full_name }}</dd></div>
+      <div class="flex gap-3"><dt class="text-ink-500 w-28">Email</dt><dd class="text-ink-100">{{ current_user.email }}</dd></div>
+      <div class="flex gap-3"><dt class="text-ink-500 w-28">Role</dt><dd class="text-ink-100 capitalize">{{ current_user.role.replace('_', ' ') }}</dd></div>
+      <div class="flex gap-3"><dt class="text-ink-500 w-28">2FA</dt>
+        <dd>{% if current_user.mfa_enabled %}
+          <span class="text-status-online font-medium text-xs">Enabled</span>
+          <a href="#" x-data x-on:click.prevent="$refs.disableMfaForm.submit()" class="ml-3 text-xs text-status-critical hover:underline">Disable</a>
+          <form x-ref="disableMfaForm" action="/settings/disable-mfa" method="POST" class="hidden">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          </form>
+        {% else %}
+          <span class="text-ink-700 text-xs">Not configured</span>
+          <a href="/setup-mfa" class="ml-3 text-xs text-accent-400 hover:underline">Enable 2FA</a>
+        {% endif %}</dd>
+      </div>
+    </dl>
+  </div>
+
+  {# Change password #}
+  <div class="bg-base-850 rounded-xl border border-base-600 p-5" x-data="passwordChangeForm">
+    <h2 class="text-sm font-semibold text-ink-100 mb-4">Change Password</h2>
+    <div x-show="done" class="mb-3 text-sm text-status-online bg-status-online/10 border border-status-online/25 rounded px-3 py-2">Password changed. You have been signed out of all other sessions.</div>
+    <div x-show="error" class="mb-3 text-sm text-status-critical bg-status-critical/10 border border-status-critical/25 rounded px-3 py-2" x-text="error"></div>
+    <form @submit.prevent="submit($el)" class="space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div><label class="form-label">Current Password</label>
+        <input name="current_password" type="password" required class="form-input"></div>
+      <div><label class="form-label">New Password <span class="text-ink-700">(min 12 chars)</span></label>
+        <input name="new_password" type="password" required minlength="12" class="form-input"></div>
+      <div><label class="form-label">Confirm Password</label>
+        <input name="confirm_password" type="password" required class="form-input"></div>
+      <button type="submit" class="btn btn-primary">Update Password</button>
+    </form>
+  </div>
+
+  {# Notification preferences #}
+  <div class="bg-base-850 rounded-xl border border-base-600 p-5" x-data="notificationPrefsForm">
+    <h2 class="text-sm font-semibold text-ink-100 mb-4">Notifications</h2>
+    <form @submit.prevent="submit($el)" class="space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% set prefs = current_user.notification_prefs or {} %}
+      <label class="form-check text-sm text-ink-300">
+        <input type="checkbox" name="in_app" value="1" {% if prefs.get('in_app', true) %}checked{% endif %}>
+        In-app notifications
+      </label>
+      <label class="form-check text-sm text-ink-300">
+        <input type="checkbox" name="escalation" value="1" {% if prefs.get('escalation', true) %}checked{% endif %}>
+        Escalation requests
+      </label>
+      <label class="form-check text-sm text-ink-300">
+        <input type="checkbox" name="alerts" value="1" {% if prefs.get('alerts', true) %}checked{% endif %}>
+        System alerts
+      </label>
+      <div class="flex items-center gap-3 pt-1">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <span x-show="saved" class="text-sm text-status-online">Saved!</span>
+      </div>
+    </form>
+  </div>
+</div>
+</div>
+{% endblock %}

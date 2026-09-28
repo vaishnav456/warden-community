@@ -1,0 +1,6 @@
+# Warden Build Service — container dependencies
+# pywin32/pyinstaller dropped: build-service now cross-compiles agent-go
+# (pure Go, GOOS=windows GOARCH=amd64) instead of running PyInstaller
+# against the Python agent — no Windows-only tooling needed anymore.
+
+requests==2.34.2

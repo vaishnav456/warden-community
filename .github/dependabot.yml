@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /server
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /build-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /agent-go
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /agent-posix
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /home-node
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

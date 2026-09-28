@@ -1,0 +1,32 @@
+{% if page_help %}
+<details class="page-guide">
+  <summary class="page-guide-trigger" aria-label="Open help for this page">
+    <span class="page-guide-trigger-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M9.6 9a2.5 2.5 0 1 1 3.6 2.25c-.76.4-1.2.95-1.2 1.75v.25M12 17.25h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+    </span>
+    <span><strong>Page guide</strong><small>How this works</small></span>
+    <svg class="page-guide-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+  </summary>
+  <aside class="page-guide-panel" aria-label="{{ page_help.title }}">
+    <header>
+      <span class="page-guide-eyebrow">WARDEN HELP</span>
+      <h2>{{ page_help.title }}</h2>
+      <p>{{ page_help.overview }}</p>
+    </header>
+    <div class="page-guide-sections">
+      {% for section in page_help.sections %}
+      <section>
+        <h3><span>{{ loop.index }}</span>{{ section.title }}</h3>
+        <ol>
+          {% for item in section["items"] %}<li>{{ item }}</li>{% endfor %}
+        </ol>
+      </section>
+      {% endfor %}
+    </div>
+    <footer>
+      <span aria-hidden="true">i</span>
+      Changes made from this page appear in the Audit log. Endpoint work also appears in Jobs.
+    </footer>
+  </aside>
+</details>
+{% endif %}

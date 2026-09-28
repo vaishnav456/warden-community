@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block title %}Settings — Policy Templates{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Policy Templates</span>{% endblock %}
+
+{% block content %}
+{% set settings_section = 'policy_templates' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="flex-1 min-w-0" x-data="policyTemplateBuilder" data-catalog='{{ catalog | tojson }}'>
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="text-base font-semibold text-ink-100">Policy Templates</h2>
+        <p class="text-xs text-ink-500 mt-0.5">
+          Bundle individually-addressable local-policy settings into a reusable template, then apply
+          it to one endpoint from its Policy tab or deploy it to an entire branch here.
+        </p>
+      </div>
+      {% if can_manage_templates %}
+      <button @click="show()" class="btn btn-primary btn-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Create Template
+      </button>
+      {% endif %}
+    </div>
+
+    <a href="{{ url_for('settings.firewall_policies') }}" class="block mb-5 rounded-xl border border-accent-500/20 bg-accent-500/5 p-4 hover:border-accent-500/40">
+      <div class="flex items-center justify-between gap-3">
+        <div><p class="text-sm font-semibold text-ink-100">Windows Firewall policies</p><p class="text-xs text-ink-500 mt-1">Build application, IP, port and profile rules in the visual firewall editor—no JSON required.</p></div>
+        <span class="btn btn-secondary btn-sm">Open firewall editor</span>
+      </div>
+    </a>
+
+    <section class="benchmark-library mb-6" aria-labelledby="benchmark-library-title">
+      <div class="benchmark-heading">
+        <div><span>BENCHMARK STARTERS</span><h3 id="benchmark-library-title">Start secure, then adapt</h3></div>
+        <p>Review every setting before deployment. Starters are editable Warden recommendations, not compliance certification.</p>
+      </div>
+      <div class="benchmark-grid">
+        {% for benchmark_id, benchmark in benchmarks.items() %}
+        <article class="benchmark-card">
+          <div>
+            <div class="benchmark-meta">
+              <span class="benchmark-count">{{ benchmark.settings | length }} enforced{% if benchmark.checks %} · {{ benchmark.checks | length }} assessed{% endif %}</span>
+              <span>{{ benchmark.version }}</span>
+            </div>
+            <h4>{{ benchmark.name }}</h4>
+            <p>{{ benchmark.description }}</p>
+            <p class="benchmark-coverage">{{ benchmark.profile }}. {{ benchmark.coverage }}</p>
+          </div>
+          {% if benchmark.source_url %}<a class="benchmark-source" href="{{ benchmark.source_url }}" target="_blank" rel="noopener">Reference source ↗</a>{% endif %}
+          {% if can_manage_templates %}
+          <button type="button" class="btn btn-secondary btn-sm"
+                  data-template-name="{{ benchmark.name }}"
+                  data-template-description="{{ benchmark.description }}"
+                  data-template-settings='{{ benchmark.settings | tojson }}'
+                  @click="cloneFromElement($el)">Use &amp; modify</button>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="w-table-wrap">
+      <table class="w-table">
+        <thead><tr><th>Name</th><th>Description</th><th>Settings</th><th>Created</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>
+          {% for t in templates %}
+          <tr>
+            <td class="text-sm font-medium text-ink-100">{{ t.name }}</td>
+            <td class="text-xs text-ink-500">{{ t.description or '—' }}</td>
+            <td class="text-xs text-ink-300">{{ t.settings.keys() | list | join(', ') }}</td>
+            <td class="text-xs text-ink-500">{{ t.created_at | timeago }}</td>
+            <td class="text-right">
+              {% if can_deploy %}
+              <button type="button" class="btn btn-primary btn-sm mr-1"
+                      data-template-id="{{ t.id }}" data-template-name="{{ t.name }}"
+                      data-template-settings="{{ t.settings | length }}"
+                      @click="showDeployment($el.dataset.templateId, $el.dataset.templateName, $el.dataset.templateSettings)">
+                <svg class="custom-icon w-4 h-4" aria-hidden="true"><use href="{{ url_for('static', filename='warden-icons.svg') }}?v={{ asset_v }}#settings"></use></svg>
+                Deploy
+              </button>
+              {% endif %}
+              {% if can_manage_templates %}
+              <button type="button" class="btn btn-secondary btn-sm mr-1"
+                      data-template-name="{{ t.name }}"
+                      data-template-description="{{ t.description or '' }}"
+                      data-template-settings='{{ t.settings | tojson }}'
+                      @click="cloneFromElement($el)">Clone &amp; modify</button>
+              <button class="btn btn-secondary btn-sm"
+                      hx-delete="{{ url_for('settings.delete_policy_template', id=t.id) }}"
+                      hx-confirm="Delete template {{ t.name }}? This does not affect endpoints it was already applied to."
+                      hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5"><div class="empty-state py-10"><p class="text-sm text-ink-500">No policy templates yet</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-8 flex items-center justify-between mb-3">
+      <div>
+        <h3 class="text-sm font-semibold text-ink-100">Recent branch deployments</h3>
+        <p class="text-xs text-ink-500 mt-0.5">Durable rollout batches with per-endpoint job progress.</p>
+      </div>
+    </div>
+    <div class="w-table-wrap">
+      <table class="w-table">
+        <thead><tr><th>Template</th><th>Branch</th><th>Progress</th><th>Status</th><th>Started</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>
+          {% for deployment in deployments %}
+          {% set counts = deployment.counts %}
+          <tr>
+            <td class="text-sm font-medium text-ink-100">{{ deployment.template_name }}</td>
+            <td class="text-xs text-ink-300">{{ deployment.branch_name }}</td>
+            <td class="text-xs text-ink-300">
+              <span class="text-status-online">{{ counts.completed }} complete</span>
+              {% if counts.running %} · <span class="text-accent-400">{{ counts.running }} running</span>{% endif %}
+              {% if counts.pending %} · {{ counts.pending }} queued{% endif %}
+              {% if counts.failed %} · <span class="text-status-critical">{{ counts.failed }} failed</span>{% endif %}
+            </td>
+            <td><span class="badge badge-{{ 'cancelled' if deployment.status in ('cancelled','paused') else ('completed' if deployment.status == 'completed' else 'running') }}">{{ deployment.status }}</span></td>
+            <td class="text-xs text-ink-500">{{ deployment.created_at | timeago }}</td>
+            <td class="text-right">
+              {% if can_deploy and (counts.failed or counts.cancelled) %}
+              <button type="button" class="btn btn-primary btn-sm mr-1"
+                      data-deployment-id="{{ deployment.id }}"
+                      @click="retryDeployment($el.dataset.deploymentId)"
+                      :disabled="retryingDeployments[$el.dataset.deploymentId]">Retry / resume</button>
+              {% endif %}
+              {% if can_deploy and deployment.status == 'active' and (counts.pending or counts.running) %}
+              <button type="button" class="btn btn-secondary btn-sm"
+                      data-deployment-id="{{ deployment.id }}"
+                      @click="cancelDeployment($el.dataset.deploymentId)"
+                      :disabled="cancellingDeployments[$el.dataset.deploymentId]">Cancel remaining</button>
+              {% else %}<span class="text-xs text-ink-700">—</span>{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6"><div class="empty-state py-8"><p class="text-sm text-ink-500">No branch deployments yet</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Branch deployment panel -->
+    <template x-if="deploymentOpen">
+      <div>
+        <div class="slide-overlay" @click="closeDeployment()"></div>
+        <div class="slide-panel slide-in-right">
+          <div class="slide-panel-header">
+            <div>
+              <h3 class="text-sm font-semibold">Deploy policy to a branch</h3>
+              <p class="text-xs text-ink-500 mt-1"><span x-text="deploymentTemplateName"></span> · <span x-text="deploymentSettingCount"></span> settings</p>
+            </div>
+            <button type="button" @click="closeDeployment()" class="btn-icon btn" aria-label="Close deployment panel">
+              <svg class="custom-icon w-4 h-4" aria-hidden="true"><use href="{{ url_for('static', filename='warden-icons.svg') }}?v={{ asset_v }}#close"></use></svg>
+            </button>
+          </div>
+          <div class="slide-panel-body space-y-4">
+            <div class="rounded-lg border border-accent-500/20 bg-accent-500/5 p-3">
+              <p class="text-xs font-medium text-ink-100">Filtered, staged rollout</p>
+              <p class="text-xs text-ink-500 mt-1">Start with a stable pilot ring, verify results, then create a wider rollout. Repeating the same template keeps the same endpoints in the pilot set.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="form-label">Platform</label>
+                <select x-model="deploymentPlatform" class="form-input form-select" :disabled="deploying">
+                  <option value="windows">Windows policy</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">Rollout ring</label>
+                <select x-model.number="deploymentRolloutPercentage" class="form-input form-select" :disabled="deploying">
+                  <option value="10">Pilot · 10%</option><option value="25">Early · 25%</option><option value="50">Broad · 50%</option><option value="100">Production · 100%</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Required endpoint tag <span class="text-ink-700">(optional)</span></label>
+              <input x-model.trim="deploymentTag" maxlength="64" class="form-input" placeholder="Example: finance or pilot">
+            </div>
+            <div>
+              <label class="form-label">Endpoint group / branch <span class="text-status-critical">*</span></label>
+              <select x-model="deploymentBranchId" class="form-input form-select" :disabled="deploying">
+                <option value="">Choose a branch</option>
+                {% for branch in branches %}
+                <option value="{{ branch.id }}">{{ branch.name }} — {{ branch.endpoint_count }} active endpoints</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="form-label">Reason</label>
+              <textarea x-model="deploymentReason" class="form-input min-h-20" :disabled="deploying"
+                        placeholder="Optional change note for the audit log"></textarea>
+            </div>
+            <div x-show="deploymentError" class="rounded-lg border border-status-critical/25 bg-status-critical/5 p-3 text-xs text-status-critical" x-text="deploymentError"></div>
+            <div x-show="deploymentResult" class="rounded-lg border border-status-online/25 bg-status-online/10 p-3">
+              <p class="text-sm font-medium text-status-online">Deployment queued</p>
+              <p class="text-xs text-ink-300 mt-1" x-text="deploymentResult"></p>
+            </div>
+          </div>
+          <div class="slide-panel-footer">
+            <button type="button" @click="closeDeployment()" class="btn btn-secondary" x-text="deploymentResult ? 'Done' : 'Cancel'"></button>
+            <button type="button" @click="deployToBranch()" class="btn btn-primary"
+                    :disabled="deploying || !deploymentBranchId || deploymentResult">
+              <span x-show="!deploying">Deploy to branch</span>
+              <span x-show="deploying">Queueing jobs…</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Create template slide panel -->
+    <template x-if="open">
+      <div>
+        <div class="slide-overlay" @click="close()"></div>
+        <div class="slide-panel slide-in-right">
+          <div class="slide-panel-header">
+            <h3 class="text-sm font-semibold" x-text="builderTitle"></h3>
+            <button @click="close()" class="btn-icon btn"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+          </div>
+          <form id="create-policy-template-form" method="POST"
+                action="{{ url_for('settings.create_policy_template') }}"
+                @submit="assembleSettingsJson()"
+                class="slide-panel-body space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" id="policy-template-settings-json" name="settings_json" value="{}">
+            <div>
+              <label class="form-label">Template Name <span class="text-status-critical">*</span></label>
+              <input x-ref="templateName" type="text" name="name" required class="form-input" placeholder="e.g. Standard Desktop">
+            </div>
+            <div>
+              <label class="form-label">Description</label>
+              <input x-ref="templateDescription" type="text" name="description" class="form-input" placeholder="Optional">
+            </div>
+
+            <div class="pt-2 border-t border-base-600">
+              <div class="flex items-center justify-between mb-2">
+                <p class="text-xs text-ink-500">Start from a preset, or check settings individually.</p>
+                <div class="flex gap-2">
+                  <button type="button" @click="applyPreset('privacy')" class="btn btn-secondary btn-sm !text-xs !py-1">Privacy Hardening</button>
+                  <button type="button" @click="applyPreset('remote_access')" class="btn btn-secondary btn-sm !text-xs !py-1">Remote Access Hardening</button>
+                </div>
+              </div>
+              <div class="flex items-center justify-between mb-3">
+                <p class="text-xs text-ink-500">Check the settings to include, and set the value each should be pushed to.</p>
+                <input type="text" x-model="filterText" placeholder="Search settings..."
+                       class="form-input !py-1 text-xs w-48 flex-shrink-0">
+              </div>
+              {# Read-only settings (e.g. BitLocker/VolumeEncryption status) can
+                 never be pushed, so they're excluded from the template
+                 builder entirely -- see them on the endpoint Policy tab
+                 instead. #}
+              {% set categories = [] %}
+              {% for key, meta in catalog.items() %}
+                {% if key != 'windows_firewall_rules' and not meta.readonly and meta.category not in categories %}{% set _ = categories.append(meta.category) %}{% endif %}
+              {% endfor %}
+              {% for cat in categories %}
+              <div x-show="categoryHasMatch('{{ cat }}')" class="mb-2 border border-base-600 rounded-lg overflow-hidden">
+                <div class="w-full flex items-center justify-between px-3 py-2 bg-base-800 hover:bg-base-700">
+                  <button type="button" @click="toggleCategory('{{ cat }}')"
+                          class="flex-1 text-left text-xs font-semibold text-ink-100 uppercase tracking-wide">
+                    {{ cat }}
+                    <span class="text-ink-700 normal-case font-normal" x-text="expandedCategories['{{ cat }}'] || filterText ? '▾' : '▸'"></span>
+                  </button>
+                  <button type="button" @click="selectAllInCategory('{{ cat }}')" class="text-xs text-accent-400 hover:underline flex-shrink-0 ml-2">Select all</button>
+                  <button type="button" @click="clearAllInCategory('{{ cat }}')" class="text-xs text-ink-500 hover:underline flex-shrink-0 ml-2">Clear</button>
+                </div>
+                <div x-show="expandedCategories['{{ cat }}'] || filterText" class="space-y-2 p-3">
+                  {% for key, meta in catalog.items() %}
+                  {% if key != 'windows_firewall_rules' and meta.category == cat and not meta.readonly %}
+                  <div x-show="matchesFilter('{{ key }}')" class="flex items-center gap-2">
+                    <label class="form-check text-sm text-ink-300 flex-1 min-w-0" {% if meta.help %}title="{{ meta.help }}"{% endif %}>
+                      <input type="checkbox" :checked="included['{{ key }}']" @change="toggle('{{ key }}')">
+                      {{ meta.label }}
+                    </label>
+                    <template x-if="included['{{ key }}']">
+                      <div class="flex-shrink-0">
+                        {% if meta.kind == 'bool' %}
+                        <select x-model="values['{{ key }}']" class="form-input form-select !py-1 text-xs">
+                          <option value="true">Enabled</option>
+                          <option value="false">Disabled</option>
+                        </select>
+                        {% elif meta.kind == 'int' %}
+                        <input type="number" x-model.number="values['{{ key }}']"
+                               min="{{ meta.min }}" max="{{ meta.max }}" class="form-input form-input-narrow !py-1 text-xs">
+                        {% elif meta.kind == 'enum' %}
+                        <select x-model="values['{{ key }}']" class="form-input form-select !py-1 text-xs">
+                          {% for v in meta.options %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+                        </select>
+                        {% elif meta.kind == 'string' %}
+                        {% if meta.multiline %}
+                        <textarea x-model="values['{{ key }}']" rows="7" spellcheck="false"
+                                  placeholder="{{ meta.placeholder or '' }}"
+                                  class="form-input font-mono-data !py-2 text-xs w-[34rem] max-w-[55vw]"></textarea>
+                        {% else %}
+                        <input type="text" x-model="values['{{ key }}']" class="form-input form-input-auto !py-1 text-xs max-w-[10rem]">
+                        {% endif %}
+                        {% endif %}
+                      </div>
+                    </template>
+                  </div>
+                  {% endif %}
+                  {% endfor %}
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </form>
+          <div class="slide-panel-footer">
+            <button @click="close()" class="btn btn-secondary">Cancel</button>
+            <button type="submit" form="create-policy-template-form" class="btn btn-primary">Create Template</button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+{% endblock %}

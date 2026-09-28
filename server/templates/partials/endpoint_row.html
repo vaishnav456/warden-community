@@ -1,0 +1,50 @@
+<tr id="ep-row-{{ endpoint.id }}" class="fleet-endpoint-row">
+  {% set row_platform = endpoint.platform or 'windows' %}
+  <td>
+    <a href="/endpoints/{{ endpoint.id }}" class="fleet-endpoint-identity">
+      <span class="fleet-device-icon platform-mark-{{ row_platform }}">
+        <svg><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if row_platform == 'darwin' else row_platform }}"></use></svg>
+        <i class="{{ 'online' if endpoint.status == 'online' }}"></i>
+      </span>
+      <span>
+        <b>{{ endpoint.display_name or endpoint.hostname }}</b>
+        <small>{{ endpoint.os_name or 'Windows' }} · Agent {{ endpoint.agent_version or 'unknown' }}</small>
+      </span>
+    </a>
+  </td>
+  <td>
+    <span class="fleet-branch">{{ branch_names.get(endpoint.branch_id | string, 'Unassigned') }}</span>
+  </td>
+  <td>
+    <div class="fleet-health">
+      <span><small>CPU</small><b class="{% if endpoint.cpu_pct and endpoint.cpu_pct > 80 %}critical{% endif %}">{{ (endpoint.cpu_pct | round(0) | int ~ '%') if endpoint.cpu_pct is not none else '—' }}</b></span>
+      <span><small>RAM</small><b class="{% if endpoint.ram_used_pct and endpoint.ram_used_pct > 85 %}critical{% endif %}">{{ (endpoint.ram_used_pct | round(0) | int ~ '%') if endpoint.ram_used_pct is not none else '—' }}</b></span>
+      <span><small>DISK</small><b>{{ (endpoint.disk_free_gb | round(0) | int ~ ' GB') if endpoint.disk_free_gb is not none else '—' }}</b></span>
+    </div>
+  </td>
+  <td>
+    {% set ns = namespace(tracked=0, drifted=0) %}
+    {% for k, v in (endpoint.policy_state or {}).items() %}
+      {% if v is mapping and 'value' in v %}
+        {% set ns.tracked = ns.tracked + 1 %}
+        {% if v.drift is sameas true %}{% set ns.drifted = ns.drifted + 1 %}{% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if endpoint.status != 'online' %}
+      <span class="fleet-attention warning"><i></i>Offline</span>
+    {% elif ns.drifted > 0 %}
+      <span class="fleet-attention warning"><i></i>{{ ns.drifted }} policy drift</span>
+    {% else %}
+      <span class="fleet-attention clear"><i></i>No issues</span>
+    {% endif %}
+  </td>
+  <td>
+    <div class="fleet-contact">
+      <b>{{ endpoint.last_seen | timeago }}</b>
+      <small>{{ endpoint.status | title }}</small>
+    </div>
+  </td>
+  <td class="text-right">
+    <a href="/endpoints/{{ endpoint.id }}" class="fleet-open-button" aria-label="Open {{ endpoint.hostname }}">Open <span>→</span></a>
+  </td>
+</tr>

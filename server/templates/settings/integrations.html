@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Settings — Integrations{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Integrations</span>{% endblock %}
+{% block content %}
+{% set settings_section = 'integrations' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="flex-1 min-w-0 space-y-6">
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Microsoft Entra ID &amp; Intune</h2>
+      <p class="text-xs text-ink-500 mt-1">Connect this organization's own Microsoft application to verify Autopilot devices and support cloud-driven enrollment.</p>
+    </div>
+
+    <div class="grid xl:grid-cols-5 gap-5">
+      <section class="xl:col-span-3 bg-base-850 border border-base-600 rounded-xl p-5">
+        <div class="flex items-start justify-between gap-4 mb-5">
+          <div>
+            <h3 class="text-sm font-semibold text-ink-100">Connection credentials</h3>
+            <p class="text-xs text-ink-500 mt-1">The client secret is encrypted with your organization vault and is never displayed again.</p>
+          </div>
+          {% if integration %}
+          <span class="badge {{ 'badge-online' if integration.status == 'connected' else 'badge-failed' if integration.status == 'error' else 'badge-pending' }} text-xs">{{ integration.status|replace('_', ' ')|title }}</span>
+          {% else %}
+          <span class="badge badge-offline text-xs">Not configured</span>
+          {% endif %}
+        </div>
+
+        {% if vault_locked %}
+        <div class="flash flash-warning mb-4">Unlock the organization vault under Encryption &amp; Access before reading or updating integration credentials.</div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('settings.save_microsoft_integration') }}" class="space-y-4">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div>
+            <label class="form-label">Directory (tenant) ID</label>
+            <input name="tenant_id" class="form-input font-mono-data" value="{{ saved_config.get('tenant_id', '') }}" placeholder="00000000-0000-0000-0000-000000000000" required {% if vault_locked %}disabled{% endif %}>
+          </div>
+          <div>
+            <label class="form-label">Application (client) ID</label>
+            <input name="client_id" class="form-input font-mono-data" value="{{ saved_config.get('client_id', '') }}" placeholder="00000000-0000-0000-0000-000000000000" required {% if vault_locked %}disabled{% endif %}>
+          </div>
+          <div>
+            <label class="form-label">Client secret value</label>
+            <input type="password" name="client_secret" class="form-input" autocomplete="new-password" placeholder="{{ 'Leave blank to keep the stored secret' if integration else 'Paste the secret value — not its Secret ID' }}" {% if not integration %}required{% endif %} {% if vault_locked %}disabled{% endif %}>
+          </div>
+          <button class="btn btn-primary" type="submit" {% if vault_locked %}disabled{% endif %}>Save and test connection</button>
+        </form>
+
+        {% if integration %}
+        <div class="border-t border-base-600 mt-5 pt-4 flex flex-wrap gap-2">
+          <form method="POST" action="{{ url_for('settings.test_microsoft_integration') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-secondary btn-sm" type="submit" {% if vault_locked %}disabled{% endif %}>Test again</button>
+          </form>
+          <form method="POST" action="{{ url_for('settings.disconnect_microsoft_integration') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-danger btn-sm" type="submit">Remove credentials</button>
+          </form>
+        </div>
+        {% if integration.last_tested_at %}<p class="text-xs text-ink-500 mt-3">Last tested {{ integration.last_tested_at|timeago }}</p>{% endif %}
+        {% if integration.status == 'connected' and integration.metadata %}
+        <div class="bg-base-800 rounded-lg p-3 mt-3 text-xs text-ink-300">
+          Connected organisation: <strong>{{ integration.metadata.get('organization_name', 'Microsoft Entra tenant') }}</strong>
+          {% if integration.metadata.get('default_domain') %} · {{ integration.metadata.default_domain }}{% endif %}
+          · Autopilot API verified
+        </div>
+        {% elif integration.last_error %}
+        <div class="flash flash-error mt-3">{{ integration.last_error }}</div>
+        {% endif %}
+        {% endif %}
+      </section>
+
+      <aside class="xl:col-span-2 bg-base-850 border border-base-600 rounded-xl p-5 text-sm text-ink-300">
+        <h3 class="font-semibold text-ink-100">Required Microsoft setup</h3>
+        <ol class="list-decimal ml-5 mt-3 space-y-2 text-xs">
+          <li>Create an app registration in the customer's Microsoft Entra tenant.</li>
+          <li>Create a client secret and copy its <strong>Value</strong> immediately. Do not paste the Secret ID.</li>
+          <li>Under Microsoft Graph → Application permissions, add:<br><span class="font-mono-data text-accent-400">Organization.Read.All</span><br><span class="font-mono-data text-accent-400">DeviceManagementServiceConfig.Read.All</span></li>
+          <li>Select <strong>Grant admin consent</strong> for the tenant.</li>
+          <li>Confirm the tenant has an active Microsoft Intune licence.</li>
+        </ol>
+        <div class="bg-base-800 rounded-lg p-3 mt-4 text-xs text-ink-400">
+          No redirect URI is required. Warden uses Microsoft's server-to-server client-credentials flow. Access tokens are temporary and are not stored.
+        </div>
+        <p class="text-xs mt-4"><a class="text-accent-400 hover:underline" href="https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow" target="_blank" rel="noopener noreferrer">Microsoft client-credentials setup ↗</a></p>
+        <p class="text-xs mt-2"><a class="text-accent-400 hover:underline" href="https://learn.microsoft.com/en-us/graph/api/intune-enrollment-windowsautopilotdeviceidentity-list" target="_blank" rel="noopener noreferrer">Autopilot Graph permissions ↗</a></p>
+      </aside>
+    </div>
+
+    {% if integration %}
+    <section class="bg-base-850 border border-base-600 rounded-xl p-5">
+      <h3 class="text-sm font-semibold text-ink-100">Import Autopilot devices</h3>
+      <p class="text-xs text-ink-500 mt-1">Fetch the tenant's Autopilot inventory and pre-register each serial/Entra device identity under one Warden enrollment profile. Existing matches are updated, not duplicated.</p>
+      {% if enrollment_profiles %}
+      <form method="POST" action="{{ url_for('settings.sync_microsoft_autopilot') }}" class="flex flex-col md:flex-row md:items-end gap-3 mt-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="flex-1">
+          <label class="form-label">Destination enrollment profile</label>
+          <select name="profile_id" class="form-input form-select" required {% if vault_locked %}disabled{% endif %}>
+            <option value="">Select profile…</option>
+            {% for profile in enrollment_profiles %}<option value="{{ profile.id }}">{{ profile.name }} · {{ profile.deployment_method|upper }}</option>{% endfor %}
+          </select>
+        </div>
+        <button class="btn btn-primary" type="submit" {% if vault_locked %}disabled{% endif %}>Sync Autopilot devices</button>
+      </form>
+      {% else %}
+      <p class="text-xs text-status-warning mt-3">Create a zero-touch enrollment profile before syncing devices.</p>
+      {% endif %}
+      {% if integration.metadata and integration.metadata.get('last_sync_at') %}
+      <p class="text-xs text-ink-500 mt-3">Last sync: {{ integration.metadata.last_sync_count }} device(s) · {{ integration.metadata.last_sync_at|timeago }}</p>
+      {% endif %}
+    </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
