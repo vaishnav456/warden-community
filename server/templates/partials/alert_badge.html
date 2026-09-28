@@ -1,0 +1,13 @@
+{# Self-polling nav badge — outerHTML-swapped, so this partial's root
+   element must re-declare its own id/hx-get/hx-trigger every time it
+   renders, or the element (and its polling) disappears after the first
+   swap. Serves two distinct badges (escalation-badge / alert-badge, see
+   routes/escalations.py's badge() and routes/alerts.py's badge()) sharing
+   one template, distinguished by `type`. #}
+{% if type == 'escalation' %}
+<span id="esc-badge" hx-get="{{ url_for('escalations.badge') }}" hx-trigger="every 5s" hx-swap="outerHTML" hx-sync="this:drop" class="ml-auto">
+{% else %}
+<span id="alert-badge" hx-get="{{ url_for('alerts.badge') }}" hx-trigger="every 60s" hx-swap="outerHTML" hx-sync="this:drop" class="ml-auto">
+{% endif %}
+  {% if count > 0 %}<span class="nav-badge nav-badge-{{ 'amber' if type == 'escalation' else 'red' }}">{{ count if count < 10 else '9+' }}</span>{% endif %}
+</span>

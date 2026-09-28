@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Patch management{% endblock %}
+
+{% block breadcrumb %}<span class="text-ink-700">Patch management</span>{% endblock %}
+
+{% block content %}
+<div x-data="patchManagementPage" data-endpoint-ids="{{ endpoints|map(attribute='id')|list|tojson|forceescape }}">
+  <div class="fleet-page-header">
+    <div>
+      <h1>Windows patch management</h1>
+      <p>See applicable Windows updates and deploy scans or installations without interrupting Warden connectivity.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button class="btn btn-secondary" @click="dispatch('check')" :disabled="busy || {{ endpoints|length }} === 0">Scan all</button>
+      <button class="btn btn-primary" @click="dispatch('install')" :disabled="busy || {{ endpoints|length }} === 0">Install pending</button>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+    <div class="stat-card"><div class="stat-card-label">Windows endpoints</div><div class="stat-card-value">{{ endpoints|length }}</div></div>
+    <div class="stat-card"><div class="stat-card-label">Pending updates</div><div class="stat-card-value">{{ patches|length }}</div></div>
+    <div class="stat-card"><div class="stat-card-label">Critical / important</div><div class="stat-card-value text-status-critical">{{ critical_count }}</div></div>
+    <div class="stat-card"><div class="stat-card-label">Reboot flagged</div><div class="stat-card-value text-status-warning">{{ reboot_count }}</div></div>
+  </div>
+
+  <div class="grid lg:grid-cols-3 gap-5 mb-6">
+    <section class="w-card p-5 lg:col-span-2">
+      <div class="flex items-center justify-between mb-4"><div><h2 class="text-sm font-semibold text-ink-100">Patch rollout policies</h2><p class="text-xs text-ink-500 mt-1">Pilot first, automatically promote the broad ring, and retain per-endpoint job evidence.</p></div></div>
+      <div class="overflow-x-auto"><table class="w-table"><thead><tr><th>Policy</th><th>Scope</th><th>Approvals</th><th>Rings</th><th>Deadline</th><th></th></tr></thead><tbody>{% for policy in patch_policies %}<tr><td class="font-medium text-ink-100">{{ policy.name }}</td><td><span class="badge badge-offline">{{ policy.scope_type }}</span></td><td class="text-xs">{{ policy.severities|join(', ') }}</td><td>{{ policy.pilot_percentage }}% pilot → broad after {{ policy.broad_after_hours }}h</td><td>{{ policy.deadline_hours }}h · {{ policy.reboot_mode|replace('_',' ') }}</td><td><form method="post" action="/patches/policies/{{ policy.id }}/deploy"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary btn-sm">Start rollout</button></form></td></tr>{% else %}<tr><td colspan="6"><div class="empty-state py-8"><p>No patch policies yet.</p></div></td></tr>{% endfor %}</tbody></table></div>
+    </section>
+    <section class="w-card p-5"><h2 class="text-sm font-semibold text-ink-100">New patch policy</h2><form method="post" action="/patches/policies" class="space-y-3 mt-4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div><label class="form-label">Name</label><input name="name" maxlength="120" required class="form-input" placeholder="Windows production ring"></div>
+      <div><label class="form-label">Scope</label><select name="scope_type" class="form-input form-select"><option value="tenant">Tenant</option><option value="branch">Branch</option><option value="tag">Endpoint group / tag</option><option value="endpoints">Endpoint UUIDs</option></select></div>
+      <div><label class="form-label">Branch</label><select name="branch_id" class="form-input form-select"><option value="">Choose for branch scope</option>{% for branch in branches %}<option value="{{ branch.id }}">{{ branch.name }}</option>{% endfor %}</select></div>
+      <div><label class="form-label">Endpoint group / tag</label><input name="tag" maxlength="64" class="form-input" placeholder="Choose for group / tag scope"></div>
+      <div><label class="form-label">Specific endpoints</label><select name="endpoint_ids" multiple size="4" class="form-input">{% for endpoint in endpoints %}<option value="{{ endpoint.id }}">{{ endpoint.display_name or endpoint.hostname }}</option>{% endfor %}</select><p class="form-help">Only the control matching Scope is used.</p></div>
+      <fieldset><legend class="form-label">Approved severities</legend><div class="flex flex-wrap gap-3 text-sm">{% for severity in ['Critical','Important','Moderate','Low','Unspecified'] %}<label><input type="checkbox" name="severities" value="{{ severity }}" {{ 'checked' if severity in ['Critical','Important'] }}> {{ severity }}</label>{% endfor %}</div></fieldset>
+      <div class="grid grid-cols-3 gap-2"><div><label class="form-label">Pilot %</label><input type="number" name="pilot_percentage" min="1" max="100" value="10" class="form-input"></div><div><label class="form-label">Promote h</label><input type="number" name="broad_after_hours" min="0" max="720" value="24" class="form-input"></div><div><label class="form-label">Deadline h</label><input type="number" name="deadline_hours" min="1" max="2160" value="168" class="form-input"></div></div>
+      <div><label class="form-label">Restart handling</label><select name="reboot_mode" class="form-input form-select"><option value="notify">Notify user</option><option value="never">Never force</option><option value="force_at_deadline">Force at deadline</option></select></div>
+      <button class="btn btn-primary w-full">Save policy</button>
+    </form></section>
+  </div>
+
+  {% if deployments %}<div class="w-table-wrap mb-6"><div class="px-5 py-3 border-b border-base-600"><h2 class="text-sm font-semibold text-ink-100">Recent rollouts</h2></div><table class="w-table"><thead><tr><th>Policy</th><th>Stage</th><th>Started</th><th>Broad ring</th><th>Deadline</th></tr></thead><tbody>{% for deployment in deployments %}<tr><td>{{ deployment.patch_policies.name if deployment.patch_policies else 'Deleted policy' }}</td><td><span class="badge {{ 'badge-online' if deployment.status == 'completed' else 'badge-offline' }}">{{ deployment.status|title }}</span></td><td>{{ deployment.started_at|timeago }}</td><td>{{ deployment.broad_at }}</td><td>{{ deployment.deadline_at }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+
+  <div class="w-table-wrap mb-6">
+    <div class="px-5 py-3 border-b border-base-600 flex items-center justify-between gap-3">
+      <div>
+        <h2 class="text-sm font-semibold text-ink-100">Endpoint exposure</h2>
+        <p class="text-xs text-ink-500 mt-1">{{ scanned_count }} endpoints have reported applicable update inventory.</p>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-table">
+        <thead><tr><th>Endpoint</th><th>Status</th><th>Pending</th><th>High priority</th><th>Last report</th><th></th></tr></thead>
+        <tbody>
+          {% for endpoint in endpoints %}
+          {% set items = patches_by_endpoint.get(endpoint.id|string, []) %}
+          {% set high = items|selectattr('severity', 'in', ['Critical','Important','critical','important'])|list %}
+          <tr>
+            <td><a class="font-medium text-ink-100 hover:text-accent-500" href="/endpoints/{{ endpoint.id }}">{{ endpoint.display_name or endpoint.hostname }}</a></td>
+            <td><span class="badge {{ 'badge-online' if endpoint.status == 'online' else 'badge-offline' }}">{{ endpoint.status|title }}</span></td>
+            <td class="font-mono-data">{{ items|length }}</td>
+            <td><span class="{{ 'text-status-critical font-semibold' if high else 'text-ink-500' }}">{{ high|length }}</span></td>
+            <td class="text-ink-500">{{ items[0].reported_at|timeago if items else 'Not reported' }}</td>
+            <td class="text-right"><button class="btn btn-ghost btn-sm" @click="scanEndpoint('{{ endpoint.id }}')" :disabled="busy">Scan</button></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6"><div class="empty-state py-10"><p>No Windows endpoints are enrolled.</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="w-table-wrap">
+    <div class="px-5 py-3 border-b border-base-600">
+      <h2 class="text-sm font-semibold text-ink-100">Applicable update inventory</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-table">
+        <thead><tr><th>Update</th><th>Endpoint</th><th>Severity</th><th>KB</th><th>Categories</th><th>Reboot</th></tr></thead>
+        <tbody>
+          {% for patch in patches %}
+          {% set endpoint = endpoints|selectattr('id', 'equalto', patch.endpoint_id)|first %}
+          <tr>
+            <td><div class="font-medium text-ink-100 max-w-xl">{{ patch.title }}</div><div class="text-xs text-ink-500 font-mono-data mt-1">{{ patch.update_id }}</div></td>
+            <td>{{ endpoint.display_name or endpoint.hostname if endpoint else 'Unknown' }}</td>
+            <td><span class="badge {{ 'badge-critical' if patch.severity|lower in ['critical','important'] else 'badge-offline' }}">{{ patch.severity or 'Unspecified' }}</span></td>
+            <td class="text-ink-500">{{ patch.kb_articles|join(', ') if patch.kb_articles else '—' }}</td>
+            <td class="text-ink-500">{{ patch.categories|join(', ') if patch.categories else '—' }}</td>
+            <td>{{ 'Required' if patch.reboot_required else 'No' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6"><div class="empty-state py-10"><p>No applicable updates reported yet. Run a scan to populate this view.</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

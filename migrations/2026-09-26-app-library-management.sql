@@ -1,0 +1,4 @@
+ALTER TABLE endpt.app_library
+    ADD COLUMN IF NOT EXISTS install_args TEXT NOT NULL DEFAULT '';
+ALTER TABLE endpt.app_library
+    ADD COLUMN IF NOT EXISTS self_service BOOLEAN NOT NULL DEFAULT FALSE;

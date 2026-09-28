@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Superadmin Dashboard{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Superadmin</span>{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-4 gap-5 mb-6">
+  <div class="stat-card">
+    <div class="flex items-center justify-between mb-3">
+      <span class="stat-card-label">Companies</span>
+      <div class="stat-card-icon bg-accent-500/10"><svg class="w-5 h-5 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg></div>
+    </div>
+    <div class="stat-card-value">{{ stats.companies }}</div>
+    <div class="stat-card-sublabel">{{ stats.active_companies }} active</div>
+  </div>
+  <div class="stat-card">
+    <div class="flex items-center justify-between mb-3">
+      <span class="stat-card-label">Total Endpoints</span>
+      <div class="stat-card-icon bg-status-online/10"><svg class="w-5 h-5 text-status-online" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg></div>
+    </div>
+    <div class="stat-card-value">{{ stats.total_endpoints }}</div>
+    <div class="stat-card-sublabel">{{ stats.online_endpoints }} online</div>
+  </div>
+  <div class="stat-card">
+    <div class="flex items-center justify-between mb-3">
+      <span class="stat-card-label">Admin Users</span>
+      <div class="stat-card-icon bg-accent-500/10"><svg class="w-5 h-5 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg></div>
+    </div>
+    <div class="stat-card-value">{{ stats.admin_users }}</div>
+    <div class="stat-card-sublabel">across all companies</div>
+  </div>
+  <div class="stat-card">
+    <div class="flex items-center justify-between mb-3">
+      <span class="stat-card-label">Open Alerts</span>
+      <div class="stat-card-icon {{ 'bg-status-critical/10' if stats.open_alerts > 0 else 'bg-base-700' }}"><svg class="w-5 h-5 {{ 'text-status-critical' if stats.open_alerts > 0 else 'text-ink-700' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg></div>
+    </div>
+    <div class="stat-card-value {{ 'text-status-critical' if stats.open_alerts > 0 }}">{{ stats.open_alerts }}</div>
+    <div class="stat-card-sublabel">across all companies</div>
+  </div>
+</div>
+
+<h2 class="text-sm font-semibold text-ink-100 mb-3">All Companies</h2>
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead><tr><th>Company</th><th>Slug</th><th>Endpoints</th><th>Last Activity</th><th>Status</th><th class="text-right">Actions</th></tr></thead>
+    <tbody>
+      {% for company in companies %}
+      <tr>
+        <td class="text-sm font-semibold text-ink-100">{{ company.name }}</td>
+        <td class="text-xs font-mono-data text-accent-400">{{ company.slug }}</td>
+        <td class="text-xs text-ink-300">{{ company.endpoint_count }}</td>
+        <td class="text-xs text-ink-500">{{ company.last_activity_ago or 'Never' }}</td>
+        <td><span class="badge badge-{{ 'online' if company.is_active else 'offline' }} text-xs">{{ 'Active' if company.is_active else 'Inactive' }}</span></td>
+        <td class="text-right">
+          <a href="{{ url_for('superadmin.open_company', company_id=company.id) }}" class="btn btn-secondary btn-sm">Open</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

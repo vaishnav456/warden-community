@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Endpoints{% endblock %}
+
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <span class="text-ink-700">Warden</span>
+  <span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100">Endpoints</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div x-data="installerModal">
+
+{# Header #}
+<div class="fleet-page-header">
+  <div>
+    <div class="section-kicker">Fleet operations</div>
+    <h1>Endpoints</h1>
+    <p>Monitor health, investigate risk, and connect to managed devices.</p>
+  </div>
+  <div class="flex items-center gap-2">
+    {% if current_user.role != 'technician' %}
+    <button @click="openBulkModal()" class="btn btn-secondary">
+      Bulk Action
+    </button>
+    {% endif %}
+    <button @click="showGenerateModal = true" class="btn btn-primary">
+      <svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#apps"></use></svg>
+      Generate Installer
+    </button>
+  </div>
+</div>
+
+<div class="fleet-summary-strip">
+  <a href="/endpoints" class="{{ 'is-active' if not selected_state }}">
+    <small>Managed</small><strong>{{ fleet_summary.total }}</strong><span>All endpoints</span>
+  </a>
+  <a href="/endpoints?state=online" class="{{ 'is-active' if selected_state == 'online' }}">
+    <small>Reachable</small><strong>{{ fleet_summary.online }}</strong><span>Online now</span>
+  </a>
+  <a href="/endpoints?state=offline" class="{{ 'is-active' if selected_state == 'offline' }}">
+    <small>Disconnected</small><strong>{{ fleet_summary.total - fleet_summary.online }}</strong><span>Offline</span>
+  </a>
+  <a href="/endpoints?state=attention" class="attention {{ 'is-active' if selected_state == 'attention' }}">
+    <small>Review</small><strong>{{ fleet_summary.attention }}</strong><span>Need attention</span>
+  </a>
+</div>
+
+<form method="GET" action="/endpoints" class="fleet-toolbar">
+  {% if selected_branch %}<input type="hidden" name="branch_id" value="{{ selected_branch }}">{% endif %}
+  {% if selected_state %}<input type="hidden" name="state" value="{{ selected_state }}">{% endif %}
+  <div class="fleet-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+    <input name="q" value="{{ query }}" placeholder="Search hostname, OS, IP or agent version">
+  </div>
+  {% if branches | length > 1 %}
+  <select name="branch_id" class="fleet-select" onchange="this.form.submit()">
+    <option value="">All branches</option>
+    {% for b in branches %}<option value="{{ b.id }}" {{ 'selected' if selected_branch == b.id | string }}>{{ b.name }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <button class="btn btn-secondary" type="submit">Search</button>
+  {% if query or selected_state or selected_branch %}<a class="fleet-clear" href="/endpoints">Clear</a>{% endif %}
+</form>
+
+{% if query or selected_state or selected_branch %}
+<div class="fleet-results-note">
+  Showing {{ endpoints | length }} matching endpoint{{ '' if endpoints | length == 1 else 's' }}
+</div>
+{% endif %}
+
+{# Endpoints table #}
+<div class="w-table-wrap fleet-table-wrap">
+  <table class="w-table fleet-table">
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Branch</th>
+        <th>Health</th>
+        <th>Attention</th>
+        <th>Last contact</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="endpoint-table-body">
+      {% for endpoint in endpoints %}
+      {% include "partials/endpoint_row.html" %}
+      {% else %}
+      <tr>
+        <td colspan="6" class="px-4 py-12 text-center text-ink-700">
+          {{ 'No endpoints match these filters.' if query or selected_state else 'No endpoints enrolled. Generate an installer to get started.' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# Generate Installer Modal #}
+<div x-show="showGenerateModal" x-cloak
+     class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+  <div @click.stop class="endpoint-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+    <h3 class="text-lg font-semibold text-ink-100 mb-4">Generate Enrollment Installer</h3>
+
+    <template x-if="!buildResult">
+      <div class="space-y-4">
+        <div>
+          <label class="form-label">Branch</label>
+          <select x-model="selectedBranch" class="form-input form-select">
+            <option value="">Select a branch</option>
+            {% for b in branches %}
+            <option value="{{ b.id }}">{{ b.name }}{% if b.city %} — {{ b.city }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Operating system</label>
+          <select x-model="selectedPlatform" class="form-input form-select">
+            <option value="windows-amd64">Windows 64-bit</option>
+            <option value="linux-amd64">Linux Intel / AMD 64-bit — Alpha</option>
+            <option value="linux-arm64">Linux ARM 64-bit — Alpha</option>
+            <option value="darwin-amd64">macOS Intel — Alpha</option>
+            <option value="darwin-arm64">macOS Apple silicon — Alpha</option>
+          </select>
+        </div>
+        <p class="text-xs text-ink-500">
+          A ready-to-install package containing the correct agent and enrollment config will be built.
+          The enrollment token expires after 24 hours.
+          Linux and macOS support is currently Alpha and should be piloted before broad deployment.
+        </p>
+        <div class="flex gap-3 justify-end">
+          <button @click="close()" class="btn btn-secondary">Cancel</button>
+          <button @click="generateInstaller()"
+                  :disabled="!selectedBranch || generating"
+                  class="btn btn-primary">
+            <span x-show="!generating">Generate</span>
+            <span x-show="generating">Building...</span>
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="buildResult">
+      <div class="space-y-4">
+        <template x-if="buildResult.ok">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-status-online/15 rounded-full flex items-center justify-center mx-auto mb-3">
+              <svg class="w-6 h-6 text-status-online" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              </svg>
+            </div>
+            <p class="text-sm text-ink-300" x-text="buildResult.message"></p>
+            <p class="text-xs text-ink-700 mt-2">Build request ID: <span class="font-mono-data" x-text="buildResult.build_request_id"></span></p>
+            <a href="{{ url_for('settings.tokens') }}" class="btn btn-secondary btn-sm mt-4">Go to Enrollment Tokens</a>
+          </div>
+        </template>
+        <template x-if="buildResult.error">
+          <div class="text-sm text-status-critical bg-status-critical/10 border border-status-critical/25 rounded-lg p-3" x-text="buildResult.error"></div>
+        </template>
+        <div class="flex justify-end">
+          <button @click="close()" class="btn btn-primary">Done</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+{# Bulk Action Modal #}
+<div x-show="showBulkModal" x-cloak
+     @keydown.escape.window="closeBulk()"
+     class="endpoint-modal-backdrop bulk-action-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+  <div @click.stop class="endpoint-dialog bulk-action-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full">
+    <header class="bulk-action-header">
+      <div class="bulk-action-header-icon"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#jobs"></use></svg></div>
+      <div><span class="section-kicker">Fleet operation</span><h3>Run a bulk action</h3><p>Choose an operation, configure it once, and send a signed job to matching endpoints.</p></div>
+      <button type="button" @click="closeBulk()" class="bulk-action-close" aria-label="Close bulk action">×</button>
+    </header>
+
+    <template x-if="!bulkResult">
+      <div class="bulk-action-layout">
+        <main class="bulk-action-body">
+        <section class="bulk-action-section">
+          <div class="bulk-action-section-title"><span>1</span><div><h4>Choose an action</h4><p>Only safe operations supported by bulk deployment are listed.</p></div></div>
+          <label class="form-label" for="bulk-job-type">Action</label>
+          <select id="bulk-job-type" x-model="bulkJobType" @change="onBulkTypeChange()" class="form-input form-select">
+            <option value="COLLECT_SYSINFO">Collect System Info</option>
+            <option value="COLLECT_SOFTWARE">Collect Software Inventory</option>
+            <option value="COMPLIANCE_SCAN">Compliance Scan</option>
+            <option value="GET_EVENT_LOGS">Get Event Logs</option>
+            <option value="WINDOWS_UPDATE">Windows Update</option>
+            <option value="SET_PERIPHERAL_POLICY">Peripheral Policy (USB)</option>
+            <option value="CHECK_POLICY_DRIFT">Check Policy Drift</option>
+            <option value="APPLY_DEVICE_EXPERIENCE">Wallpaper, lock screen &amp; announcement</option>
+          </select>
+        </section>
+
+        <template x-if="bulkJobType === 'GET_EVENT_LOGS'">
+          <section class="bulk-action-section bulk-action-compact-section">
+            <label class="form-label">Log</label>
+            <select x-model="bulkPayload.log_name" class="form-input form-select">
+              <option value="System">System</option>
+              <option value="Application">Application</option>
+              <option value="Security">Security</option>
+            </select>
+          </section>
+        </template>
+
+        <template x-if="bulkJobType === 'APPLY_DEVICE_EXPERIENCE'">
+          <section class="bulk-action-section bulk-experience-section">
+            <div class="bulk-action-section-title"><span>2</span><div><h4>Design the device experience</h4><p>Choose either visual, an announcement, or any combination.</p></div></div>
+            <div class="bulk-upload-grid">
+              <label class="bulk-upload-card">
+                <input x-ref="bulkWallpaper" @change="onBulkFileChange('wallpaper', $event)" type="file" accept="image/png,image/jpeg">
+                <span class="bulk-upload-icon"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#overview"></use></svg></span>
+                <span class="bulk-upload-copy"><b>Desktop wallpaper</b><small x-text="bulkWallpaperName || 'PNG or JPEG · up to 10 MB'"></small></span>
+                <span class="bulk-upload-button" x-text="bulkWallpaperName ? 'Replace' : 'Choose image'"></span>
+              </label>
+              <label class="bulk-upload-card">
+                <input x-ref="bulkLockScreen" @change="onBulkFileChange('lockScreen', $event)" type="file" accept="image/png,image/jpeg">
+                <span class="bulk-upload-icon is-lock"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#compliance"></use></svg></span>
+                <span class="bulk-upload-copy"><b>Lock screen</b><small x-text="bulkLockScreenName || 'PNG or JPEG · up to 10 MB'"></small></span>
+                <span class="bulk-upload-button" x-text="bulkLockScreenName ? 'Replace' : 'Choose image'"></span>
+              </label>
+            </div>
+            <div class="bulk-experience-control">
+              <label class="form-label">Image placement</label>
+              <select x-model="bulkPayload.image_fit" class="form-input form-select">
+                <option value="fill">Fill</option><option value="fit">Fit</option><option value="stretch">Stretch</option>
+                <option value="center">Center</option><option value="tile">Tile</option><option value="span">Span</option>
+              </select>
+            </div>
+            <div class="bulk-announcement-card">
+              <div class="bulk-announcement-heading"><span>Announcement</span><small>Optional message shown in the signed-in user session</small></div>
+              <div class="grid sm:grid-cols-[1fr_10rem] gap-3">
+              <div><label class="form-label">Announcement title</label><input x-model="bulkPayload.announcement_title" maxlength="120" class="form-input" placeholder="Planned maintenance"></div>
+              <div><label class="form-label">Severity</label><select x-model="bulkPayload.announcement_severity" class="form-input form-select"><option value="info">Information</option><option value="warning">Warning</option><option value="critical">Critical</option></select></div>
+              </div>
+              <div><label class="form-label">Message</label><textarea x-model="bulkPayload.announcement_message" maxlength="2000" rows="3" class="form-input" placeholder="What should the user know?"></textarea></div>
+              <label class="bulk-acknowledgement"><input type="checkbox" x-model="bulkPayload.announcement_require_ack"><span><b>Require acknowledgement</b><small>The user must dismiss the announcement before continuing.</small></span></label>
+            </div>
+            <div class="bulk-retention-note"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#schedule"></use></svg><span><b>72-hour delivery window</b> Images are tenant-isolated, deduplicated, and available to offline endpoints for 72 hours. Devices reconnecting later require redeployment.</span></div>
+          </section>
+        </template>
+
+        <template x-if="bulkJobType === 'WINDOWS_UPDATE'">
+          <section class="bulk-action-section bulk-action-compact-section">
+            <label class="form-label">Action</label>
+            <select x-model="bulkPayload.action" class="form-input form-select">
+              <option value="check">Check for updates</option>
+              <option value="install">Download and install updates</option>
+            </select>
+          </section>
+        </template>
+
+        <template x-if="bulkJobType === 'SET_PERIPHERAL_POLICY'">
+          <section class="bulk-action-section bulk-action-compact-section">
+            <label class="form-label">Policy</label>
+            <select x-model="bulkPayload.policy_type" class="form-input form-select">
+              <option value="block_usb_storage">Block USB storage</option>
+              <option value="allow_usb_storage">Allow USB storage</option>
+            </select>
+          </section>
+        </template>
+
+        <section class="bulk-action-section">
+          <div class="bulk-action-section-title"><span x-text="bulkJobType === 'APPLY_DEVICE_EXPERIENCE' ? '3' : '2'"></span><div><h4>Choose the audience</h4><p>Target the whole tenant or limit this action to one branch.</p></div></div>
+          <label class="form-label">Target</label>
+          <select x-model="bulkBranchId" class="form-input form-select">
+            <option value="">All branches (entire company)</option>
+            {% for b in branches %}
+            <option value="{{ b.id }}">{{ b.name }}{% if b.city %} — {{ b.city }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </section>
+        </main>
+        <footer class="bulk-action-footer">
+          <div class="bulk-action-safety"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#status"></use></svg><p x-text="bulkJobType === 'APPLY_DEVICE_EXPERIENCE' ? 'One signed deployment is queued per supported Windows endpoint. Unsupported agents are skipped.' : 'Jobs are signed, tenant-scoped, and sent only to matching endpoints.'"></p></div>
+          <div class="bulk-action-footer-buttons">
+          <button @click="closeBulk()" class="btn btn-secondary">Cancel</button>
+          <button @click="dispatchBulk()" :disabled="bulkDispatching" class="btn btn-primary">
+            <span x-show="!bulkDispatching">Review &amp; dispatch</span>
+            <span x-show="bulkDispatching">Dispatching...</span>
+          </button>
+          </div>
+        </footer>
+      </div>
+    </template>
+
+    <template x-if="bulkResult">
+      <div class="bulk-action-result">
+        <template x-if="bulkResult.ok">
+          <div class="bulk-result-success">
+            <div class="bulk-result-icon">✓</div>
+            <span class="section-kicker">Deployment queued</span><h3>Bulk action dispatched</h3>
+            <p>Warden queued signed jobs for <strong x-text="bulkResult.dispatched"></strong> endpoint(s).</p>
+            <p x-show="bulkResult.skipped"><strong x-text="bulkResult.skipped"></strong> endpoint(s) were skipped because they were unsupported or outside the selected target.</p>
+          </div>
+        </template>
+        <template x-if="bulkResult.error">
+          <div class="bulk-result-error"><b>Could not dispatch this action</b><span x-text="bulkResult.error"></span></div>
+        </template>
+        <div class="bulk-action-result-footer">
+          <button @click="closeBulk()" class="btn btn-primary">Done</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+</div>
+{% endblock %}

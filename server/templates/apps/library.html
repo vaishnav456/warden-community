@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}App Library{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">App Library</span>{% endblock %}
+{% block content %}
+<div x-data="uploadModal">
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-semibold text-ink-100 tracking-tight">App Library</h1>
+  <button @click="showUpload = true" class="btn btn-primary">Upload App</button>
+</div>
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead><tr>
+      <th>Name</th>
+      <th>Version</th>
+      <th>Size</th>
+      <th>Scope</th>
+      <th>Install options</th>
+      <th>SHA-256</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+      {% for app in apps %}
+      <tr>
+        <td class="font-medium text-ink-100">{{ app.name }}</td>
+        <td class="text-ink-300">{{ app.version or '—' }}</td>
+        <td class="text-ink-500">{{ app.size_bytes | filesizeformat }}</td>
+        <td>
+          <span class="badge {% if app.company_id %}badge-info{% else %}badge-global{% endif %}">
+            {{ 'Company' if app.company_id else 'Global' }}
+          </span>
+        </td>
+        <td class="text-xs text-ink-500"><span class="font-mono-data">{{ app.install_args or 'Default silent options' }}</span>{% if app.self_service %}<span class="badge badge-online ml-2">Self-service</span>{% endif %}</td>
+        <td class="font-mono-data text-xs text-ink-700">{{ app.sha256[:16] }}...</td>
+        <td>
+          <div class="flex items-center gap-2">
+            <a href="/apps/{{ app.id }}/download" class="text-xs text-accent-400 hover:underline">Download</a>
+            <button type="button" class="text-xs text-accent-400 hover:underline" @click="openDeploy('{{ app.id }}', {{ app.name | tojson }}, '{{ app.file_path.rsplit('.', 1)[-1] | lower }}')">Deploy</button>
+            {% if app.company_id or is_superadmin %}
+            <button type="button" class="text-xs text-ink-500 hover:underline"
+                    data-id="{{ app.id }}" data-name="{{ app.name }}" data-version="{{ app.version }}"
+                    data-description="{{ app.description or '' }}" data-install-args="{{ app.install_args or '' }}"
+                    data-self-service="{{ 'true' if app.self_service else 'false' }}"
+                    @click="openEdit($el.dataset)">Edit</button>
+            <button type="button" class="text-xs text-status-critical hover:underline"
+                    @click="removeApp('{{ app.id }}', {{ app.name | tojson }})">Delete</button>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="px-4 py-12 text-center text-ink-700">No apps uploaded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# Upload modal #}
+<div x-show="showUpload" x-cloak class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+  <div @click.stop class="bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md p-6">
+    <h3 class="text-lg font-semibold text-ink-100 mb-4">Upload App</h3>
+    <template x-if="result">
+      <div class="text-center">
+        <p x-show="result.ok" class="text-sm text-status-online">App uploaded successfully!</p>
+        <p x-show="result.error" class="text-sm text-status-critical" x-text="result.error"></p>
+        <button @click="close()" class="btn btn-primary mt-4">Done</button>
+      </div>
+    </template>
+    <template x-if="!result">
+      <form @submit.prevent="submit($el)" class="space-y-4">
+        <div><label class="form-label">Name</label>
+          <input name="name" type="text" required class="form-input"></div>
+        <div><label class="form-label">Version</label>
+          <input name="version" type="text" required class="form-input"></div>
+        <div><label class="form-label">Description</label>
+          <input name="description" type="text" class="form-input"></div>
+        <div><label class="form-label">Installer File</label>
+          <input name="file" type="file" required accept=".exe,.msi,.deb,.rpm,.pkg" class="form-input mt-1 w-full text-sm text-ink-300">
+          <p class="text-xs text-ink-500 mt-1">Windows: EXE/MSI · Linux: DEB/RPM · macOS: PKG</p></div>
+        <div><label class="form-label">Silent install arguments</label>
+          <input name="install_args" type="text" maxlength="500" placeholder="Optional, for example /S" class="form-input"></div>
+        <label class="form-check text-sm text-ink-300"><input name="self_service" type="checkbox" value="1"> Publish in the employee self-service catalog</label>
+        <div class="flex gap-3 justify-end">
+          <button type="button" @click="showUpload=false" class="btn btn-secondary">Cancel</button>
+          <button type="submit" :disabled="uploading" class="btn btn-primary">
+            <span x-show="!uploading">Upload</span><span x-show="uploading">Uploading...</span>
+          </button>
+        </div>
+      </form>
+    </template>
+  </div>
+</div>
+
+<div x-show="showDeploy" x-cloak class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+  <div @click.outside="showDeploy=false" class="bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-lg p-6">
+    <h3 class="text-lg font-semibold text-ink-100">Deploy <span x-text="deployName"></span></h3>
+    <p class="text-sm text-ink-500 mt-1">Only compatible endpoints are selectable.</p>
+    <div class="max-h-72 overflow-auto space-y-2 mt-4">
+      {% for endpoint in endpoints %}
+      <label class="directory-endpoint-option" x-show="compatibleEndpoint({{ (endpoint.platform or 'windows') | tojson }})">
+        <input type="checkbox" value="{{ endpoint.id }}" x-model="deployEndpointIds">
+        <span><strong>{{ endpoint.hostname }}</strong><small>{{ endpoint.platform or 'windows' }} · {{ endpoint.status }}</small></span>
+      </label>
+      {% else %}<p class="text-sm text-ink-500">No endpoints are available.</p>{% endfor %}
+    </div>
+    <p x-show="deployResult" x-text="deployResult" class="text-sm text-status-online mt-3"></p>
+    <div class="flex justify-end gap-2 mt-4"><button @click="showDeploy=false" class="btn btn-secondary">Close</button><button @click="deploySelected()" :disabled="deploying || deployEndpointIds.length === 0" class="btn btn-primary">Deploy selected</button></div>
+  </div>
+</div>
+
+<div x-show="showEdit" x-cloak class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+  <div @click.outside="showEdit=false" class="bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md p-6">
+    <h3 class="text-lg font-semibold text-ink-100 mb-4">Edit app metadata</h3>
+    <div class="space-y-4">
+      <div><label class="form-label">Name</label><input x-model="editName" class="form-input"></div>
+      <div><label class="form-label">Version</label><input x-model="editVersion" class="form-input"></div>
+      <div><label class="form-label">Description</label><textarea x-model="editDescription" class="form-input"></textarea></div>
+      <div><label class="form-label">Silent install arguments</label><input x-model="editInstallArgs" class="form-input"></div>
+      <label class="form-check text-sm text-ink-300"><input type="checkbox" x-model="editSelfService"> Publish in the employee self-service catalog</label>
+      <p x-show="editError" x-text="editError" class="text-sm text-status-critical"></p>
+      <div class="flex gap-3 justify-end"><button @click="showEdit=false" class="btn btn-secondary">Cancel</button><button @click="saveEdit()" :disabled="editing" class="btn btn-primary">Save</button></div>
+    </div>
+  </div>
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Companies{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Companies</span>{% endblock %}
+
+{% block content %}
+<div x-data="slidePanel">
+  <div class="flex items-center justify-between mb-5">
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Companies</h2>
+      <p class="text-xs text-ink-500 mt-0.5">Each company gets an isolated tenant with its own admin users</p>
+    </div>
+    <button @click="show('Create Company')" class="btn btn-primary">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      New Company
+    </button>
+  </div>
+
+  <div class="w-table-wrap">
+    <table class="w-table">
+      <thead><tr>
+        <th>Company Name</th><th>Slug</th><th>Endpoints</th><th>Branches</th><th>Admin Users</th><th>Created</th><th>Status</th><th class="text-right">Actions</th>
+      </tr></thead>
+      <tbody>
+        {% for company in companies %}
+        <tr>
+          <td class="text-sm font-semibold text-ink-100">{{ company.name }}</td>
+          <td class="text-xs font-mono-data text-ink-500">{{ company.slug }}</td>
+          <td class="text-xs text-ink-300">{{ company.endpoint_count }}</td>
+          <td class="text-xs text-ink-300">{{ company.branch_count }}</td>
+          <td class="text-xs text-ink-300">{{ company.admin_count }}</td>
+          <td class="text-xs text-ink-500">{{ company.created_ago }}</td>
+          <td><span class="badge badge-{{ 'online' if company.is_active else 'offline' }}">{{ 'Active' if company.is_active else 'Inactive' }}</span></td>
+          <td class="text-right">
+            <div class="flex items-center justify-end gap-1">
+              <a href="{{ url_for('superadmin.open_company', company_id=company.id) }}" class="btn btn-secondary btn-sm">Open</a>
+              <button class="btn btn-{{ 'amber' if company.is_active else 'secondary' }} btn-sm"
+                      hx-post="{{ url_for('superadmin.toggle_company', id=company.id) }}"
+                      hx-confirm="{{ 'Deactivate' if company.is_active else 'Activate' }} {{ company.name }}?">
+                {{ 'Deactivate' if company.is_active else 'Activate' }}
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8"><div class="empty-state py-12"><p class="text-sm text-ink-500">No companies yet</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Create company panel -->
+  <template x-if="open">
+    <div>
+      <div class="slide-overlay" @click="close()"></div>
+      <div class="slide-panel slide-in-right">
+        <div class="slide-panel-header">
+          <h3 class="text-sm font-semibold text-ink-100">Create Company</h3>
+          <button @click="close()" class="btn-icon btn"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+        </div>
+        <form id="create-company-form" method="POST" action="{{ url_for('superadmin.create_company') }}" class="slide-panel-body space-y-4">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div>
+            <label class="form-label">Company Name <span class="text-status-critical">*</span></label>
+            <input type="text" name="name" required class="form-input" placeholder="e.g. Krishna Beads">
+          </div>
+          <div>
+            <label class="form-label">Slug <span class="text-status-critical">*</span></label>
+            <input type="text" name="slug" required class="form-input" placeholder="acme"
+                   pattern="[a-z0-9-]+" title="Lowercase letters, numbers, hyphens only">
+            <p class="form-error mt-1">Lowercase letters, numbers, hyphens only. Must be unique. Used to identify the company internally (installer configs, etc.) — this deployment doesn't route per-company subdomains, so it isn't part of a URL.</p>
+          </div>
+          <div>
+            <label class="form-label">Initial Admin Email <span class="text-status-critical">*</span></label>
+            <input type="email" name="admin_email" required class="form-input" placeholder="admin@company.com">
+          </div>
+          <div>
+            <label class="form-label">Admin Full Name</label>
+            <input type="text" name="admin_name" class="form-input" placeholder="John Smith">
+          </div>
+        </form>
+        <div class="slide-panel-footer">
+          <button @click="close()" class="btn btn-secondary">Cancel</button>
+          <button type="submit" form="create-company-form" class="btn btn-primary">Create Company</button>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}

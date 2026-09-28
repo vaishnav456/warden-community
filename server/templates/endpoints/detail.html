@@ -1,0 +1,1106 @@
+{% extends "base.html" %}
+{% block title %}{{ endpoint.display_name or endpoint.hostname }}{% endblock %}
+
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <a href="/endpoints" class="text-ink-700 hover:text-ink-300">Endpoints</a>
+  <span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100 font-mono-data">{{ endpoint.display_name or endpoint.hostname }}</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div x-data="endpointDetail" data-endpoint-id="{{ endpoint.id }}" data-tab="{{ tab }}"
+     data-platform="{{ endpoint_platform }}" data-capabilities='{{ endpoint_capabilities | list | tojson }}'
+     data-capability-details='{{ capability_details | tojson }}'
+     data-company-name='{{ (company.name if company else "Your organization") | tojson }}'
+     {% if tab == 'policy' %}
+     data-policy-catalog='{{ policy_settings | tojson }}' data-policy-current='{{ (endpoint.policy_state or {}) | tojson }}'
+     {% endif %}
+     {% if tab == 'firewall' %}
+     data-firewall-applications='{{ endpoint_firewall_applications | tojson }}'
+     {% endif %}>
+
+{# Endpoint command header #}
+<section class="endpoint-command-header mb-5">
+  <div class="endpoint-identity-mark platform-mark-{{ endpoint_platform }}">
+    <svg class="endpoint-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if endpoint_platform == 'darwin' else endpoint_platform }}"></use></svg>
+  </div>
+  <div class="endpoint-command-identity">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1>{{ endpoint.display_name or endpoint.hostname }}</h1>
+      <span class="badge {{ 'badge-online' if endpoint.status == 'online' else 'badge-offline' }}"
+            id="endpoint-status-badge"
+            hx-get="/partials/endpoint-status/{{ endpoint.id }}"
+            hx-trigger="every 15s"
+            hx-sync="this:drop"
+            hx-swap="outerHTML">
+        <span class="status-dot {{ 'status-dot-online' if endpoint.status == 'online' else 'status-dot-offline' }}"></span>
+        {{ endpoint.status | title }}
+      </span>
+    </div>
+    <div class="endpoint-command-meta">
+      <span>{{ endpoint.os_name or endpoint_platform | title }}</span>
+      <span class="badge badge-neutral">{{ 'macOS' if endpoint_platform == 'darwin' else endpoint_platform | title }}</span>
+      {% if endpoint_platform in ['linux', 'darwin'] %}<span class="badge badge-alpha">Alpha</span>{% endif %}
+      {% if branch %}<span class="text-ink-700">•</span><span>{{ branch.name }}</span>{% endif %}
+      <span class="text-ink-700">•</span>
+      <span>Last seen {{ endpoint.last_seen | timeago }}</span>
+      <span class="text-ink-700">•</span>
+      <span>Agent <b>{{ endpoint.agent_version or 'unknown' }}</b></span>
+    </div>
+  </div>
+  <div class="endpoint-command-actions">
+    {% if endpoint.status == 'online' %}
+    {% if 'SETUP_REMOTE_ACCESS' in endpoint_capabilities %}
+    <button @click="showRemoteModal = true" :disabled="startingSession" class="btn btn-primary">
+      <svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#remote"></use></svg>
+      <span x-show="!startingSession">Remote control{% if endpoint_platform in ['linux', 'darwin'] %} · Alpha{% endif %}</span>
+      <span x-show="startingSession">Starting...</span>
+    </button>
+    {% elif capability_details.get('remote_control') %}
+    <span class="text-xs text-ink-500" title="{{ capability_details.get('remote_control') }}">Remote access unavailable</span>
+    {% endif %}
+    {% if 'COLLECT_SYSINFO' in endpoint_capabilities %}
+    <button @click="openJobModal('COLLECT_SYSINFO', '')" class="btn btn-secondary">
+      <svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#jobs"></use></svg>
+      Refresh device info
+    </button>
+    {% endif %}
+    {% if 'REINSTALL_AGENT' in endpoint_capabilities or 'UPDATE_AGENT' in endpoint_capabilities %}
+    <button @click="updateAgent()" class="btn btn-secondary" title="Securely update from agent {{ endpoint.agent_version or 'unknown' }} with automatic rollback">
+      <svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#schedule"></use></svg>
+      Update agent
+    </button>
+    {% endif %}
+    {% endif %}
+  </div>
+</section>
+
+{# Operational status strip #}
+<div class="endpoint-ops-strip mb-5">
+  <div class="endpoint-health-panel">
+    <div class="endpoint-panel-heading"><span>Device health</span><small>{{ 'Live telemetry' if endpoint.status == 'online' else 'Last reported' }}</small></div>
+    <div class="endpoint-health-metrics">
+      <div class="health-metric"><span>CPU</span><b>{{ (endpoint.cpu_pct | round(0) | int ~ '%') if endpoint.cpu_pct is not none else '—' }}</b></div>
+      <div class="health-metric"><span>Memory</span><b>{{ (endpoint.ram_used_pct | round(0) | int ~ '%') if endpoint.ram_used_pct is not none else '—' }}</b></div>
+      <div class="health-metric"><span>Disk free</span><b>{{ (endpoint.disk_free_gb | round(1) ~ ' GB') if endpoint.disk_free_gb is not none else '—' }}</b></div>
+      <div class="health-metric"><span>Agent uptime</span>
+        <b>{% if endpoint.agent_uptime_sec %}{{ (endpoint.agent_uptime_sec // 3600) | int }}h {{ ((endpoint.agent_uptime_sec % 3600) // 60) | int }}m{% else %}—{% endif %}</b>
+      </div>
+    </div>
+  </div>
+  <div class="endpoint-attention-panel {{ 'has-attention' if alerts else '' }}">
+    <div class="endpoint-panel-heading"><span>Attention</span><small>{{ alerts | length }} open</small></div>
+    {% if alerts %}
+      {% for alert in alerts[:2] %}
+      <a href="/endpoints/{{ endpoint.id }}?tab=alerts" class="attention-item"><span>!</span><div><b>{{ alert.title or alert.alert_type | replace('_',' ') | title }}</b><small>{{ alert.created_at | timeago }}</small></div></a>
+      {% endfor %}
+    {% else %}
+    <div class="attention-clear"><span>✓</span><div><b>No immediate action</b><small>Endpoint is reporting normally</small></div></div>
+    {% endif %}
+  </div>
+</div>
+
+{# Tabs #}
+<div class="endpoint-workspace">
+  <div class="endpoint-section-nav">
+    {% for t_id, t_label, t_group, required_capability, t_icon in [
+      ('overview','Overview','','','dashboard'),('events','Activity','OPERATIONS','','audit'),('jobs','Jobs','OPERATIONS','','jobs'),('sessions','Sessions','OPERATIONS','SETUP_REMOTE_ACCESS','remote'),
+      ('software','Software','INVENTORY','COLLECT_SOFTWARE','apps'),('users','Local users','INVENTORY','COLLECT_USERS','users'),('alerts','Alerts','SECURITY','','alerts'),
+      ('compliance','Compliance','SECURITY','COMPLIANCE_SCAN','compliance'),('encryption','Encryption','SECURITY','ENABLE_BITLOCKER','compliance'),('experience','Experience','SECURITY','APPLY_DEVICE_EXPERIENCE','overview'),('policy','Windows policy','SECURITY','PUSH_LOCAL_POLICY','settings'),('firewall','Firewall','SECURITY','PUSH_LOCAL_POLICY','firewall'),('metrics','Metrics','HEALTH','','status')
+    ] %}
+    {% if not required_capability or required_capability in endpoint_capabilities %}
+    <a href="/endpoints/{{ endpoint.id }}?tab={{ t_id }}"
+       data-group="{{ t_group }}"
+       class="endpoint-section-link {{ 'is-active' if tab == t_id }}">
+      <svg aria-hidden="true"><use href="/static/warden-icons.svg?v={{ asset_v }}#{{ t_icon }}"></use></svg>
+      {{ t_label }}
+    </a>
+    {% endif %}
+    {% endfor %}
+    <div class="endpoint-nav-danger">
+      {% if 'UNINSTALL_AGENT' in endpoint_capabilities %}<button @click="openJobModal('UNINSTALL_AGENT', '')" title="Requires two separate admins to approve">Remove agent</button>{% endif %}
+      {% if is_superadmin or current_user.role in ['company_admin', 'branch_admin'] %}
+      <button @click="showRemoveEndpointModal = true" title="Release the Warden license without uninstalling the local agent">Remove from Warden</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="endpoint-workspace-content">
+    {# Overview tab #}
+    {% if tab == 'overview' %}
+    <div class="endpoint-overview-grid">
+      <section class="endpoint-overview-card">
+        <div class="endpoint-card-heading"><div><small>Identity</small><h3>Device information</h3></div></div>
+        <div class="endpoint-spec-grid">
+          <div><span>Operating system</span><b>{{ endpoint.os_name or '—' }}</b></div>
+          <div><span>OS build</span><b>{{ endpoint.os_build or endpoint.os_version or '—' }}</b></div>
+          <div><span>Processor</span><b>{{ endpoint.cpu_model or '—' }}</b></div>
+          <div><span>Architecture</span><b>{{ endpoint.arch or '—' }}</b></div>
+          <div><span>Installed memory</span><b>{{ (endpoint.ram_total_gb ~ ' GB') if endpoint.ram_total_gb else '—' }}</b></div>
+          <div><span>Disk capacity</span><b>{{ (endpoint.disk_total_gb ~ ' GB') if endpoint.disk_total_gb else '—' }}</b></div>
+          <div><span>Agent version</span><b class="font-mono-data">{{ endpoint.agent_version or '—' }}</b></div>
+          <div><span>Enrolled</span><b>{{ endpoint.enrolled_at | timeago }}</b></div>
+        </div>
+      </section>
+      <section class="endpoint-overview-card">
+        <div class="endpoint-card-heading"><div><small>Timeline</small><h3>Recent activity</h3></div><a href="?tab=events">View all</a></div>
+        <div class="endpoint-activity-list">
+          {% for ev in events[:6] %}
+          <div class="endpoint-activity-item">
+            <span class="activity-node"></span>
+            <div><b>{{ ev.event_type.replace('_', ' ').title() }}</b><small>{{ ev.created_at | timeago }}</small></div>
+          </div>
+          {% else %}
+          <div class="endpoint-empty-compact">No endpoint activity has been received.</div>
+          {% endfor %}
+        </div>
+      </section>
+      <section class="endpoint-overview-card endpoint-quick-card">
+        <div class="endpoint-card-heading"><div><small>Operations</small><h3>Quick actions</h3></div></div>
+        <div class="endpoint-quick-grid">
+          {% if 'COLLECT_SYSINFO' in endpoint_capabilities %}<button @click="openJobModal('COLLECT_SYSINFO', '')"><span><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#status"></use></svg></span><b>Refresh inventory</b><small>System information</small></button>{% endif %}
+          {% if 'GET_EVENT_LOGS' in endpoint_capabilities %}<button @click="openJobModal('GET_EVENT_LOGS', '')"><span><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#audit"></use></svg></span><b>Collect logs</b><small>{{ 'Unified logs' if endpoint_platform == 'darwin' else ('System journal' if endpoint_platform == 'linux' else 'Windows events') }}</small></button>{% endif %}
+          {% if 'CHECK_POLICY_DRIFT' in endpoint_capabilities %}<button @click="openJobModal('CHECK_POLICY_DRIFT', '')"><span><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#compliance"></use></svg></span><b>Check policy</b><small>Detect drift</small></button>{% endif %}
+          {% if 'WINDOWS_UPDATE' in endpoint_capabilities %}<button @click="openJobModal('WINDOWS_UPDATE', '')"><span><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#schedule"></use></svg></span><b>{{ 'macOS Update' if endpoint_platform == 'darwin' else ('Linux Update' if endpoint_platform == 'linux' else 'Windows Update') }}</b><small>Check or install</small></button>{% endif %}
+        </div>
+      </section>
+      <section class="endpoint-overview-card">
+        <div class="endpoint-card-heading"><div><small>Agent</small><h3>Supported features</h3></div></div>
+        <div class="flex flex-wrap gap-2">
+          {% for capability in endpoint_capabilities | sort %}
+          <span class="badge badge-neutral">{{ capability | replace('_', ' ') | title }}</span>
+          {% endfor %}
+        </div>
+        {% if capability_details.get('remote_control') %}<p class="text-xs text-ink-500 mt-3">Remote access: {{ capability_details.get('remote_control') }}</p>{% endif %}
+      </section>
+      <section class="endpoint-overview-card">
+        <div class="endpoint-card-heading"><div><small>Security</small><h3>Protection status</h3></div><a href="?tab=compliance">Inspect</a></div>
+        <div class="protection-status">
+          <div class="protection-score {{ 'warning' if alerts else '' }}"><span>{{ alerts | length }}</span><small>open alerts</small></div>
+          <div class="protection-copy"><b>{{ 'Review required' if alerts else 'No active alerts' }}</b><p>Policy and compliance details are grouped in the Security section.</p></div>
+        </div>
+      </section>
+      <section class="endpoint-overview-card">
+        <div class="endpoint-card-heading"><div><small>Lifecycle</small><h3>Asset record</h3></div></div>
+        <form hx-post="/endpoints/{{ endpoint.id }}/asset" hx-swap="none" class="grid grid-cols-2 gap-3">
+          <div><label class="form-label">Asset tag</label><input name="asset_tag" maxlength="80" value="{{ endpoint.asset_tag or '' }}" class="form-input"></div>
+          <div><label class="form-label">State</label><select name="asset_state" class="form-input form-select">{% for value, label in [('stock','In stock'),('in_service','In service'),('repair','In repair'),('retired','Retired'),('disposed','Disposed'),('lost','Lost')] %}<option value="{{ value }}" {{ 'selected' if endpoint.asset_state == value }}>{{ label }}</option>{% endfor %}</select></div>
+          <div><label class="form-label">Assigned to</label><input name="assigned_to" maxlength="160" value="{{ endpoint.assigned_to or '' }}" class="form-input"></div>
+          <div><label class="form-label">Location</label><input name="asset_location" maxlength="160" value="{{ (endpoint.asset_metadata or {}).get('location','') }}" class="form-input"></div>
+          <div><label class="form-label">Purchase date</label><input type="date" name="purchase_date" value="{{ endpoint.purchase_date or '' }}" class="form-input"></div>
+          <div><label class="form-label">Warranty expiry</label><input type="date" name="warranty_expiry" value="{{ endpoint.warranty_expiry or '' }}" class="form-input"></div>
+          <div class="col-span-2"><button class="btn btn-secondary btn-sm">Save asset</button></div>
+        </form>
+      </section>
+      <section class="endpoint-overview-card">
+        <div class="endpoint-card-heading"><div><small>Response</small><h3>Incident actions</h3></div></div>
+        <p class="text-xs text-ink-500 mb-3">Evidence collection is read-only. Containment applies Warden-managed Windows Firewall rules that block inbound traffic and lateral-movement ports while preserving the agent control channel.</p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="incidentPosting" @click="incidentAction('collect')">Collect evidence</button>
+          {% if endpoint_platform == 'windows' and 'PUSH_LOCAL_POLICY' in endpoint_capabilities %}<button type="button" class="btn btn-danger btn-sm" :disabled="incidentPosting" @click="incidentAction('contain')">Contain device</button><button type="button" class="btn btn-secondary btn-sm" :disabled="incidentPosting" @click="incidentAction('release')">Release containment</button>{% endif %}
+        </div>
+      </section>
+    </div>
+    {# Legacy overview specification blocks replaced by the operational grid above. #}
+    {% if false %}
+      <div>
+        <h3>Hardware</h3>
+        <dl class="space-y-2 text-sm">
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">CPU</dt><dd class="text-ink-100">{{ endpoint.cpu_model or '—' }}</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">RAM</dt><dd class="text-ink-100">{{ endpoint.ram_total_gb or '—' }} GB</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Disk</dt><dd class="text-ink-100">{{ endpoint.disk_total_gb or '—' }} GB</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Arch</dt><dd class="text-ink-100">{{ endpoint.arch or '—' }}</dd></div>
+        </dl>
+        <h3 class="text-xs font-semibold text-ink-700 uppercase tracking-wide mb-3 mt-5">System</h3>
+        <dl class="space-y-2 text-sm">
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">OS</dt><dd class="text-ink-100">{{ endpoint.os_name or '—' }}</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Version</dt><dd class="text-ink-100">{{ endpoint.os_version or '—' }}</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Build</dt><dd class="text-ink-100">{{ endpoint.os_build or '—' }}</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Agent</dt><dd class="text-ink-100 font-mono-data">{{ endpoint.agent_version or '—' }}</dd></div>
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Enrolled</dt><dd class="text-ink-100">{{ endpoint.enrolled_at | timeago }}</dd></div>
+        </dl>
+      </div>
+      <div>
+        <h3 class="text-xs font-semibold text-ink-700 uppercase tracking-wide mb-3">Recent Events</h3>
+        <div class="space-y-2">
+          {% for ev in events[:8] %}
+          <div class="flex items-start gap-2 text-sm">
+            <div class="w-1.5 h-1.5 rounded-full bg-base-500 mt-1.5 flex-shrink-0"></div>
+            <div class="flex-1 min-w-0">
+              <span class="text-ink-300">{{ ev.event_type.replace('_', ' ').title() }}</span>
+              <span class="text-ink-700 ml-2 text-xs">{{ ev.created_at | timeago }}</span>
+            </div>
+          </div>
+          {% else %}
+          <p class="text-sm text-ink-700">No events yet</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# Users tab #}
+    {% elif tab == 'users' %}
+    <div class="flex justify-end gap-2 mb-3">
+      {% if 'COLLECT_USERS' in endpoint_capabilities %}<button @click="syncUsers()" class="btn btn-secondary btn-sm">Sync Users</button>{% endif %}
+      {% if 'CREATE_USER' in endpoint_capabilities %}<button @click="openCreateUserModal()" class="btn btn-primary btn-sm">+ Create User</button>{% endif %}
+    </div>
+    <div class="space-y-1">
+      {% for u in users %}
+      <div class="flex items-center gap-4 px-3 py-2.5 rounded-lg hover:bg-white/[0.02]">
+        <div class="w-8 h-8 rounded-full bg-base-700 flex items-center justify-center text-sm font-medium text-ink-300 overflow-hidden">
+          {% if u.profile_photo_mime %}<img src="/endpoints/{{ endpoint.id }}/users/{{ u.id }}/photo" alt="" class="w-full h-full object-cover">{% else %}{{ u.username[:1].upper() }}{% endif %}
+        </div>
+        <div class="flex-1">
+          <div class="text-sm font-medium text-ink-100">{{ u.display_name or u.username }}</div>
+          <div class="text-xs text-ink-700 font-mono-data">{{ u.username }}</div>
+        </div>
+        {% if u.is_admin %}<span class="badge badge-critical">Admin</span>{% endif %}
+        {% if not u.is_enabled %}<span class="badge badge-offline">Disabled</span>{% endif %}
+        {% if u.warden_managed %}<span class="badge badge-online">Warden identity</span>{% endif %}
+        <div class="flex items-center gap-1 flex-wrap justify-end">
+          {% if u.warden_managed %}
+          <a class="btn btn-sm btn-secondary" href="/directory">Manage in Directory</a>
+          {% else %}
+          {% if 'RESET_PASSWORD' in endpoint_capabilities %}<button class="btn btn-sm btn-secondary"
+                  @click="openJobModal('RESET_PASSWORD', '{{ u.username }}')">
+            Reset Password
+          </button>{% endif %}
+          {% if 'GRANT_ELEVATION' in endpoint_capabilities and 'REVOKE_ELEVATION' in endpoint_capabilities %}
+          {% if u.is_admin %}
+          <button class="btn btn-sm btn-secondary !text-accent-400"
+                  @click="openJobModal('REVOKE_ELEVATION', '{{ u.username }}')">
+            Revoke Elevation
+          </button>
+          {% else %}
+          <button class="btn btn-sm btn-secondary !text-accent-400"
+                  @click="openJobModal('GRANT_ELEVATION', '{{ u.username }}')">
+            Grant Elevation
+          </button>
+          {% endif %}
+          {% endif %}
+          {% if 'DISABLE_USER' in endpoint_capabilities and 'ENABLE_USER' in endpoint_capabilities %}
+          {% if u.is_enabled %}
+          <button class="btn btn-sm btn-secondary !text-status-warning"
+                  @click="openJobModal('DISABLE_USER', '{{ u.username }}')">
+            Disable
+          </button>
+          {% else %}
+          <button class="btn btn-sm btn-secondary !text-status-online"
+                  @click="openJobModal('ENABLE_USER', '{{ u.username }}')">
+            Enable
+          </button>
+          {% endif %}
+          {% endif %}
+          {% if 'DELETE_USER' in endpoint_capabilities %}<button class="btn btn-sm btn-secondary !text-status-critical"
+                  @click="openJobModal('DELETE_USER', '{{ u.username }}')">
+            Delete
+          </button>{% endif %}
+          {% endif %}
+        </div>
+      </div>
+      {% else %}
+      <p class="text-sm text-ink-700 py-4 text-center">No users synced yet. Click "Sync Users" above (requires the endpoint to be online).</p>
+      {% endfor %}
+    </div>
+
+    {# Create user modal #}
+    <div x-show="showCreateUserModal" x-cloak class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div @click.stop class="endpoint-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md p-6">
+        <h3 class="text-lg font-semibold text-ink-100 mb-4">Create Local User</h3>
+        <div class="space-y-3">
+          <div>
+            <label class="form-label">Username</label>
+            <input x-model="newUsername" type="text" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">Full Name</label>
+            <input x-model="newFullName" type="text" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">Password</label>
+            <input x-model="newPassword" type="password" class="form-input" minlength="12">
+          </div>
+          <label class="form-check text-sm text-ink-300">
+            <input type="checkbox" x-model="newIsAdmin"> Make this user a local administrator
+          </label>
+          <label class="form-check text-sm text-ink-300">
+            <input type="checkbox" x-model="newMustChangePassword"> Require password change at next login
+          </label>
+        </div>
+        <div class="flex gap-3 justify-end mt-5">
+          <button type="button" @click="showCreateUserModal = false" class="btn btn-secondary">Cancel</button>
+          <button type="button" @click="createUser()" :disabled="creatingUser || !newUsername || !newPassword" class="btn btn-primary">
+            <span x-show="!creatingUser">Create</span>
+            <span x-show="creatingUser">Creating...</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    {# Software tab #}
+    {% elif tab == 'software' %}
+    {% if apps %}
+    <div class="bg-base-850 border border-base-600 rounded-xl p-4 mb-5">
+      <h3 class="text-sm font-semibold text-ink-100 mb-3">Deploy from App Library</h3>
+      <div class="space-y-2">
+        {% for a in apps %}
+        {% set app_ext = a.file_path.rsplit('.', 1)[-1] | lower if a.file_path and '.' in a.file_path else 'exe' %}
+        {% set app_compatible = (endpoint_platform == 'windows' and app_ext in ['exe','msi']) or (endpoint_platform == 'linux' and app_ext in ['deb','rpm']) or (endpoint_platform == 'darwin' and app_ext == 'pkg') %}
+        <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-base-800">
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-ink-100">{{ a.name }}</div>
+            <div class="text-xs text-ink-700">v{{ a.version }}</div>
+          </div>
+          {% if app_compatible and 'INSTALL_APP' in endpoint_capabilities %}<button class="btn btn-sm btn-secondary"
+                  @click="deployApp('{{ server_url }}/api/agent/apps/{{ a.id }}/download', '{{ a.sha256 }}', 'Deploy {{ a.name }} {{ a.version }} from library', '{{ ('.' + a.file_path.rsplit('.', 1)[-1]) if a.file_path and '.' in a.file_path else '.exe' }}', {{ (a.install_args or '') | tojson }})">
+            Install
+          </button>{% else %}<span class="text-xs text-ink-700">Not for this OS</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    <form method="GET" action="/endpoints/{{ endpoint.id }}" class="mb-4 flex gap-2">
+      <input type="hidden" name="tab" value="software">
+      <input type="text" name="q" value="{{ request.args.get('q', '') }}"
+             placeholder="Search software..."
+             class="form-input flex-1">
+      <button type="submit" class="btn btn-secondary">Search</button>
+      <button type="button" @click="collectSoftware()" class="btn btn-secondary flex-shrink-0">Collect Software</button>
+    </form>
+    {% set vulnerability_summary = namespace(open=0, exploited=0, total=0) %}
+    {% for s in software %}{% for finding in s.vulnerabilities %}
+      {% set vulnerability_summary.total = vulnerability_summary.total + 1 %}
+      {% if finding.status == 'open' %}{% set vulnerability_summary.open = vulnerability_summary.open + 1 %}{% endif %}
+      {% if finding.status == 'open' and (finding.vulnerability_advisories or {}).known_exploited %}{% set vulnerability_summary.exploited = vulnerability_summary.exploited + 1 %}{% endif %}
+    {% endfor %}{% endfor %}
+    <section class="endpoint-software-risk-summary">
+      <div><span>Open findings</span><strong>{{ vulnerability_summary.open }}</strong></div>
+      <div class="{{ 'has-critical' if vulnerability_summary.exploited else '' }}"><span>Known exploited</span><strong>{{ vulnerability_summary.exploited }}</strong></div>
+      <div><span>All matched evidence</span><strong>{{ vulnerability_summary.total }}</strong></div>
+      <a href="/vulnerabilities">Open fleet vulnerability view</a>
+    </section>
+    <div class="w-table-wrap overflow-x-auto">
+    <table class="w-table">
+      <thead><tr>
+        <th>Name</th>
+        <th>Version</th>
+        <th>Publisher</th>
+        <th>Vulnerability exposure</th>
+        <th>Install Date</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        {% for s in software %}
+        <tr>
+          <td class="font-medium text-ink-100">{{ s.name }}</td>
+          <td class="text-ink-500">{{ s.version or '—' }}</td>
+          <td class="text-ink-500">{{ s.publisher or '—' }}</td>
+          <td class="endpoint-software-risk-cell">
+            {% set open_findings = s.vulnerabilities | selectattr('status', 'equalto', 'open') | list %}
+            {% set displayed_findings = open_findings if open_findings else s.vulnerabilities[:5] %}
+            {% if displayed_findings %}
+            <details>
+              <summary><span class="badge {{ 'badge-critical' if open_findings else 'badge-online' }}">{{ (open_findings | length ~ ' open') if open_findings else 'Reviewed' }}</span><span>{{ s.vulnerabilities | length }} matched record{{ '' if s.vulnerabilities | length == 1 else 's' }}</span></summary>
+              <div class="endpoint-software-findings">
+                {% if not open_findings and s.vulnerabilities | length > 5 %}<p class="endpoint-software-history-note">Showing the five most recent reviewed records. Use the fleet view for full history.</p>{% endif %}
+                {% for finding in displayed_findings %}{% set advisory = finding.vulnerability_advisories or {} %}
+                <article>
+                  <div><strong>{{ advisory.id or finding.advisory_id }}</strong><span class="badge {{ 'badge-critical' if finding.status == 'open' else 'badge-online' }}">{{ finding.status | replace('_',' ') | title }}</span>{% if advisory.known_exploited %}<span class="badge badge-critical">Known exploited</span>{% endif %}</div>
+                  <p>{{ advisory.title or 'Matched vulnerability advisory' }}</p>
+                  <small>{{ (advisory.severity or 'Unrated') | title }}{% if advisory.cvss is not none %} · CVSS {{ advisory.cvss }}{% endif %} · {{ finding.confidence | title }} confidence</small>
+                  {% if advisory.remediation %}<p class="is-remediation">{{ advisory.remediation }}</p>{% endif %}
+                  <form method="post" action="/vulnerabilities/{{ finding.id }}/status" class="endpoint-software-finding-action">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to_endpoint" value="1">
+                    <select name="status" class="form-input form-select text-xs"><option value="open" {{ 'selected' if finding.status == 'open' }}>Open</option><option value="accepted" {{ 'selected' if finding.status == 'accepted' }}>Accept risk</option><option value="remediated" {{ 'selected' if finding.status == 'remediated' }}>Remediated</option><option value="false_positive" {{ 'selected' if finding.status == 'false_positive' }}>False positive</option></select>
+                    <button class="btn btn-secondary btn-sm">Save</button>
+                  </form>
+                </article>
+                {% endfor %}
+              </div>
+            </details>
+            {% else %}<span class="text-xs text-ink-700">No matched advisory</span>{% endif %}
+          </td>
+          <td class="text-ink-500">{{ s.install_date or '—' }}</td>
+          <td class="text-right">
+            {% if 'UNINSTALL_APP' in endpoint_capabilities %}<button class="text-xs text-status-critical hover:underline"
+                    @click="uninstallApp('{{ s.name }}', 'Uninstall {{ s.name }}')">
+              Uninstall
+            </button>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="py-8 text-center text-ink-700">No software data. Collect inventory to populate.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    {# Events tab — this whole block was missing entirely: the tab link and
+       its data-loading in routes/endpoints.py both existed, but nothing
+       ever rendered it, so clicking "Events" showed a blank content area. #}
+    {% elif tab == 'events' %}
+    <div class="flex justify-end mb-3">
+      {% if 'GET_EVENT_LOGS' in endpoint_capabilities %}<button @click="openJobModal('GET_EVENT_LOGS', '')" class="btn btn-secondary btn-sm">Collect system logs</button>{% endif %}
+    </div>
+    <div class="space-y-2">
+      {% for ev in events %}
+      <div class="flex items-start gap-3 px-4 py-3 bg-base-800 border border-base-600 rounded-lg">
+        <div class="w-1.5 h-1.5 rounded-full bg-base-500 mt-1.5 flex-shrink-0"></div>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm text-ink-100">{{ ev.event_type.replace('_', ' ').title() }}</div>
+          {% if ev.detail %}
+          <div class="audit-detail-grid mt-1">
+            {% for key, value in ev.detail.items() %}
+            <span class="audit-detail"><b>{{ key | replace('_', ' ') }}</b><em>{{ value }}</em></span>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        <span class="text-xs text-ink-700 flex-shrink-0">{{ ev.created_at | timeago }}</span>
+      </div>
+      {% else %}
+      <p class="text-sm text-ink-700 py-8 text-center">No events yet.</p>
+      {% endfor %}
+    </div>
+
+    {# Jobs tab #}
+    {% elif tab == 'jobs' %}
+    <div class="endpoint-jobs-page">
+      <header class="endpoint-jobs-heading">
+        <div><span class="section-kicker">Endpoint operations</span><h2>Jobs and command history</h2><p>Run supported actions and follow each request from queue to endpoint result.</p></div>
+      </header>
+
+      <section class="endpoint-job-launcher" aria-labelledby="quick-jobs-title">
+        <div class="endpoint-job-section-title"><div><h3 id="quick-jobs-title">Quick actions</h3><p>Only operations supported by this Agent are shown.</p></div><a href="?tab=jobs" class="endpoint-job-refresh">Refresh history</a></div>
+        <div class="endpoint-job-actions">
+          {% if 'COLLECT_SYSINFO' in endpoint_capabilities %}<button @click="collectSysinfo()"><span>{{ wicon('endpoint', 'custom-icon') }}</span><b>System inventory</b><small>Refresh hardware and health</small></button>{% endif %}
+          {% if 'COLLECT_SOFTWARE' in endpoint_capabilities %}<button @click="collectSoftware()"><span>{{ wicon('apps', 'custom-icon') }}</span><b>Software inventory</b><small>Scan installed applications</small></button>{% endif %}
+          {% if 'RUN_CMD' in endpoint_capabilities %}<button @click="openJobModal('RUN_CMD', '')"><span>{{ wicon('jobs', 'custom-icon') }}</span><b>Run command</b><small>Execute an approved task</small></button>{% endif %}
+          {% if 'GET_EVENT_LOGS' in endpoint_capabilities %}<button @click="openJobModal('GET_EVENT_LOGS', '')"><span>{{ wicon('audit', 'custom-icon') }}</span><b>Collect logs</b><small>Retrieve operating-system events</small></button>{% endif %}
+          {% if 'WINDOWS_UPDATE' in endpoint_capabilities %}<button @click="openJobModal('WINDOWS_UPDATE', '')"><span>{{ wicon('schedule', 'custom-icon') }}</span><b>{{ 'macOS update' if endpoint_platform == 'darwin' else ('Linux update' if endpoint_platform == 'linux' else 'Windows update') }}</b><small>Scan or install OS updates</small></button>{% endif %}
+          {% if 'PUSH_LOCAL_POLICY' in endpoint_capabilities %}<button @click="openJobModal('PUSH_LOCAL_POLICY', '')"><span>{{ wicon('compliance', 'custom-icon') }}</span><b>Apply policy</b><small>Queue a device configuration</small></button>{% endif %}
+          {% if 'REBOOT' in endpoint_capabilities %}<button class="is-warning" @click="openJobModal('REBOOT', '')"><span>{{ wicon('status', 'custom-icon') }}</span><b>Restart</b><small>Notify and restart the endpoint</small></button>{% endif %}
+          {% if 'SHUTDOWN' in endpoint_capabilities %}<button class="is-danger" @click="openJobModal('SHUTDOWN', '')"><span>{{ wicon('logout', 'custom-icon') }}</span><b>Shut down</b><small>Power off the endpoint</small></button>{% endif %}
+        </div>
+      </section>
+
+      <div id="endpoint-job-live" hx-get="/partials/endpoints/{{ endpoint.id }}/jobs"
+           hx-trigger="every 5s, refresh" hx-sync="this:drop" hx-swap="innerHTML">
+        {% include "partials/endpoint_job_history.html" %}
+      </div>
+    </div>
+
+    {# Managed device experience tab #}
+    {% elif tab == 'experience' %}
+    <div class="endpoint-experience-page">
+      <header class="endpoint-experience-heading"><div><span class="section-kicker">Windows presentation</span><h2>Device experience</h2><p>Apply organization visuals and send a clear, auditable message to the person using this endpoint.</p></div><span class="badge badge-info">Agent {{ endpoint.agent_version }}</span></header>
+      <form class="endpoint-experience-form" enctype="multipart/form-data" @submit.prevent="submitExperience($el)">
+        <section class="endpoint-experience-card">
+          <div class="endpoint-experience-card-title"><span>01</span><div><h3>Desktop and lock screen</h3><p>PNG or JPEG, up to 10 MB. Leave either field empty to keep its current image.</p></div></div>
+          <div class="endpoint-experience-grid">
+            <label>Desktop wallpaper<input class="form-input" type="file" name="wallpaper" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
+            <label>Lock screen image<input class="form-input" type="file" name="lock_screen" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
+            <label>Image placement<select class="form-input form-select" name="image_fit"><option value="fill">Fill screen</option><option value="fit">Fit without cropping</option><option value="stretch">Stretch</option><option value="center">Center</option><option value="tile">Tile</option><option value="span">Span displays</option></select></label>
+          </div>
+          <div class="endpoint-experience-note"><strong>Applied securely</strong><p>The Agent downloads tenant-owned assets over its pinned, authenticated connection, verifies their SHA-256 hash, then stores them in its protected data directory.</p></div>
+        </section>
+        <section class="endpoint-experience-card">
+          <div class="endpoint-experience-card-title"><span>02</span><div><h3>User announcement</h3><p>Show a branded Windows message in the active user session.</p></div></div>
+          <div class="endpoint-experience-grid">
+            <label>Title<input class="form-input" name="announcement_title" maxlength="120" placeholder="Planned maintenance tonight"></label>
+            <label>Severity<select class="form-input form-select" name="announcement_severity"><option value="info">Information</option><option value="warning">Warning</option><option value="critical">Critical</option></select></label>
+            <label class="endpoint-experience-message">Message<textarea class="form-input" name="announcement_message" maxlength="2000" rows="5" placeholder="Explain what is changing, when it happens, and what the user should do."></textarea></label>
+          </div>
+          <label class="form-check endpoint-experience-ack"><input type="checkbox" name="announcement_require_ack" value="1" checked><span><b>Require acknowledgement</b><small>Keep the Job active until the user presses OK, or fail it after five minutes.</small></span></label>
+        </section>
+        <div x-show="experienceError" class="flash flash-error" x-text="experienceError"></div>
+        <footer><p>Only the supplied parts change. Every request and Agent result is recorded.</p><button class="btn btn-primary" type="submit" :disabled="experienceSubmitting"><span x-show="!experienceSubmitting">Apply device experience</span><span x-show="experienceSubmitting">Uploading securely…</span></button></footer>
+      </form>
+    </div>
+
+    {# Policy tab #}
+    {% elif tab == 'policy' %}
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <p class="text-xs text-ink-500">
+          Validated policy changes are queued directly and recorded in the audit log. Use saved
+          templates for repeatable settings across endpoints.
+        </p>
+        <button @click="checkPolicyDrift()" class="btn btn-secondary btn-sm flex-shrink-0">Check Drift</button>
+      </div>
+
+      {# Saved templates #}
+      <div class="mb-6">
+        <h4 class="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Saved Templates</h4>
+        {% if saved_policy_templates %}
+        <div class="space-y-2">
+          {% for t in saved_policy_templates %}
+          <div class="flex items-center gap-3 px-4 py-3 bg-base-800 border border-base-600 rounded-lg">
+            <div class="flex-1">
+              <div class="text-sm font-medium text-ink-100">{{ t.name }}</div>
+              {% if t.description %}<div class="text-xs text-ink-500">{{ t.description }}</div>{% endif %}
+              <div class="text-xs text-ink-700 mt-1">{{ t.settings.keys() | list | join(', ') }}</div>
+            </div>
+            <button data-keys='{{ (t.settings.keys() | list) | tojson }}'
+                    @click="checkTemplateDrift(JSON.parse($el.dataset.keys))"
+                    class="btn btn-secondary btn-sm">Check Drift</button>
+            <button @click='applySavedPolicyTemplate("{{ t.id }}", {{ t.name | tojson }})'
+                    class="btn btn-secondary btn-sm">Apply to this endpoint</button>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-sm text-ink-700">
+          No saved templates yet. Create one from
+          <a href="{{ url_for('settings.policy_templates') }}" class="text-accent-400 hover:underline">Settings → Policy Templates</a>.
+        </p>
+        {% endif %}
+      </div>
+
+      {# Individual settings — ~1000 entries across the hand-picked catalog
+         and the ADMX-derived import (see policy_settings.py), so this is
+         grouped by category (collapsed by default) with a search box
+         instead of one giant flat list. #}
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+            Individual Settings <span class="text-ink-700 normal-case">({{ policy_settings|length }})</span>
+          </h4>
+          <input type="text" x-model="policyFilter" placeholder="Search settings..."
+                 class="form-input !py-1 text-xs w-56">
+        </div>
+        {% set categories = [] %}
+        {% for key, meta in policy_settings.items() %}
+          {% if key != 'windows_firewall_rules' and meta.category not in categories %}{% set _ = categories.append(meta.category) %}{% endif %}
+        {% endfor %}
+        <div class="space-y-2">
+          {% for cat in categories %}
+          <div x-show="categoryHasMatch('{{ cat }}')" class="border border-base-600 rounded-lg overflow-hidden">
+            <button type="button" @click="toggleCategory('{{ cat }}')"
+                    class="w-full flex items-center justify-between px-4 py-2.5 bg-base-800 text-sm font-medium text-ink-100 hover:bg-base-700">
+              <span>{{ cat }}</span>
+              <span class="text-xs text-ink-700" x-text="expandedCategories['{{ cat }}'] || policyFilter ? '▾' : '▸'"></span>
+            </button>
+            <div x-show="expandedCategories['{{ cat }}'] || policyFilter" class="divide-y divide-base-600">
+              {% for key, meta in policy_settings.items() %}
+              {% if key != 'windows_firewall_rules' and meta.category == cat %}
+              {% set not_applicable = meta.requires_ad and not (endpoint.device_identity or {}).get('domain_joined') %}
+              <div x-show="matchesPolicyFilter('{{ key }}')"
+                   class="flex items-center gap-3 px-4 py-3 bg-base-850">
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-ink-100 flex items-center gap-2" {% if meta.help %}title="{{ meta.help }}"{% endif %}>
+                    {{ meta.label }}
+                    {% set cur = (endpoint.policy_state or {}).get(key) %}
+                    {% if not_applicable %}
+                    <span class="badge" title="Requires Active Directory password backup">Not applicable</span>
+                    {% elif meta.readonly %}
+                    <span class="badge" title="Read-only — status only, never pushed">Status only</span>
+                    {% elif cur and cur.drift is sameas true %}
+                    <span class="badge badge-offline" title="Current value no longer matches what Warden last pushed">Drifted</span>
+                    {% elif cur and cur.drift is sameas false %}
+                    <span class="badge badge-online" title="Checked {{ cur.checked_at | timeago }}">In sync</span>
+                    {% elif cur and cur.discovered and cur.configured is sameas false %}
+                    <span class="badge" title="Checked on this machine; no explicit policy value exists">Not configured</span>
+                    {% elif cur and cur.discovered %}
+                    <span class="badge badge-pending" title="Detected on this machine">Detected</span>
+                    {% endif %}
+                  </div>
+                  <div class="text-xs text-ink-700">
+                    {% if not_applicable %}requires an Active Directory-joined endpoint and AD password backup; Warden-only credentials use separate encryption
+                    {% elif meta.readonly and cur and cur.current_value is none %}not configured (checked {{ cur.checked_at | timeago }})
+                    {% elif meta.readonly and cur %}current: {{ cur.current_value }} (checked {{ cur.checked_at | timeago }})
+                    {% elif meta.readonly %}not checked yet — use Check Drift above
+                    {% elif cur and cur.discovered and cur.configured is sameas false %}not configured (checked {{ cur.checked_at | timeago }})
+                    {% elif cur and cur.discovered %}current: {{ cur.current_value }} (reported {{ cur.checked_at | timeago }})
+                    {% elif cur %}last set {{ cur.applied_at | timeago }}{% endif %}
+                    {% if cur and cur.source %} · source: {{ cur.source | replace('_', ' ') | title }}{% endif %}
+                  </div>
+                </div>
+                {% if not meta.readonly and not not_applicable %}
+                {% if meta.kind == 'bool' %}
+                <label class="form-check text-sm text-ink-300 flex-shrink-0">
+                  <input type="checkbox" x-model="policyValues['{{ key }}']"> Enabled
+                </label>
+                {% elif meta.kind == 'int' %}
+                <input type="number" x-model.number="policyValues['{{ key }}']" min="{{ meta.min }}" max="{{ meta.max }}"
+                       class="form-input form-input-narrow flex-shrink-0">
+                {% elif meta.kind == 'enum' %}
+                <select x-model="policyValues['{{ key }}']" class="form-input form-select form-input-auto flex-shrink-0">
+                  {% for v in meta.options %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+                </select>
+                {% elif meta.kind == 'string' %}
+                {% if meta.multiline %}
+                <textarea x-model="policyValues['{{ key }}']" rows="6" spellcheck="false" placeholder="{{ meta.placeholder or '' }}"
+                          class="form-input font-mono-data text-xs min-w-[20rem] max-w-[32rem] flex-shrink-0"></textarea>
+                {% else %}
+                <input type="text" x-model="policyValues['{{ key }}']" class="form-input form-input-auto flex-shrink-0 max-w-[12rem]">
+                {% endif %}
+                {% endif %}
+                <button @click="pushPolicySetting('{{ key }}')" class="btn btn-secondary btn-sm flex-shrink-0">Push</button>
+                {% endif %}
+              </div>
+              {% endif %}
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    {# Endpoint firewall tab #}
+    {% elif tab == 'firewall' %}
+    {% set firewall_state = (endpoint.policy_state or {}).get('windows_firewall_rules') %}
+    <div class="space-y-6">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div><h3 class="text-sm font-semibold text-ink-100">Firewall policy on this agent</h3><p class="text-xs text-ink-500 mt-1">Assign a saved Windows Firewall policy directly to this endpoint or review the last rules reported by the agent.</p></div>
+        <div class="flex flex-wrap gap-2"><button @click="openEndpointFirewallEditor()" class="btn btn-primary btn-sm"><svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#firewall"></use></svg>Create custom rules</button>{% if 'CAPTURE_PACKETS' in endpoint_capabilities %}<button @click="openJobModal('CAPTURE_PACKETS', '')" class="btn btn-secondary btn-sm"><svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#remote"></use></svg>Capture packets</button>{% endif %}<button @click="checkTemplateDrift(['windows_firewall_rules','firewall_all_profiles_enabled'])" class="btn btn-secondary btn-sm"><svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#compliance"></use></svg>Check firewall drift</button><a href="{{ url_for('settings.firewall_policies') }}" class="btn btn-secondary btn-sm"><svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#settings"></use></svg>Open policy library</a></div>
+      </div>
+
+      <section class="rounded-xl border border-base-600 bg-base-850 p-4">
+        <div class="flex items-center justify-between gap-3 mb-3"><div><p class="text-xs font-semibold text-ink-100 uppercase tracking-wide">Current Warden rules</p><p class="text-xs text-ink-500 mt-1">Only rules owned by the “Warden Managed:” prefix are shown.</p></div>{% if firewall_state and firewall_state.drift is sameas true %}<span class="badge badge-offline">Drifted</span>{% elif firewall_state and firewall_state.drift is sameas false %}<span class="badge badge-online">In sync</span>{% else %}<span class="badge">Not checked</span>{% endif %}</div>
+        {% if endpoint_firewall_rules %}
+        <div class="overflow-x-auto"><table class="w-table"><thead><tr><th>Rule</th><th>Direction</th><th>Action</th><th>Application / network</th><th>Ports</th></tr></thead><tbody>{% for rule in endpoint_firewall_rules %}<tr><td><span class="font-medium text-ink-100">{{ rule.name }}</span>{% if rule.enabled is defined and not rule.enabled %}<span class="badge ml-2">Disabled</span>{% endif %}</td><td>{{ rule.direction | title }}</td><td><span class="badge {{ 'badge-offline' if rule.action == 'block' else 'badge-online' }}">{{ rule.action | title }}</span></td><td class="text-xs font-mono-data">{{ rule.program or (rule.remote_addresses | join(', ') if rule.remote_addresses else 'Any application / address') }}</td><td class="text-xs font-mono-data">{{ (rule.local_ports or []) | join(', ') }}{% if rule.local_ports and rule.remote_ports %} · {% endif %}{{ (rule.remote_ports or []) | join(', ') or 'Any' }}</td></tr>{% endfor %}</tbody></table></div>
+        {% else %}<div class="empty-state py-7"><p>No Warden firewall rules have been reported yet.</p><small>Assign a policy below, then run a firewall drift check.</small></div>{% endif %}
+      </section>
+
+      <section class="rounded-xl border border-base-600 bg-base-850 p-4">
+        <div class="flex items-center justify-between gap-3 mb-3"><div><p class="text-xs font-semibold text-ink-100 uppercase tracking-wide">Packet captures</p><p class="text-xs text-ink-500 mt-1">Filtered, time-limited PCAPNG captures collected by the existing Warden agent using Windows Pktmon.</p></div><span class="badge">Maximum 120 seconds · 8 MB</span></div>
+        {% if packet_captures %}<div class="space-y-2">{% for capture in packet_captures %}<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-base-600 px-3 py-2"><div><p class="text-sm font-medium text-ink-100">{{ capture.payload.protocol | upper if capture.payload and capture.payload.protocol else 'ANY' }} traffic{% if capture.payload and capture.payload.remote_ip %} · {{ capture.payload.remote_ip }}{% endif %}{% if capture.payload and capture.payload.port %} · port {{ capture.payload.port }}{% endif %}</p><p class="text-xs text-ink-500">{{ capture.created_at | timeago }} · {{ capture.payload.duration_seconds if capture.payload else 30 }} seconds · {{ capture.status }}</p></div>{% if capture.status == 'completed' %}<a class="btn btn-secondary btn-sm" href="/endpoints/{{ endpoint.id }}/packet-captures/{{ capture.id }}/download">Download PCAPNG</a>{% elif capture.status == 'failed' %}<span class="text-xs text-status-critical">{{ capture.error_msg or 'Capture failed' }}</span>{% else %}<span class="badge badge-info">{{ capture.status | title }}</span>{% endif %}</div>{% endfor %}</div>{% else %}<div class="empty-state py-7"><p>No packet captures yet.</p><small>Start a narrowly filtered capture when diagnosing a connection.</small></div>{% endif %}
+      </section>
+
+      <section>
+        <div class="mb-3"><h4 class="text-xs font-semibold text-ink-500 uppercase tracking-wide">Assign saved policy to this agent</h4><p class="text-xs text-ink-500 mt-1">This queues the same signed, validated policy job used by branch and group deployments.</p></div>
+        {% if firewall_policy_templates %}<div class="grid md:grid-cols-2 gap-3">{% for policy in firewall_policy_templates %}<article class="rounded-xl border border-base-600 bg-base-850 p-4"><div class="flex items-start justify-between gap-3"><div><h5 class="text-sm font-medium text-ink-100">{{ policy.name }}</h5><p class="text-xs text-ink-500 mt-1">{{ policy.description or 'Windows Firewall policy' }}</p></div><button @click='applySavedPolicyTemplate("{{ policy.id }}", {{ policy.name | tojson }})' class="btn btn-primary btn-sm flex-shrink-0">Assign</button></div></article>{% endfor %}</div>{% else %}<div class="empty-state py-8"><p>No saved firewall policies.</p><a href="{{ url_for('settings.firewall_policies') }}" class="btn btn-primary btn-sm mt-3">Create firewall policy</a></div>{% endif %}
+      </section>
+
+      <template x-if="endpointFirewallEditorOpen"><div>
+        <div class="slide-overlay" @click="closeEndpointFirewallEditor()"></div>
+        <section class="slide-panel firewall-policy-panel slide-in-right" aria-label="Custom endpoint firewall editor">
+          <header class="slide-panel-header"><div><h3 class="text-sm font-semibold">Custom endpoint firewall policy</h3><p class="text-xs text-ink-500 mt-1">Applies directly to {{ endpoint.hostname }} without creating a reusable template.</p></div><button class="btn btn-icon" @click="closeEndpointFirewallEditor()" aria-label="Close">×</button></header>
+          <div class="slide-panel-body space-y-5">
+            <div class="rounded-xl border border-accent-500/20 bg-accent-500/5 p-3"><p class="text-xs font-medium text-ink-100">Safe ownership boundary</p><p class="text-xs text-ink-500 mt-1">Warden enables Windows Firewall on all profiles and replaces only rules whose names start with “Warden Managed:”. Existing Windows, domain, and third-party rules remain intact.</p></div>
+            <div class="flex items-center justify-between gap-3"><div><h4 class="text-sm font-semibold text-ink-100">Rules</h4><p class="text-xs text-ink-500 mt-1">Outbound block rules must identify an application to protect the agent connection.</p></div><button type="button" class="btn btn-secondary btn-sm" @click="addEndpointFirewallRule()">+ Add rule</button></div>
+            <template x-for="(rule, index) in endpointFirewallRules" :key="rule.id"><article class="firewall-rule-card">
+              <div class="firewall-rule-heading"><div class="flex items-center gap-2"><span class="firewall-rule-number" x-text="index + 1"></span><input class="form-input !py-1" maxlength="120" x-model.trim="rule.name" placeholder="Rule name"></div><div class="flex items-center gap-2"><label class="form-check text-xs"><input type="checkbox" x-model="rule.enabled"> Enabled</label><button type="button" class="btn btn-ghost btn-sm text-status-critical" @click="removeEndpointFirewallRule(index)" :disabled="endpointFirewallRules.length === 1">Remove</button></div></div>
+              <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+                <div><label class="form-label">Direction</label><select class="form-input form-select" x-model="rule.direction"><option value="in">Inbound</option><option value="out">Outbound</option></select></div>
+                <div><label class="form-label">Action</label><select class="form-input form-select" x-model="rule.action"><option value="allow">Allow</option><option value="block">Block</option></select></div>
+                <div><label class="form-label">Protocol</label><select class="form-input form-select" x-model="rule.protocol"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></div>
+                <div><label class="form-label">Profiles</label><div class="firewall-profile-options"><label><input type="checkbox" x-model="rule.profileDomain"> Domain</label><label><input type="checkbox" x-model="rule.profilePrivate"> Private</label><label><input type="checkbox" x-model="rule.profilePublic"> Public</label></div></div>
+              </div>
+              <div class="grid lg:grid-cols-2 gap-3 mt-3">
+                <div>
+                  <label class="form-label">Application <span class="text-ink-700">(optional)</span></label>
+                  <select class="form-input form-select text-xs mb-2" x-model="rule.inventoryPath" @change="selectEndpointFirewallApplication(rule)">
+                    <option value="">Choose from this endpoint’s application inventory…</option>
+                    <template x-for="application in endpointFirewallApplications" :key="application.path.toLowerCase()">
+                      <option :value="application.path" x-text="endpointFirewallApplicationLabel(application)"></option>
+                    </template>
+                  </select>
+                  <label class="form-label">Executable path</label>
+                  <input class="form-input font-mono-data text-xs" x-model.trim="rule.program" @input="rule.inventoryPath = matchingEndpointFirewallPath(rule.program)" placeholder="C:\Program Files\Company App\app.exe">
+                  <p class="form-help" x-show="endpointFirewallApplications.length">Select an application detected on this endpoint or enter a custom absolute path. Required for outbound block rules.</p>
+                  <p class="form-help" x-show="!endpointFirewallApplications.length">No executable paths are available yet. Run Refresh inventory after the latest agent update, or enter a custom absolute path.</p>
+                </div>
+                <div><label class="form-label">Remote IP addresses or CIDR <span class="text-ink-700">(optional)</span></label><textarea class="form-input font-mono-data text-xs min-h-20" x-model="rule.remoteAddresses" placeholder="10.20.0.0/16&#10;203.0.113.8"></textarea></div>
+                <div><label class="form-label">Local ports <span class="text-ink-700">(optional)</span></label><input class="form-input font-mono-data text-xs" x-model.trim="rule.localPorts" placeholder="443, 8000-8010"></div>
+                <div><label class="form-label">Remote ports <span class="text-ink-700">(optional)</span></label><input class="form-input font-mono-data text-xs" x-model.trim="rule.remotePorts" placeholder="443, 445"></div>
+              </div>
+            </article></template>
+            <div x-show="endpointFirewallError" class="rounded-lg border border-status-critical/25 bg-status-critical/5 p-3 text-xs text-status-critical" x-text="endpointFirewallError"></div>
+          </div>
+          <footer class="slide-panel-footer"><button class="btn btn-secondary" @click="closeEndpointFirewallEditor()">Cancel</button><button class="btn btn-primary" @click="applyCustomEndpointFirewallPolicy()">Review and apply</button></footer>
+        </section>
+      </div></template>
+    </div>
+
+    {# Sessions tab #}
+    {% elif tab == 'encryption' %}
+    <div class="endpoint-tab-heading">
+      <div><span class="section-kicker">Windows data protection</span><h2>BitLocker encryption</h2><p>Enable the Windows system volume only after its numerical recovery password is safely escrowed in the tenant vault.</p></div>
+      <div class="flex flex-wrap gap-2">
+        <button @click="prepareBitLocker('ENABLE_BITLOCKER')" class="btn btn-primary btn-sm">Enable &amp; escrow</button>
+        {% if 'ROTATE_BITLOCKER_RECOVERY' in endpoint_capabilities %}<button @click="prepareBitLocker('ROTATE_BITLOCKER_RECOVERY')" class="btn btn-secondary btn-sm">Rotate recovery key</button>{% endif %}
+      </div>
+    </div>
+    <div class="endpoint-info-callout mb-5">
+      Warden does not decrypt the disk remotely. If Windows enters recovery, an authorized tenant administrator reveals the escrowed key here and enters it in the BitLocker recovery screen. Encryption requires a ready TPM; Warden never falls back to an unsafe clear-key protector.
+    </div>
+    <section class="endpoint-overview-card">
+      <div class="endpoint-card-heading"><div><small>Tenant vault</small><h3>Recovery protectors</h3></div><span class="badge badge-neutral">Encrypted at rest</span></div>
+      <div class="space-y-3">
+      {% for key in recovery_keys %}
+        <div class="recovery-key-row">
+          <div><b>{{ key.volume_mount }} volume</b><small>{{ key.volume_status or 'Status pending' }} · {{ key.encryption_percentage or 0 }}% · escrowed {{ key.escrowed_at | timeago }}</small><code>{{ key.protector_id }}</code></div>
+          <div class="flex items-center gap-2">
+            <span class="badge {{ 'badge-online' if key.is_current else 'badge-neutral' }}">{{ 'Current' if key.is_current else 'Retired' }}</span>
+            {% if is_superadmin or current_user.role == 'company_admin' %}<button @click="revealRecoveryKey('{{ key.id }}')" :disabled="revealingRecoveryKey" class="btn btn-secondary btn-sm">Reveal</button>{% endif %}
+          </div>
+          <div x-show="recoveryKeyId === '{{ key.id }}'" x-cloak class="recovery-key-secret">
+            <span>Visible for 60 seconds</span><code x-text="recoveryKeyText"></code><button @click="copyRecoveryKey()" class="btn btn-secondary btn-sm">Copy</button>
+          </div>
+        </div>
+      {% else %}
+        <div class="endpoint-empty-compact">No BitLocker recovery key has been escrowed for this endpoint.</div>
+      {% endfor %}
+      </div>
+    </section>
+    {% elif tab == 'sessions' %}
+    <table class="w-table">
+      <thead><tr>
+        <th>Admin</th>
+        <th>Started</th>
+        <th>Ended</th>
+        <th>Duration</th>
+        <th>Status</th>
+        <th>Notes &amp; chat</th>
+      </tr></thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr>
+          <td class="text-ink-300">{{ (s.admin_users.full_name or s.admin_users.email) if s.admin_users else 'Deleted administrator' }}</td>
+          <td class="text-ink-500">{{ s.started_at | timeago }}</td>
+          <td class="text-ink-500">{{ s.ended_at | timeago if s.ended_at else '—' }}</td>
+          <td class="text-ink-500">{{ s.started_at | duration(s.ended_at) }}</td>
+          <td>
+            <span class="badge {{ 'badge-online' if s.status == 'active' else 'badge-offline' }}">{{ s.status }}</span>
+          </td>
+          <td>
+            {% if s.collaboration_events %}
+            <details class="session-transcript">
+              <summary>{{ s.collaboration_events | length }} {{ 'entry' if s.collaboration_events | length == 1 else 'entries' }}</summary>
+              <div class="session-transcript-popover">
+                {% for event in s.collaboration_events %}
+                <div class="session-transcript-entry">
+                  <div><span>{{ 'Technician note' if event.event_type == 'note' else ('Endpoint reply' if event.event_type == 'chat_endpoint' else 'Admin chat') }}</span><time>{{ event.created_at | timeago }}</time></div>
+                  <p>{{ event.body }}</p>
+                </div>
+                {% endfor %}
+              </div>
+            </details>
+            {% else %}<span class="text-xs text-ink-700">None</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="py-8 text-center text-ink-700">No remote sessions recorded</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {# Alerts tab #}
+    {% elif tab == 'alerts' %}
+    <div class="space-y-2">
+      {% for a in alerts %}
+      <div class="flex items-start gap-3 p-3 bg-base-800 border border-base-600 rounded-lg">
+        <div class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0
+                    {% if a.severity == 'critical' %}bg-status-critical
+                    {% elif a.severity == 'warning' %}bg-status-warning
+                    {% else %}bg-accent-400{% endif %}"></div>
+        <div class="flex-1">
+          <div class="text-sm font-medium text-ink-100">{{ a.title }}</div>
+          <div class="text-xs text-ink-500 mt-0.5">{{ a.message }}</div>
+          <div class="text-xs text-ink-700 mt-1">{{ a.created_at | timeago }}</div>
+        </div>
+        {% if not a.is_resolved %}
+        <button hx-post="/alerts/{{ a.id }}/resolve" class="btn btn-sm btn-secondary">
+          Resolve
+        </button>
+        {% endif %}
+      </div>
+      {% else %}
+      <p class="text-sm text-ink-700 text-center py-4">No alerts for this endpoint</p>
+      {% endfor %}
+    </div>
+
+    {# Compliance tab #}
+    {% elif tab == 'compliance' %}
+    <div>
+      {% if compliance_result %}
+      {% set cr = compliance_result %}
+      <div class="flex items-center gap-4 mb-4">
+        <div class="text-3xl font-semibold font-mono-data {% if cr.overall_status == 'compliant' %}text-status-online{% elif cr.overall_status == 'non_compliant' %}text-status-critical{% else %}text-ink-700{% endif %}">
+          {{ cr.score or 0 }}/100
+        </div>
+        <div>
+          <span class="badge {% if cr.overall_status == 'compliant' %}badge-online{% elif cr.overall_status == 'non_compliant' %}badge-critical{% else %}badge-offline{% endif %}">
+            {{ cr.overall_status | replace('_', ' ') | title }}
+          </span>
+          <div class="text-xs text-ink-700 mt-1">Last scanned {{ cr.scanned_at | timeago }}</div>
+        </div>
+        <button hx-post="/compliance/scan/{{ endpoint.id }}"
+                hx-swap="none"
+                @htmx:after-request="wardenToast('Scan dispatched', 'success')"
+                class="btn btn-primary ml-auto">
+          Re-scan
+        </button>
+      </div>
+      <div class="space-y-2">
+        {% for r in cr.results %}
+        <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-base-800 border border-base-600">
+          <span class="w-4 h-4 flex-shrink-0 {% if r.status == 'pass' %}text-status-online{% elif r.status == 'fail' %}text-status-critical{% else %}text-status-warning{% endif %}">
+            {% if r.status == 'pass' %}
+            <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+            {% else %}
+            <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            {% endif %}
+          </span>
+          <span class="text-sm font-medium text-ink-300 flex-1">{{ r.check | replace('_', ' ') | title }}</span>
+          <span class="text-xs text-ink-700">{{ r.detail or '' }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="text-center py-8">
+        <p class="text-ink-700 text-sm mb-4">No compliance data yet.</p>
+        <button hx-post="/compliance/scan/{{ endpoint.id }}"
+                hx-swap="none"
+                @htmx:after-request="wardenToast('Scan dispatched', 'success')"
+                class="btn btn-primary">
+          Run First Scan
+        </button>
+      </div>
+      {% endif %}
+    </div>
+
+    {# Metrics tab #}
+    {% elif tab == 'metrics' %}
+    <div>
+      {% if metrics %}
+      <div class="grid grid-cols-1 gap-6">
+        <div>
+          <h3 class="text-xs font-semibold text-ink-700 uppercase tracking-wide mb-3">CPU % (24h)</h3>
+          <canvas id="cpu-chart" height="80"></canvas>
+        </div>
+        <div>
+          <h3 class="text-xs font-semibold text-ink-700 uppercase tracking-wide mb-3">RAM % (24h)</h3>
+          <canvas id="ram-chart" height="80"></canvas>
+        </div>
+        <div>
+          <h3 class="text-xs font-semibold text-ink-700 uppercase tracking-wide mb-3">Disk Free (current)</h3>
+          <p class="text-2xl font-semibold text-ink-100">{{ endpoint.disk_free_gb | round(1) if endpoint.disk_free_gb is not none else '—' }} <span class="text-sm font-normal text-ink-500">GB free</span></p>
+          <p class="text-xs text-ink-700 mt-1">Disk usage history isn't tracked yet — only the current reading is available.</p>
+        </div>
+      </div>
+      <script nonce="{{ csp_nonce }}">
+      document.addEventListener('DOMContentLoaded', function(){
+        // chart.min.js loads in base.html AFTER this content block in
+        // document order — running immediately (rather than waiting for
+        // DOMContentLoaded, which fires only after every script encountered
+        // during parsing, including that later one, has already run) would
+        // hit "Chart is not defined". Never caught before because `metrics`
+        // was always empty until a real endpoint existed.
+        const metrics = {{ metrics | tojson }};
+        const labels = metrics.map(m => {
+          const d = new Date(m.collected_at);
+          return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        });
+        const gridColor = 'rgba(102,112,133,0.12)';
+        const tickColor = '#667085';
+        const opts = () => ({
+          type: 'line',
+          data: { labels },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { maxTicksLimit: 8, font: { size: 11 }, color: tickColor }, grid: { color: gridColor } },
+              y: { beginAtZero: true, ticks: { font: { size: 11 }, color: tickColor }, grid: { color: gridColor } }
+            },
+            elements: { point: { radius: 2 }, line: { tension: 0.3, borderWidth: 2 } }
+          }
+        });
+        const mkChart = (id, field, color, label) => {
+          const c = opts();
+          c.data.datasets = [{ label, data: metrics.map(m => m[field]), borderColor: color, backgroundColor: color + '20', fill: true }];
+          new Chart(document.getElementById(id), c);
+        };
+        mkChart('cpu-chart', 'cpu_pct', '#0A7AFF', 'CPU %');
+        mkChart('ram-chart', 'ram_used_pct', '#12A66A', 'RAM %');
+      });
+      </script>
+      {% else %}
+      <p class="text-sm text-ink-700 text-center py-8">No metrics data available yet.</p>
+      {% endif %}
+    </div>
+
+    {% endif %}
+  </div>
+</div>
+
+{# Least-privilege remote support request. #}
+<div x-show="showRemoteModal" x-cloak class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" @keydown.escape.window="showRemoteModal = false">
+  <div @click.stop class="endpoint-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-lg p-6">
+    <div class="section-kicker mb-2">Audited support session</div>
+    <h3 class="text-lg font-semibold text-ink-100 mb-2">Start remote support</h3>
+    <p class="text-sm text-ink-500 leading-relaxed">Choose only the access needed. Attended sessions ask the person at the endpoint before connecting.</p>
+    <div class="mt-4">
+      <label class="form-label" for="remote-reason">Reason or ticket</label>
+      <input id="remote-reason" class="form-input" maxlength="500" x-model.trim="remoteReason" placeholder="Example: INC-1042 · troubleshoot Outlook">
+    </div>
+    <div class="mt-4">
+      <label class="form-label" for="remote-access-mode">Access</label>
+      <select id="remote-access-mode" class="form-input form-select" x-model="remoteAccessMode">
+        <option value="view_only" :disabled="capabilityDetails.remote_consent === false">View only · user consent required</option>
+        <option value="full_control" :disabled="capabilityDetails.remote_input === false || capabilityDetails.remote_consent === false">Full control · user consent required</option>
+        <option value="unattended" :disabled="capabilityDetails.remote_input === false">Unattended · tenant/branch admins only</option>
+      </select>
+      <p class="mt-2 text-xs text-status-warning" x-show="capabilityDetails.remote_input === false">This agent currently supports view-only remote access. Install its input-control dependency and wait for the next heartbeat to enable full control.</p>
+      <p class="mt-2 text-xs text-ink-500" x-show="remoteAccessMode === 'unattended'">Unattended access bypasses the local prompt and is fully audited. Sensitive tools remain restricted by role.</p>
+    </div>
+    <details class="remote-consent-customizer mt-4" x-show="remoteAccessMode !== 'unattended'">
+      <summary>Customize the warning shown on the endpoint</summary>
+      <div><label class="form-label" for="remote-consent-title">Warning title</label><input id="remote-consent-title" class="form-input" maxlength="120" x-model.trim="remoteConsentTitle"></div>
+      <div><label class="form-label" for="remote-consent-message">User-facing explanation</label><textarea id="remote-consent-message" class="form-input" rows="3" maxlength="500" x-model.trim="remoteConsentMessage"></textarea></div>
+      <p>The Agent shows the technician, reason, requested access, and explicit Allow/Deny choices. Deny and timeout both fail closed.</p>
+    </details>
+    <div class="mt-6 flex justify-end gap-2">
+      <button type="button" @click="showRemoteModal = false" :disabled="startingSession" class="btn btn-secondary">Cancel</button>
+      <button type="button" @click="startRemoteSession()" :disabled="startingSession || !remoteReason.trim() || !remoteModeAvailable()" class="btn btn-primary">
+        <span x-show="!startingSession">Request access</span><span x-show="startingSession">Waiting…</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+{# Immediate server-side retirement; intentionally separate from agent uninstall. #}
+<div x-show="showRemoveEndpointModal" x-cloak class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+  <div @click.stop class="endpoint-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md p-6">
+    <div class="section-kicker mb-2">Release license seat</div>
+    <h3 class="text-lg font-semibold text-ink-100 mb-2">Remove {{ endpoint.display_name or endpoint.hostname }} from Warden?</h3>
+    <p class="text-sm text-ink-500 leading-relaxed mb-3">
+      This immediately removes the device from the active fleet, invalidates its Warden credentials, and frees its license seat.
+    </p>
+    <div class="p-3 rounded-lg border border-status-warning/30 bg-status-warning/5 text-xs text-ink-300 leading-relaxed mb-5">
+      The agent is <strong>not uninstalled</strong> from the computer. It will remain installed but disconnected. To manage this device again, enrol it with a new installer or token.
+    </div>
+    <div class="flex gap-3 justify-end">
+      <button type="button" @click="showRemoveEndpointModal = false" :disabled="removingEndpoint" class="btn btn-secondary">Cancel</button>
+      <button type="button" @click="removeEndpointFromWarden()" :disabled="removingEndpoint" class="btn btn-danger">
+        <span x-show="!removingEndpoint">Remove and free license</span>
+        <span x-show="removingEndpoint">Removing...</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+{# Job confirm modal — covers every job type dispatched from this page #}
+<div x-show="showJobModal" x-cloak class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+  <div @click.stop class="endpoint-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md p-6">
+    <h3 class="text-lg font-semibold text-ink-100 mb-1">Confirm Action</h3>
+    <p class="text-sm text-ink-500 mb-4">
+      <span x-show="jobType === 'RESET_PASSWORD'">Reset the local password for <span class="font-mono-data" x-text="jobWindowsUser"></span>?</span>
+      <span x-show="jobType === 'GRANT_ELEVATION'">Request break-glass administrator access for <span class="font-mono-data" x-text="jobWindowsUser"></span>? This requires approval by two different administrators.</span>
+      <span x-show="jobType === 'REVOKE_ELEVATION'">Revoke admin elevation from <span class="font-mono-data" x-text="jobWindowsUser"></span>?</span>
+      <span x-show="jobType === 'DISABLE_USER'">Disable the local account <span class="font-mono-data" x-text="jobWindowsUser"></span>?</span>
+      <span x-show="jobType === 'ENABLE_USER'">Re-enable the local account <span class="font-mono-data" x-text="jobWindowsUser"></span>?</span>
+      <span x-show="jobType === 'DELETE_USER'">Permanently delete the local account <span class="font-mono-data" x-text="jobWindowsUser"></span>? Requires <strong>two separate admins</strong> to approve before it runs.</span>
+      <span x-show="jobType === 'INSTALL_APP'">Install this app on this endpoint.</span>
+      <span x-show="jobType === 'UNINSTALL_APP'">Uninstall this app from this endpoint.</span>
+      <span x-show="jobType === 'UNINSTALL_AGENT'">Uninstall the Warden agent from this endpoint entirely? This endpoint will stop reporting and can't be managed again until re-enrolled. Requires <strong>two separate admins</strong> to approve before it runs.</span>
+      <span x-show="jobType === 'RUN_CMD'">Run a whitelisted command on this endpoint.</span>
+      <span x-show="jobType === 'REBOOT'">Reboot this endpoint? Requires <strong>two separate admins</strong> to approve before it runs.</span>
+      <span x-show="jobType === 'SHUTDOWN'">Shut down this endpoint? Requires <strong>two separate admins</strong> to approve before it runs.</span>
+      <span x-show="jobType === 'GET_EVENT_LOGS'">Collect recent operating-system log entries from this endpoint.</span>
+      <span x-show="jobType === 'WINDOWS_UPDATE'">Check for or install operating-system updates on this endpoint.</span>
+      <span x-show="jobType === 'PUSH_LOCAL_POLICY' && jobPayload.template !== undefined">Apply a vetted local policy template to this endpoint.</span>
+      <span x-show="jobType === 'PUSH_LOCAL_POLICY' && jobPayload.template_id !== undefined">Apply the saved policy template <strong x-text="jobTemplateName"></strong> to this endpoint.</span>
+      <span x-show="jobType === 'PUSH_LOCAL_POLICY' && jobPayload.settings !== undefined"><span x-text="jobTemplateName || 'Change this individual policy setting'"></span> on this endpoint.</span>
+      <span x-show="jobType === 'CAPTURE_PACKETS'">Capture network packets on this endpoint and securely return a PCAPNG file. Packet contents may contain sensitive tenant data and the operation is fully audited.</span>
+      <span x-show="jobType === 'ENABLE_BITLOCKER'">Enable BitLocker with XTS-AES-256? The Agent first escrows a numerical recovery password in Warden, requires a ready TPM, and only then starts encryption. Requires <strong>two separate admins</strong> to approve.</span>
+      <span x-show="jobType === 'ROTATE_BITLOCKER_RECOVERY'">Create and escrow a new BitLocker recovery password, then retire the old recovery protector? Requires <strong>two separate admins</strong> to approve.</span>
+    </p>
+
+    <template x-if="jobType === 'RESET_PASSWORD'">
+      <div class="mb-4">
+        <label class="form-label">New Password</label>
+        <input x-model="jobPayload.new_password" type="text" required minlength="8" class="form-input" placeholder="New local password">
+      </div>
+    </template>
+
+    <template x-if="jobType === 'RUN_CMD'">
+      <div class="mb-4">
+        <label class="form-label">Command</label>
+        <select x-model="jobPayload.cmd_type" class="form-input form-select">
+          <option value="system_info">Get system information</option>
+          <option value="clock_status">Check clock and branch time zone</option>
+          <option value="sync_time">Synchronize Windows clock</option>
+          <option value="clear_temp">Clear temporary files</option>
+          <option value="flush_dns">Flush DNS cache</option>
+          <option value="check_disk">Check disk/filesystems</option>
+        </select>
+      </div>
+    </template>
+
+    <template x-if="jobType === 'GRANT_ELEVATION'">
+      <div class="mb-4">
+        <label class="form-label">Duration (minutes, maximum 240)</label>
+        <input x-model.number="jobPayload.duration_minutes" type="number" min="1" max="240" class="form-input">
+      </div>
+    </template>
+
+    <template x-if="jobType === 'REBOOT' || jobType === 'SHUTDOWN'">
+      <div class="mb-4">
+        <label class="form-label">Delay (seconds)</label>
+        <input x-model.number="jobPayload.delay_seconds" type="number" min="0" class="form-input" placeholder="30">
+      </div>
+    </template>
+
+    <template x-if="jobType === 'GET_EVENT_LOGS'">
+      <div class="mb-4">
+        <label class="form-label">Log</label>
+        <select x-model="jobPayload.log_name" class="form-input form-select">
+          <option value="System">System</option>
+          <option value="Application">Application</option>
+          <option value="Security">Security</option>
+        </select>
+      </div>
+    </template>
+
+    <template x-if="jobType === 'WINDOWS_UPDATE'">
+      <div class="mb-4">
+        <label class="form-label">Action</label>
+        <select x-model="jobPayload.action" class="form-input form-select">
+          <option value="check">Check for updates</option>
+          <option value="install">Download and install updates</option>
+        </select>
+      </div>
+    </template>
+
+    <template x-if="jobType === 'CAPTURE_PACKETS'">
+      <div class="space-y-3 mb-4">
+        <div class="grid grid-cols-2 gap-3"><div><label class="form-label">Duration (seconds)</label><input x-model.number="jobPayload.duration_seconds" type="number" min="5" max="120" class="form-input"></div><div><label class="form-label">Maximum size (MB)</label><input x-model.number="jobPayload.max_size_mb" type="number" min="1" max="8" class="form-input"></div></div>
+        <div class="grid grid-cols-2 gap-3"><div><label class="form-label">Protocol</label><select x-model="jobPayload.protocol" class="form-input form-select"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option></select></div><div><label class="form-label">Port</label><input x-model.number="jobPayload.port" type="number" min="0" max="65535" class="form-input" placeholder="0 = any"></div></div>
+        <div><label class="form-label">Remote IP or CIDR</label><input x-model.trim="jobPayload.remote_ip" class="form-input font-mono-data" placeholder="Optional, e.g. 10.20.0.0/16"></div>
+      </div>
+    </template>
+
+    <template x-if="jobType === 'PUSH_LOCAL_POLICY' && jobPayload.template !== undefined">
+      <div class="mb-4">
+        <label class="form-label">Policy Template</label>
+        <select x-model="jobPayload.template" class="form-input form-select">
+          {% for key, desc in policy_templates.items() %}
+          <option value="{{ key }}">{{ desc }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </template>
+
+    <label class="form-label">Reason</label>
+    <input x-model="jobReason" type="text" class="form-input mb-4" placeholder="Why is this needed?">
+    <div class="flex gap-3 justify-end">
+      <button type="button" @click="showJobModal = false" class="btn btn-secondary">Cancel</button>
+      <button type="button" @click="dispatchJob()" :disabled="dispatchingJob || ((jobType === 'GRANT_ELEVATION' || jobType === 'CAPTURE_PACKETS') && !jobReason.trim())" class="btn btn-primary">
+        <span x-show="!dispatchingJob">Confirm</span>
+        <span x-show="dispatchingJob">Dispatching...</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+</div>
+{% endblock %}

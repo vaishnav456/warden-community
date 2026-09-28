@@ -1,0 +1,45 @@
+{% extends "base.html" %}{% set active_page = "superadmin_users" %}
+{% block title %}Platform Users{% endblock %}
+{% block breadcrumb %}<span>Platform</span><span>/</span><span class="text-ink-100">Users</span>{% endblock %}
+{% block content %}
+<div x-data="slidePanel">
+  <div class="fleet-page-header">
+    <div><h1>Administrator accounts</h1><p>Manage platform operators and tenant administrators from one audited workspace.</p></div>
+    <button type="button" class="btn btn-primary" @click="show('Create administrator')">{{ wicon('add', 'button-glyph') }} New administrator</button>
+  </div>
+
+  <div class="metric-grid mb-6">
+    <div class="stat-card"><div class="stat-card-label">All administrators</div><div class="stat-card-value">{{ admins|length }}</div></div>
+    <div class="stat-card"><div class="stat-card-label">Platform operators</div><div class="stat-card-value">{{ admins|selectattr('role','equalto','superadmin')|list|length }}</div></div>
+    <div class="stat-card"><div class="stat-card-label">2FA protected</div><div class="stat-card-value">{{ admins|selectattr('mfa_enabled')|list|length }}</div></div>
+    <div class="stat-card"><div class="stat-card-label">Disabled</div><div class="stat-card-value">{{ admins|rejectattr('is_active')|list|length }}</div></div>
+  </div>
+
+  <div class="w-table-wrap"><table class="w-table">
+    <thead><tr><th>Administrator</th><th>Tenant</th><th>Role</th><th>2FA</th><th>Status</th><th class="text-right">Controls</th></tr></thead>
+    <tbody>{% for a in admins %}<tr>
+      <td><strong>{{ a.full_name }}</strong><div class="text-xs text-ink-500 font-mono-data">{{ a.email }}</div></td>
+      <td>{{ a._company.name if a._company else 'Warden platform' }}</td>
+      <td><span class="badge badge-info">{{ a.role|replace('_',' ')|title }}</span></td>
+      <td><span class="badge badge-{{ 'online' if a.mfa_enabled else 'offline' }}">{{ 'Enabled' if a.mfa_enabled else 'Not enabled' }}</span></td>
+      <td><span class="badge badge-{{ 'online' if a.is_active else 'offline' }}">{{ 'Active' if a.is_active else 'Disabled' }}</span></td>
+      <td class="text-right"><div class="flex flex-wrap justify-end gap-2">
+        <details class="platform-action-menu text-left"><summary class="btn btn-secondary btn-sm">{{ wicon('key', 'button-glyph') }} Reset password</summary><form method="post" action="{{ url_for('superadmin.reset_admin_password',admin_id=a.id) }}" class="platform-action-popover"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label><span class="form-label">New password</span><input type="password" name="new_password" minlength="12" autocomplete="new-password" class="form-input w-full" required></label><p>At least 12 characters. All active sessions will be revoked.</p><button class="btn btn-primary btn-sm w-full">{{ wicon('key', 'button-glyph') }} Reset securely</button></form></details>
+        {% if a.id|string != g.admin.id|string %}<form method="post" action="{{ url_for('superadmin.toggle_admin',admin_id=a.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-secondary btn-sm">{{ wicon('unlock' if not a.is_active else 'block', 'button-glyph') }} {{ 'Enable' if not a.is_active else 'Disable' }}</button></form>{% endif %}
+      </div></td>
+    </tr>{% else %}<tr><td colspan="6" class="text-center text-ink-500">No administrator accounts.</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+  <template x-if="open"><div><div class="slide-overlay" @click="close()"></div><div class="slide-panel slide-in-right">
+    <div class="slide-panel-header"><div><h2>Create administrator</h2><p class="text-xs text-ink-500 mt-1">Grant only the access this person needs.</p></div><button type="button" @click="close()" class="btn btn-icon" aria-label="Close">{{ wicon('close', 'button-glyph') }}</button></div>
+    <form id="create-platform-admin" method="post" action="{{ url_for('superadmin.create_admin') }}" class="slide-panel-body space-y-4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label><span class="form-label">Full name</span><input name="full_name" class="form-input w-full" required></label>
+      <label><span class="form-label">Email</span><input name="email" type="email" class="form-input w-full" autocomplete="off" required></label>
+      <label><span class="form-label">Role</span><select name="role" class="form-select w-full"><option value="company_admin">Tenant administrator</option><option value="superadmin">Platform administrator</option></select></label>
+      <label><span class="form-label">Tenant</span><select name="company_id" class="form-select w-full"><option value="">None — required for platform administrators</option>{% for c in companies %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select><small class="block text-ink-500 mt-1">A tenant must be selected for a tenant administrator.</small></label>
+      <label><span class="form-label">Temporary password</span><input name="password" type="password" minlength="12" autocomplete="new-password" class="form-input w-full" required><small class="block text-ink-500 mt-1">Use at least 12 characters and transfer it through a secure channel.</small></label>
+    </form>
+    <div class="slide-panel-footer"><button type="button" @click="close()" class="btn btn-secondary">Cancel</button><button type="submit" form="create-platform-admin" class="btn btn-primary">{{ wicon('add', 'button-glyph') }} Create administrator</button></div>
+  </div></div></template>
+</div>
+{% endblock %}

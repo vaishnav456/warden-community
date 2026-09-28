@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <span class="text-ink-700">Warden</span><span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100">Jobs</span>
+</nav>
+{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-bold text-ink-100">Jobs</h1>
+  <div class="flex gap-1">
+    {% for s, label in [('','All'),('pending','Pending'),('running','Running'),('completed','Completed'),('failed','Failed')] %}
+    <a href="/jobs{% if s %}?status={{ s }}{% endif %}"
+       class="px-3 py-1.5 text-sm rounded-lg font-medium transition-colors
+              {% if status_filter == s or (not status_filter and not s) %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">
+      {{ label }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Endpoint</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th>Completed</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody hx-get="/partials/jobs-table?status={{ status_filter or '' }}{% if endpoint_id %}&endpoint_id={{ endpoint_id }}{% endif %}"
+           hx-trigger="every 5s" hx-sync="this:drop" hx-swap="innerHTML">
+      {% include "partials/jobs_table_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% if has_more %}
+<div class="mt-4 text-center">
+  <a href="/jobs?page={{ page + 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="text-sm text-accent-400 hover:underline">Load more →</a>
+</div>
+{% endif %}
+{% endblock %}

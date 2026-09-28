@@ -1,0 +1,332 @@
+{% macro wicon(name, class_name='nav-icon') -%}
+<svg class="{{ class_name }}" aria-hidden="true"><use href="{{ url_for('static', filename='warden-icons.svg') }}?v={{ asset_v }}#{{ name }}"></use></svg>
+{%- endmacro %}
+<!DOCTYPE html>
+<html lang="en" x-data="wardenApp" x-cloak>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="session-idle-minutes" content="{{ session_idle_minutes }}">
+  <meta name="access-token-minutes" content="{{ jwt_access_minutes }}">
+  <meta name="theme-color" content="#F5F7FB">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}" type="image/svg+xml">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}">
+  {# htmx reads this before its own script runs and skips injecting its
+     default indicator <style> block (blocked by CSP anyway, no
+     'unsafe-inline' on style-src) — the equivalent rules are in
+     warden.css's static/js instead. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <title>{% block title %}{{ brand_name }}{% endblock %} — {% if company %}{{ company.name }}{% else %}Superadmin{% endif %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/warden.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/workbench.css') }}?v={{ asset_v }}">
+  <style nonce="{{ csp_nonce }}">[x-cloak]{display:none!important}</style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body class="{{ 'platform-admin-shell' if is_superadmin and not company else '' }}" @keydown.escape.window="closeOverlays()" @keydown.ctrl.k.window.prevent="openCommand()" @keydown.meta.k.window.prevent="openCommand()">
+<div id="app-shell" class="flex h-screen overflow-hidden" :class="sidebarStateClass">
+
+  <div id="sidebar-backdrop" x-show="mobileMenuOpen" x-cloak @click="closeMobileNavigation()" aria-hidden="true"></div>
+
+  <!-- Sidebar -->
+  <aside id="app-sidebar" x-cloak :aria-hidden="navigationHidden" :inert="navigationInert" class="w-60 flex-shrink-0 bg-base-950 border-r border-base-700 flex flex-col h-full overflow-hidden" aria-label="Primary navigation">
+    <div class="warden-brand flex items-center gap-3 px-4 py-5 border-b border-base-700">
+      <div class="warden-mark flex-shrink-0">
+        {% if brand_logo_path %}<img src="{{ brand_logo_path }}" alt="" class="h-full w-full object-contain">{% else %}
+        <svg viewBox="0 0 40 40" aria-hidden="true">
+          <path class="mark-frame" d="M20 2.8 34 8.7v10.8c0 8.8-5.3 14.1-14 17.7-8.7-3.6-14-8.9-14-17.7V8.7Z"/>
+          <path class="mark-route" d="m11.5 13.2 4.1 14.1L20 18.8l4.4 8.5 4.1-14.1"/>
+          <path class="mark-spark" d="M20 7.8v4.3M17.8 10h4.4"/>
+        </svg>
+        {% endif %}
+      </div>
+      <div class="min-w-0">
+        <div class="warden-wordmark">{{ brand_name | upper }}</div>
+        {% if company %}<div class="warden-tenant truncate">{{ company.name }}</div>
+        {% else %}<div class="warden-tenant">Global administration</div>{% endif %}
+      </div>
+      <button type="button" class="sidebar-close" @click="closeMobileNavigation()" aria-label="Close navigation">
+        {{ wicon('close', 'custom-icon') }}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-width="2" d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+
+    {% if is_superadmin and company %}
+    <a href="{{ url_for('superadmin.exit_company_view') }}"
+       class="flex items-center gap-2 px-4 py-2 bg-accent-500/10 border-b border-base-700 text-xs text-accent-400 hover:bg-accent-500/15 transition-colors">
+      <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+      Viewing as tenant — Exit
+    </a>
+    {% endif %}
+
+    <nav class="sidebar-nav flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-0.5" @click="closeMobileNavigation()">
+      {% if is_superadmin %}
+      <div class="nav-section-label">Platform</div>
+      <a href="/admin" class="nav-item {{ 'active' if active_page == 'superadmin_overview' }}">
+        {{ wicon('overview') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+        Overview
+      </a>
+      <a href="/admin/tenants" class="nav-item {{ 'active' if active_page == 'superadmin_tenants' }}">{{ wicon('tenants') }}Tenants</a>
+      <a href="/admin/operations" class="nav-item {{ 'active' if active_page == 'superadmin_operations' }}">{{ wicon('jobs') }}Operations</a>
+      <a href="/admin/features" class="nav-item {{ 'active' if active_page == 'superadmin_features' }}">{{ wicon('policy') }}Feature Rollouts</a>
+      <a href="/admin/subscriptions" class="nav-item {{ 'active' if active_page == 'superadmin_subscriptions' }}">{{ wicon('subscriptions') }}Subscriptions</a>
+      <a href="/admin/usage" class="nav-item {{ 'active' if active_page == 'superadmin_usage' }}">{{ wicon('reports') }}Usage &amp; Metering</a>
+      <a href="/admin/plans" class="nav-item {{ 'active' if active_page == 'superadmin_plans' }}">{{ wicon('plans') }}Plans & Entitlements</a>
+      <a href="/admin/platform-health" class="nav-item {{ 'active' if active_page == 'superadmin_health' }}">{{ wicon('health') }}Platform Health</a>
+      <a href="/admin/security-center" class="nav-item {{ 'active' if active_page == 'superadmin_security' }}">{{ wicon('security') }}Security Center</a>
+      <a href="/admin/recovery" class="nav-item {{ 'active' if active_page == 'superadmin_recovery' }}">{{ wicon('storage') }}Backup &amp; Recovery</a>
+      <a href="/admin/users" class="nav-item {{ 'active' if active_page == 'superadmin_users' }}">{{ wicon('users') }}Platform Users</a>
+      <a href="/admin/audit" class="nav-item {{ 'active' if active_page == 'superadmin_audit' }}">
+        {{ wicon('audit') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        Global Audit
+      </a>
+      {% else %}
+      <div class="nav-section-label">Main</div>
+      <a href="/" class="nav-item {{ 'active' if active_page == 'dashboard' }}">
+        {{ wicon('dashboard') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        Dashboard
+      </a>
+      <a href="/endpoints" class="nav-item {{ 'active' if active_page == 'endpoints' }}">
+        {{ wicon('endpoint') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        Endpoints
+      </a>
+      <a href="/topology" class="nav-item {{ 'active' if active_page == 'topology' }}">
+        {{ wicon('topology') }}
+        Topology
+      </a>
+      <a href="/assets" class="nav-item {{ 'active' if active_page == 'assets' }}">
+        {{ wicon('apps') }}
+        Assets
+      </a>
+      <a href="/users" class="nav-item {{ 'active' if active_page == 'users' }}">
+        {{ wicon('users') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+        Admin users
+      </a>
+      <a href="/directory" class="nav-item {{ 'active' if active_page == 'directory' }}">
+        {{ wicon('users') }}
+        <span>Directory</span>
+      </a>
+      <a href="/storage" class="nav-item {{ 'active' if active_page == 'home' }}">
+        {{ wicon('apps') }}
+        <span>Warden Home</span>
+      </a>
+      <a href="/apps" class="nav-item {{ 'active' if active_page == 'apps' }}">
+        {{ wicon('apps') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        Apps
+      </a>
+      <details class="nav-cluster" {{ 'open' if active_page in ['jobs', 'escalations', 'alerts'] else '' }}>
+      <summary class="nav-section-label">Operations <span>⌄</span></summary>
+      <div class="nav-cluster-items">
+      <a href="/jobs" class="nav-item {{ 'active' if active_page == 'jobs' }}">
+        {{ wicon('jobs') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        Jobs
+      </a>
+      <a href="/escalations" class="nav-item {{ 'active' if active_page == 'escalations' }}">
+        {{ wicon('escalations') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        Escalations
+        <span id="esc-badge" hx-get="/partials/escalation-badge" hx-trigger="load, every 5s" hx-swap="outerHTML" hx-sync="this:drop" class="ml-auto"></span>
+      </a>
+      <a href="/alerts" class="nav-item {{ 'active' if active_page == 'alerts' }}">
+        {{ wicon('alerts') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        Alerts
+        <span id="alert-badge" hx-get="/partials/alert-badge" hx-trigger="load, every 60s" hx-swap="outerHTML" hx-sync="this:drop" class="ml-auto"></span>
+      </a>
+      </div></details>
+      <details class="nav-cluster" {{ 'open' if active_page in ['compliance', 'patches', 'effective_policy', 'network', 'vulnerabilities', 'schedule', 'status', 'audit'] else '' }}>
+      <summary class="nav-section-label">Security & reports <span>⌄</span></summary>
+      <div class="nav-cluster-items">
+      <a href="/compliance" class="nav-item {{ 'active' if active_page == 'compliance' }}">
+        {{ wicon('compliance') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        Compliance
+      </a>
+      <a href="/patches" class="nav-item {{ 'active' if active_page == 'patches' }}">
+        {{ wicon('schedule') }}
+        Patch management
+      </a>
+      <a href="/effective-policy" class="nav-item {{ 'active' if active_page == 'effective_policy' }}">{{ wicon('compliance') }} Effective policy</a>
+      <a href="/network" class="nav-item {{ 'active' if active_page == 'network' }}">{{ wicon('firewall') }} Network control</a>
+      <a href="/vulnerabilities" class="nav-item {{ 'active' if active_page == 'vulnerabilities' }}">{{ wicon('compliance') }} Vulnerabilities</a>
+      <a href="/schedule" class="nav-item {{ 'active' if active_page == 'schedule' }}">
+        {{ wicon('schedule') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        Schedule
+      </a>
+      <a href="/status" class="nav-item {{ 'active' if active_page == 'status' }}">
+        {{ wicon('status') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        System Status
+      </a>
+      <a href="/audit" class="nav-item {{ 'active' if active_page == 'audit' }}">
+        {{ wicon('audit') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        Audit Log
+      </a>
+      </div></details>
+      <div class="nav-section-label">Workspace</div>
+      <a href="/settings" class="nav-item {{ 'active' if active_page == 'settings' }}">
+        {{ wicon('settings') }}
+        <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        Settings
+      </a>
+      {% endif %}
+    </nav>
+
+    <div class="px-2 py-3 border-t border-base-700">
+      <div class="flex items-center gap-2.5 px-2 py-1.5">
+        <div class="w-7 h-7 rounded-full bg-accent-500 flex items-center justify-center text-base-950 text-xs font-bold flex-shrink-0">
+          {{ current_user.full_name[:1].upper() if current_user and current_user.full_name else (current_user.email[:1].upper() if current_user else '?') }}
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="text-ink-100 text-xs font-medium truncate">{{ current_user.full_name or current_user.email if current_user else '' }}</div>
+          <div class="text-ink-700 text-xs capitalize">{{ current_user.role | replace('_', ' ') if current_user else '' }}</div>
+        </div>
+        <form method="post" action="/auth/logout" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="text-ink-700 hover:text-ink-100 transition-colors" title="Sign out">
+          {{ wicon('logout', 'w-4 h-4 custom-icon') }}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+        </button></form>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="flex-1 flex flex-col min-w-0 overflow-hidden bg-base-900">
+    <header id="app-header" class="bg-base-900 border-b border-base-700 flex items-center justify-between px-6 py-3 flex-shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <button type="button" class="mobile-menu-button navigation-toggle-button" @click="toggleNavigation()" :aria-expanded="navigationExpanded" aria-controls="app-sidebar" aria-label="Toggle navigation">
+          {{ wicon('menu', 'custom-icon') }}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <nav class="app-breadcrumb flex items-center gap-2 text-sm text-ink-500">{% block breadcrumb %}{% endblock %}</nav>
+      </div>
+      <button type="button" class="command-trigger" @click="openCommand()" aria-label="Open navigation launcher">
+        {{ wicon('search', 'custom-icon') }}
+        <span>Jump to…</span><kbd>Ctrl K</kbd>
+      </button>
+      <div class="flex items-center gap-2">
+        <span class="control-plane-status"><i></i><span>Control plane online</span></span>
+        <a href="/alerts" class="header-icon-button relative" aria-label="View alerts">
+          {{ wicon('bell', 'w-5 h-5 custom-icon') }}
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+          {% if unread_notifications and unread_notifications > 0 %}
+          <span class="absolute -top-0.5 -right-0.5 w-4 h-4 bg-status-critical rounded-full text-base-950 text-xs flex items-center justify-center font-bold">{{ unread_notifications if unread_notifications < 10 else "9+" }}</span>
+          {% endif %}
+        </a>
+      </div>
+    </header>
+
+    <div id="app-flash" class="px-6 pt-4 space-y-2 flex-shrink-0">
+      {% for incident in platform_incidents %}
+      <div class="flash flash-warning"><span class="flex-1"><strong>{{ incident.title }}</strong> · {{ incident.summary or incident.status|replace('_',' ') }}</span><span class="badge">{{ incident.status }}</span></div>
+      {% endfor %}
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+        {# "credential" flashes (e.g. a newly generated tenant admin
+           password) must NOT auto-dismiss — there's no other way to see
+           that value again, unlike ordinary success/error notices. #}
+        <div class="flash flash-{{ 'warning' if category == 'credential' else category }} fade-in {{ 'font-mono-data' if category == 'credential' }}"
+             x-data x-init="{{ 'false' if category == 'credential' else 'autoDismissFlash($el)' }}">
+          <span class="flex-1">{{ message }}</span>
+          <button @click="$el.closest('.flash').remove()" class="opacity-50 hover:opacity-100">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        {% endfor %}
+      {% endwith %}
+    </div>
+
+    <main id="app-main" class="flex-1 overflow-y-auto px-6 py-6"><div class="app-content">{% block content %}{% endblock %}</div></main>
+  </div>
+</div>
+
+{% include "partials/page_help.html" %}
+
+<dialog id="warden-action-dialog" class="warden-action-dialog" data-tone="warning" aria-labelledby="warden-action-title">
+  <div class="warden-action-symbol" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M12 8v4.5M12 16h.01M10.3 4.65 2.8 17.5A1.7 1.7 0 0 0 4.27 20h15.46a1.7 1.7 0 0 0 1.47-2.5L13.7 4.65a1.97 1.97 0 0 0-3.4 0Z"/></svg>
+  </div>
+  <div class="warden-action-copy">
+    <span class="warden-action-eyebrow">VERIFY ACTION</span>
+    <h2 id="warden-action-title" data-dialog-title>Confirm action</h2>
+    <p data-dialog-message></p>
+    <small data-dialog-detail hidden></small>
+    <label data-dialog-input-wrap hidden>Reason
+      <textarea data-dialog-input rows="3" maxlength="500"></textarea>
+    </label>
+  </div>
+  <div class="warden-action-buttons">
+    <button type="button" class="btn btn-secondary" data-dialog-cancel>Cancel</button>
+    <button type="button" class="btn btn-amber" data-dialog-confirm>Continue</button>
+  </div>
+</dialog>
+
+{% if not is_superadmin %}
+<nav class="mobile-tab-bar" aria-label="Mobile navigation">
+  <a href="/" class="{{ 'active' if active_page == 'dashboard' }}">{{ wicon('dashboard', 'custom-icon') }}<span>Home</span></a>
+  <a href="/endpoints" class="{{ 'active' if active_page == 'endpoints' }}">{{ wicon('endpoint', 'custom-icon') }}<span>Devices</span></a>
+  <a href="/directory" class="{{ 'active' if active_page == 'directory' }}">{{ wicon('users', 'custom-icon') }}<span>People</span></a>
+  <a href="/alerts" class="{{ 'active' if active_page == 'alerts' }}">{{ wicon('alerts', 'custom-icon') }}<span>Alerts</span></a>
+  <button type="button" @click="toggleNavigation()">{{ wicon('menu', 'custom-icon') }}<span>More</span></button>
+</nav>
+{% endif %}
+
+<div id="route-progress" aria-hidden="true"><i></i></div>
+
+<div class="command-backdrop" x-show="commandOpen" x-cloak @click.self="closeCommand()">
+  <section class="command-panel" role="dialog" aria-modal="true" aria-label="Navigate Warden">
+    <div class="command-input-row">
+      {{ wicon('search', 'custom-icon') }}
+      <input id="warden-command-input" x-model="commandQuery" placeholder="Find a page or workflow" autocomplete="off" @keydown.escape.prevent="closeCommand()" @keydown.enter.prevent="openFirstCommandResult()">
+      <kbd>Esc</kbd>
+    </div>
+    <div class="command-results">
+      {% if is_superadmin %}
+      <a href="/admin" x-show="commandMatches('platform overview')"><span>Platform overview</span><small>Global operations</small></a>
+      <a href="/admin/tenants" x-show="commandMatches('tenants organizations')"><span>Tenants</span><small>Organizations and access</small></a>
+      <a href="/admin/platform-health" x-show="commandMatches('platform health services')"><span>Platform health</span><small>Services and dependencies</small></a>
+      {% else %}
+      <a href="/" x-show="commandMatches('dashboard overview home')"><span>Dashboard</span><small>Fleet health at a glance</small></a>
+      <a href="/endpoints" x-show="commandMatches('endpoints devices computers remote')"><span>Endpoints</span><small>Devices, remote access and actions</small></a>
+      <a href="/topology" x-show="commandMatches('topology floor room map location computers')"><span>Computer topology</span><small>Live floor map and device presence</small></a>
+      <a href="/directory" x-show="commandMatches('directory identities users accounts')"><span>Directory</span><small>People, access and device assignment</small></a>
+      <a href="/apps" x-show="commandMatches('apps software deployment')"><span>Apps</span><small>Software library and deployment</small></a>
+      <a href="/jobs" x-show="commandMatches('jobs actions automation activity')"><span>Jobs</span><small>Action history and results</small></a>
+      <a href="/escalations" x-show="commandMatches('approvals escalations privileged')"><span>Approvals</span><small>Review privileged operations</small></a>
+      <a href="/alerts" x-show="commandMatches('alerts incidents attention')"><span>Alerts</span><small>Items needing attention</small></a>
+      <a href="/compliance" x-show="commandMatches('compliance security posture')"><span>Compliance</span><small>Security posture</small></a>
+      <a href="/settings/policy-templates" x-show="commandMatches('policy group gpo templates')"><span>Policy templates</span><small>Configure and deploy device policy</small></a>
+      <a href="/settings/tokens" x-show="commandMatches('enroll enrollment installer token agent')"><span>Enrollment</span><small>Connect new endpoints</small></a>
+      <a href="/settings" x-show="commandMatches('settings workspace configuration')"><span>Settings</span><small>Tenant configuration</small></a>
+      {% endif %}
+    </div>
+    <footer><span>Type to filter</span><span><kbd>Enter</kbd> open highlighted result</span></footer>
+  </section>
+</div>
+
+<script nonce="{{ csp_nonce }}" src="/static/vendor/htmx.min.js?v={{ asset_v }}"></script>
+<script nonce="{{ csp_nonce }}" src="/static/vendor/chart.min.js?v={{ asset_v }}"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/form-ui.js?v={{ asset_v }}"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/warden.js?v={{ asset_v }}"></script>
+<script nonce="{{ csp_nonce }}" defer src="/static/vendor/alpinejs.min.js?v={{ asset_v }}"></script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

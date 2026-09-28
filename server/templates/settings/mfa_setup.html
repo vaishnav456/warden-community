@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Set Up Two-Factor Authentication{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Set Up 2FA</span>{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto">
+  <h1 class="text-xl font-bold text-ink-100 mb-6">Set Up Two-Factor Authentication</h1>
+  {% if error %}
+  <div class="mb-4 px-4 py-3 bg-status-critical/10 border border-status-critical/25 rounded-lg text-sm text-status-critical">{{ error }}</div>
+  {% endif %}
+  <div class="bg-base-850 rounded-xl border border-base-600 p-6 space-y-5">
+    <div class="mfa-qr-frame">
+      <img src="data:image/png;base64,{{ qr_b64 }}" alt="QR Code" class="w-48 h-48 rounded-lg">
+    </div>
+    <div>
+      <p class="text-sm text-ink-300">Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.).</p>
+      <p class="text-sm text-ink-500 mt-2">Or enter manually: <code class="bg-base-900 border border-base-600 px-2 py-0.5 rounded font-mono-data text-xs text-ink-300">{{ secret }}</code></p>
+    </div>
+    <div>
+      <h3 class="text-sm font-semibold text-ink-300 mb-2">Backup Codes <span class="text-ink-700 font-normal">(save these now)</span></h3>
+      <div class="grid grid-cols-2 gap-2">
+        {% for code in backup_codes %}
+        <code class="bg-base-900 border border-base-600 px-3 py-1.5 rounded text-xs font-mono-data text-ink-300 text-center">{{ code }}</code>
+        {% endfor %}
+      </div>
+    </div>
+    <form action="/setup-mfa" method="POST" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div><label class="form-label">Verify Code</label>
+        <input type="text" name="code" required autocomplete="one-time-code" maxlength="8"
+               class="form-input text-center text-xl tracking-widest font-mono-data"
+               placeholder="000000" autofocus></div>
+      <button type="submit" class="btn btn-primary w-full justify-center py-2">Enable 2FA</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

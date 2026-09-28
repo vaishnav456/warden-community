@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Settings — Firewall Policies{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Firewall Policies</span>{% endblock %}
+
+{% block content %}
+{% set settings_section = 'firewall_policies' %}
+{% set ns = namespace(rules=0, enabled=0) %}
+{% for policy in templates %}{% for rule in policy.firewall_rules %}{% set ns.rules = ns.rules + 1 %}{% if rule.enabled is not defined or rule.enabled %}{% set ns.enabled = ns.enabled + 1 %}{% endif %}{% endfor %}{% endfor %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="flex-1 min-w-0" x-data="firewallPolicyPage" data-installed-applications='{{ installed_applications|tojson }}' data-deployment-endpoints='{{ deployment_endpoints|tojson }}'>
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+      <div>
+        <h2 class="text-base font-semibold text-ink-100">Windows Firewall Policies</h2>
+        <p class="text-xs text-ink-500 mt-1">GPO-style application, network and port rules deployed through signed Warden policy jobs.</p>
+      </div>
+      {% if can_manage %}<button type="button" class="btn btn-primary btn-sm" @click="newPolicy()"><svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#firewall"></use></svg>Create firewall policy</button>{% endif %}
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div class="stat-card"><div class="stat-card-label">Policies</div><div class="stat-card-value">{{ templates|length }}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Total rules</div><div class="stat-card-value">{{ ns.rules }}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Enabled rules</div><div class="stat-card-value text-status-online">{{ ns.enabled }}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Recent deployments</div><div class="stat-card-value">{{ deployments|length }}</div></div>
+    </div>
+
+    {% if can_manage %}
+    <section class="mb-6 rounded-xl border border-base-600 bg-base-850 p-4">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div><p class="text-xs font-semibold text-ink-100 uppercase tracking-wide">Reviewed starters</p><p class="text-xs text-ink-500 mt-1">Open as an editable draft. Nothing is applied until you save and deploy it.</p></div>
+        <div class="flex flex-wrap gap-2">
+          <button class="btn btn-secondary btn-sm" type="button" @click="useStarter('public_network')">Public network protection</button>
+          <button class="btn btn-secondary btn-sm" type="button" @click="useStarter('lateral_movement')">Lateral movement controls</button>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    <div class="w-table-wrap mb-7">
+      <div class="overflow-x-auto">
+        <table class="w-table">
+          <thead><tr><th>Policy</th><th>Rules</th><th>Coverage</th><th>Created</th><th class="text-right">Actions</th></tr></thead>
+          <tbody>
+          {% for policy in templates %}
+            {% set enabled_rules = policy.firewall_rules|selectattr('enabled', 'undefined')|list|length + policy.firewall_rules|selectattr('enabled', 'equalto', true)|list|length %}
+            <tr>
+              <td><div class="font-medium text-ink-100">{{ policy.name }}</div><div class="text-xs text-ink-500 mt-1">{{ policy.description or 'Windows Firewall rule policy' }}</div></td>
+              <td><span class="font-mono-data">{{ enabled_rules }}</span> enabled · {{ policy.firewall_rules|length }} total</td>
+              <td class="text-xs text-ink-500">Applications · IP/CIDR · ports · profiles</td>
+              <td class="text-xs text-ink-500">{{ policy.created_at|timeago }}</td>
+              <td class="text-right whitespace-nowrap">
+                {% if can_deploy %}<button type="button" class="btn btn-primary btn-sm" data-template-id="{{ policy.id }}" data-template-name="{{ policy.name }}" @click="openDeploy($el)">Deploy</button>{% endif %}
+                {% if can_manage %}
+                <button type="button" class="btn btn-secondary btn-sm" data-template-id="{{ policy.id }}" data-template-name="{{ policy.name }}" data-template-description="{{ policy.description or '' }}" data-rules='{{ policy.firewall_rules|tojson }}' @click="editPolicy($el)">Edit</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-template-name="{{ policy.name }}" data-template-description="{{ policy.description or '' }}" data-rules='{{ policy.firewall_rules|tojson }}' @click="clonePolicy($el)">Clone</button>
+                <button class="btn btn-ghost btn-sm" hx-delete="{{ url_for('settings.delete_policy_template', id=policy.id) }}" hx-confirm="Delete firewall policy {{ policy.name }}? Existing endpoint rules are unchanged until another policy is deployed." hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5"><div class="empty-state py-10"><p>No firewall policies yet. Start with a reviewed template or create one from scratch.</p></div></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="mb-3"><h3 class="text-sm font-semibold text-ink-100">Recent firewall deployments</h3><p class="text-xs text-ink-500 mt-1">The same staged rollout and per-endpoint job tracking used by Group Policy templates.</p></div>
+    <div class="w-table-wrap">
+      <div class="overflow-x-auto"><table class="w-table">
+        <thead><tr><th>Policy</th><th>Branch</th><th>Progress</th><th>Status</th><th>Started</th></tr></thead>
+        <tbody>{% for deployment in deployments %}{% set counts = deployment.counts %}<tr>
+          <td class="font-medium text-ink-100">{{ deployment.template_name }}</td><td>{{ deployment.branch_name }}</td>
+          <td><span class="text-status-online">{{ counts.completed }} complete</span>{% if counts.pending %} · {{ counts.pending }} queued{% endif %}{% if counts.failed %} · <span class="text-status-critical">{{ counts.failed }} failed</span>{% endif %}</td>
+          <td><span class="badge badge-{{ 'completed' if deployment.status == 'completed' else 'running' }}">{{ deployment.status }}</span></td><td>{{ deployment.created_at|timeago }}</td>
+        </tr>{% else %}<tr><td colspan="5"><div class="empty-state py-8"><p>No firewall deployments yet.</p></div></td></tr>{% endfor %}</tbody>
+      </table></div>
+    </div>
+
+    <template x-if="editorOpen"><div>
+      <div class="slide-overlay" @click="closeEditor()"></div>
+      <section class="slide-panel firewall-policy-panel slide-in-right" aria-label="Firewall policy editor">
+        <header class="slide-panel-header"><div><h3 class="text-sm font-semibold" x-text="editorTitle"></h3><p class="text-xs text-ink-500 mt-1">Windows Firewall with Advanced Security · computer policy</p></div><button class="btn btn-icon" @click="closeEditor()" aria-label="Close">×</button></header>
+        <div class="slide-panel-body space-y-5">
+          <div class="grid sm:grid-cols-2 gap-3">
+            <div><label class="form-label">Policy name</label><input class="form-input" maxlength="120" x-model.trim="policyName" placeholder="Example: Finance workstation firewall"></div>
+            <div><label class="form-label">Description</label><input class="form-input" maxlength="500" x-model.trim="policyDescription" placeholder="Change purpose and scope"></div>
+          </div>
+          <div class="rounded-xl border border-accent-500/20 bg-accent-500/5 p-3"><p class="text-xs font-medium text-ink-100">Safe ownership boundary</p><p class="text-xs text-ink-500 mt-1">Deployment enables Windows Firewall on all profiles and replaces only rules owned by Warden (identified by the “Warden Managed:” name prefix). Existing Windows, domain and application rules are preserved. Warden maintains a separate agent HTTPS allow rule; outbound blocks must be application-specific so they cannot cut off device management.</p></div>
+          <div class="flex items-center justify-between"><div><h4 class="text-sm font-semibold text-ink-100">Policy rules</h4><p class="text-xs text-ink-500 mt-1">Rules are evaluated by Windows Firewall; block rules take precedence over conflicting allow rules.</p></div><button type="button" class="btn btn-secondary btn-sm" @click="addRule()">+ Add rule</button></div>
+
+          <template x-for="(rule, index) in rules" :key="rule.id"><article class="firewall-rule-card">
+            <div class="firewall-rule-heading">
+              <div class="flex items-center gap-2"><span class="firewall-rule-number" x-text="index + 1"></span><input class="form-input !py-1" maxlength="120" x-model.trim="rule.name" placeholder="Rule name"></div>
+              <div class="flex items-center gap-2"><label class="form-check text-xs"><input type="checkbox" x-model="rule.enabled"> Enabled</label><button type="button" class="btn btn-ghost btn-sm" @click="moveRuleUp(index)" :disabled="index === 0">↑</button><button type="button" class="btn btn-ghost btn-sm" @click="moveRuleDown(index)" :disabled="index === rules.length - 1">↓</button><button type="button" class="btn btn-ghost btn-sm text-status-critical" @click="removeRule(index)" :disabled="rules.length === 1">Remove</button></div>
+            </div>
+            <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 mt-4">
+              <div><label class="form-label">Direction</label><select class="form-input form-select" x-model="rule.direction"><option value="in">Inbound</option><option value="out">Outbound</option></select></div>
+              <div><label class="form-label">Action</label><select class="form-input form-select" x-model="rule.action"><option value="allow">Allow</option><option value="block">Block</option></select></div>
+              <div><label class="form-label">Protocol</label><select class="form-input form-select" x-model="rule.protocol"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></div>
+              <div><label class="form-label">Analysis weight</label><input type="number" min="-1000" max="1000" class="form-input" x-model.number="rule.priority"><p class="form-help">Higher wins in Warden flow analysis.</p></div>
+              <div><label class="form-label">Profiles</label><div class="firewall-profile-options"><label><input type="checkbox" x-model="rule.profileDomain"> Domain</label><label><input type="checkbox" x-model="rule.profilePrivate"> Private</label><label><input type="checkbox" x-model="rule.profilePublic"> Public</label></div></div>
+            </div>
+            <div class="grid lg:grid-cols-2 gap-3 mt-3">
+              <div>
+                <label class="form-label">Application <span class="text-ink-700">(optional)</span></label>
+                <select class="form-input form-select text-xs mb-2" x-model="rule.inventoryPath" @change="selectInstalledApplication(rule)">
+                  <option value="">Choose an installed application…</option>
+                  <template x-for="application in installedApplications" :key="application.path.toLowerCase()">
+                    <option :value="application.path" x-text="installedApplicationLabel(application)"></option>
+                  </template>
+                </select>
+                <label class="form-label">Executable path</label>
+                <input class="form-input font-mono-data text-xs" x-model.trim="rule.program" @input="rule.inventoryPath = matchingInstalledPath(rule.program)" placeholder="C:\Program Files\Company App\app.exe">
+                <p class="form-help" x-show="installedApplications.length">Pick an inventoried app or enter/edit its absolute path. Leave blank for all applications.</p>
+                <p class="form-help" x-show="!installedApplications.length">No executable paths have been reported yet. Collect Software after updating an endpoint, or enter an absolute path manually.</p>
+              </div>
+              <div><label class="form-label">Remote IP addresses or CIDR <span class="text-ink-700">(optional)</span></label><textarea class="form-input font-mono-data text-xs min-h-20" x-model="rule.remoteAddresses" placeholder="10.20.0.0/16&#10;203.0.113.8"></textarea><p class="form-help">One per line or comma-separated.</p></div>
+              <div><label class="form-label">Local ports <span class="text-ink-700">(optional)</span></label><input class="form-input font-mono-data text-xs" x-model.trim="rule.localPorts" placeholder="443, 8000-8010"></div>
+              <div><label class="form-label">Remote ports <span class="text-ink-700">(optional)</span></label><input class="form-input font-mono-data text-xs" x-model.trim="rule.remotePorts" placeholder="443, 445"></div>
+            </div>
+          </article></template>
+          <div x-show="editorError" class="rounded-lg border border-status-critical/25 bg-status-critical/5 p-3 text-xs text-status-critical" x-text="editorError"></div>
+        </div>
+        <footer class="slide-panel-footer"><button class="btn btn-secondary" @click="closeEditor()">Cancel</button><button class="btn btn-primary" @click="savePolicy()" :disabled="saving"><span x-show="!saving">Save policy</span><span x-show="saving">Saving…</span></button></footer>
+      </section>
+    </div></template>
+
+    <template x-if="deployOpen"><div>
+      <div class="slide-overlay" @click="closeDeploy()"></div>
+      <section class="slide-panel slide-in-right"><header class="slide-panel-header"><div><h3 class="text-sm font-semibold">Deploy firewall policy</h3><p class="text-xs text-ink-500 mt-1" x-text="deployName"></p></div><button class="btn btn-icon" @click="closeDeploy()">×</button></header>
+        <div class="slide-panel-body space-y-4">
+          <div><label class="form-label">Assign policy to</label><select class="form-input form-select" x-model="deployTargetMode" @change="onDeployTargetModeChange()"><option value="branch">Entire branch</option><option value="tag">Endpoint group / tag</option><option value="endpoints">Specific agents</option></select><p class="form-help">Endpoint tags act as reusable agent groups.</p></div>
+          <div><label class="form-label">Branch</label><select class="form-input form-select" x-model="deployBranchId" @change="onDeployBranchChange()"><option value="">Choose a branch</option>{% for branch in branches %}<option value="{{ branch.id }}">{{ branch.name }} — {{ branch.endpoint_count }} active endpoints</option>{% endfor %}</select></div>
+          <div x-show="deployTargetMode === 'tag'"><label class="form-label">Endpoint group / tag</label><input class="form-input" x-model.trim="deployTag" maxlength="64" placeholder="Example: finance or pilot"><p class="form-help">Only Windows agents in this branch carrying this tag are eligible.</p></div>
+          <div x-show="deployTargetMode === 'endpoints'" class="space-y-2">
+            <label class="form-label">Specific agents</label>
+            <div class="rounded-xl border border-base-600 max-h-56 overflow-y-auto divide-y divide-base-700">
+              <template x-for="endpoint in deployEndpointOptions()" :key="endpoint.id"><label class="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-white/[0.02]"><input type="checkbox" :checked="deployEndpointIds.includes(endpoint.id)" @change="toggleDeployEndpoint(endpoint.id)"><span class="flex-1"><span class="block text-sm text-ink-100" x-text="endpoint.hostname"></span><span class="block text-xs text-ink-500" x-text="endpoint.status"></span></span></label></template>
+              <p x-show="deployBranchId && deployEndpointOptions().length === 0" class="p-3 text-xs text-ink-500">No Windows agents are available in this branch.</p>
+              <p x-show="!deployBranchId" class="p-3 text-xs text-ink-500">Choose a branch first.</p>
+            </div>
+          </div>
+          <div><label class="form-label">Rollout ring</label><select class="form-input form-select" x-model.number="rolloutPercentage"><option value="10">Pilot · 10%</option><option value="25">Early · 25%</option><option value="50">Broad · 50%</option><option value="100">Production · 100%</option></select></div>
+          <div class="rounded-xl border border-accent-500/20 bg-accent-500/5 p-3"><p class="text-xs font-medium text-ink-100">Deployment preview</p><p class="text-xs text-ink-500 mt-1"><span x-text="deployEligibleCount()"></span> eligible agent(s); approximately <span x-text="deployTargetCount()"></span> will receive this rollout ring.</p></div>
+          <div><label class="form-label">Reason / change note</label><textarea class="form-input min-h-20" x-model.trim="deployReason"></textarea></div>
+          <div class="rounded-xl border border-status-warning/20 bg-status-warning/5 p-3"><p class="text-xs text-ink-300">Deploying replaces the endpoint’s previous <strong>Warden Managed</strong> rules. Windows and third-party rules outside Warden’s name prefix remain unchanged.</p></div>
+          <div x-show="deployError" class="text-xs text-status-critical" x-text="deployError"></div><div x-show="deployResult" class="text-xs text-status-online" x-text="deployResult"></div>
+        </div>
+        <footer class="slide-panel-footer"><button class="btn btn-secondary" @click="closeDeploy()">Cancel</button><button class="btn btn-primary" @click="deployPolicy()" :disabled="!canDeployPolicy()"><span x-show="!deploying">Deploy policy</span><span x-show="deploying">Queueing…</span></button></footer>
+      </section>
+    </div></template>
+  </div>
+</div>
+{% endblock %}

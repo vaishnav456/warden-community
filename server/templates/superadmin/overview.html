@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% set active_page = "superadmin_overview" %}
+{% block title %}SaaS Overview{% endblock %}
+{% block breadcrumb %}<span>Superadmin</span><span>/</span><span class="text-ink-100">Overview</span>{% endblock %}
+{% block content %}
+<div class="fleet-page-header"><div><h1>SaaS control plane</h1><p>Tenant health, capacity and commercial state across the Warden platform.</p></div><a href="{{ url_for('superadmin.tenants') }}" class="btn btn-primary">{{ wicon('tenants', 'button-glyph') }} Manage tenants</a></div>
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-7">
+{% for label,value in [('Tenants',totals.tenants),('Active',totals.active),('Needs attention',totals.attention),('Agents',totals.endpoints),('Online now',totals.online)] %}
+<div class="stat-card"><div class="stat-card-label">{{ label }}</div><div class="stat-card-value">{{ value }}</div></div>
+{% endfor %}
+</div>
+<div class="w-card mb-6"><div class="p-4 border-b border-base-700"><h2 class="text-sm font-semibold text-ink-100">Attention queue</h2></div><div class="p-4 text-sm text-ink-400">
+{% set attention = companies|selectattr('_subscription.status','in',['past_due','unpaid'])|list %}
+{% if totals.attention %}{{ totals.attention }} tenant(s) need lifecycle or subscription review. <a class="text-accent-400" href="{{ url_for('superadmin.tenants') }}">Review now</a>{% else %}No tenant lifecycle or billing-state exceptions.{% endif %}
+</div></div>
+<div class="w-table-wrap"><table class="w-table"><thead><tr><th>Tenant</th><th>Plan</th><th>Lifecycle</th><th>Agents</th><th>Online</th><th></th></tr></thead><tbody>
+{% for c in companies %}<tr><td><div class="text-sm text-ink-100 font-medium">{{ c.name }}</div><div class="text-xs text-ink-500 font-mono-data">{{ c.slug }}</div></td><td>{{ c._subscription.plans.name if c._subscription else 'Legacy' }}</td><td><span class="badge badge-{{ 'online' if c._subscription and c._subscription.lifecycle_state == 'active' else 'offline' }}">{{ c._subscription.lifecycle_state|replace('_',' ') if c._subscription else 'active' }}</span></td><td>{{ c._usage.endpoints }}</td><td>{{ c._usage.online_endpoints }}</td><td class="text-right"><a class="btn btn-secondary btn-sm" href="{{ url_for('superadmin.tenant_detail',company_id=c.id) }}">Tenant 360 {{ wicon('arrow-right', 'button-glyph') }}</a></td></tr>
+{% endfor %}</tbody></table></div>
+{% endblock %}

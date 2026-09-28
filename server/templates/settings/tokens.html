@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block title %}Settings — Enrollment Tokens{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Enrollment Tokens</span>{% endblock %}
+
+{% block content %}
+{% set settings_section = 'tokens' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="enrollment-page flex-1 min-w-0">
+    {% set enrollment = namespace(active_profiles=0, ready_installers=0, registered_devices=0) %}
+    {% for profile in profiles %}
+      {% if profile.is_active %}{% set enrollment.active_profiles = enrollment.active_profiles + 1 %}{% endif %}
+      {% set enrollment.registered_devices = enrollment.registered_devices + (profile.device_claims|length) %}
+    {% endfor %}
+    {% for token in tokens %}{% if token.build_status == 'completed' and not token.is_expired %}{% set enrollment.ready_installers = enrollment.ready_installers + 1 %}{% endif %}{% endfor %}
+
+    <section class="enrollment-hero">
+      <div class="enrollment-hero-copy">
+        <span class="enrollment-eyebrow"><i></i> Device onboarding</span>
+        <h1>Zero-touch enrollment</h1>
+        <p>Prepare a secure device profile once, then deploy the same Warden installer through Intune, Autopilot, GPO, RMM, or by hand.</p>
+      </div>
+      <div class="enrollment-health" aria-label="Enrollment summary">
+        <div><strong>{{ enrollment.active_profiles }}</strong><span>Active profiles</span></div>
+        <div><strong>{{ enrollment.ready_installers }}</strong><span>Ready installers</span></div>
+        <div><strong>{{ enrollment.registered_devices }}</strong><span>Reserved devices</span></div>
+      </div>
+      <div class="enrollment-upgrade-note">
+        <span class="enrollment-note-icon" aria-hidden="true">↻</span>
+        <p><strong>Already installed?</strong> To reconnect or upgrade, run the MSI as Administrator on Windows or <span class="font-mono-data">sudo ./install.sh</span> on Linux/macOS. Warden updates the existing service in place and does not install a second agent.</p>
+      </div>
+    </section>
+
+    <nav class="enrollment-steps" aria-label="Enrollment workflow">
+      <a href="#enrollment-profile"><span>1</span><strong>Define profile</strong><small>Identity &amp; security</small></a>
+      <i aria-hidden="true"></i>
+      <a href="#enrollment-installer"><span>2</span><strong>Build installer</strong><small>Choose platform</small></a>
+      <i aria-hidden="true"></i>
+      <a href="#enrollment-deployments"><span>3</span><strong>Deploy &amp; track</strong><small>Monitor status</small></a>
+    </nav>
+
+    <div id="enrollment-profile" class="enrollment-stage enrollment-stage-primary">
+      <div class="enrollment-stage-heading">
+        <span class="enrollment-stage-number">01</span>
+        <div><span class="enrollment-kicker">Configuration</span><h2>Create an enrollment profile</h2><p>Profiles hold assignment, identity, security, and preparation rules. Installer credentials can be rotated without rebuilding the profile.</p></div>
+      </div>
+      <form method="POST" action="{{ url_for('settings.create_enrollment_profile') }}" x-data="enrollmentProfileForm" class="enrollment-profile-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <section class="enrollment-form-section">
+          <div class="enrollment-form-title"><span>A</span><div><h3>Assignment</h3><p>Name the workflow and choose where devices belong.</p></div></div>
+          <div class="enrollment-form-grid">
+            <div><label class="form-label">Profile name</label><input name="name" class="form-input" maxlength="80" placeholder="Head Office laptops" required></div>
+            <div><label class="form-label">Target branch</label><select name="branch_id" class="form-input form-select" required><option value="">Select branch…</option>{% for branch in branches %}<option value="{{ branch.id }}">{{ branch.name }}{% if branch.city %} ({{ branch.city }}){% endif %}</option>{% endfor %}</select></div>
+            <div><label class="form-label">Deployment method</label><select name="deployment_method" class="form-input form-select"><option value="intune">Microsoft Intune</option><option value="autopilot">Windows Autopilot</option><option value="gpo">Active Directory GPO</option><option value="sccm">SCCM</option><option value="rmm">Third-party RMM</option><option value="manual">Manual</option></select></div>
+          </div>
+        </section>
+
+        <section class="enrollment-form-section">
+          <div class="enrollment-form-title"><span>B</span><div><h3>Device identity</h3><p>Apply a predictable name and optional private DNS identity.</p></div></div>
+          <div class="enrollment-form-grid enrollment-form-grid-two">
+            <div><label class="form-label">Managed hostname <span class="text-ink-700">Optional pattern</span></label><input name="hostname_pattern" class="form-input" placeholder="MUM-LT-*"><p class="form-hint">Applied after enrollment. * generates a stable device suffix.</p></div>
+            <div><label class="form-label">Managed DNS suffix <span class="text-ink-700">Optional</span></label><input name="domain_suffix" class="form-input" placeholder="corp.example.com"><p class="form-hint">Works without Active Directory or an existing domain join.</p></div>
+          </div>
+          <div class="enrollment-choice-row">
+            <label class="enrollment-choice"><input type="checkbox" name="reclaim_existing" value="1" checked><span><strong>Recognise reinstalled devices</strong><small>Reconnect matching hardware instead of consuming another license.</small></span></label>
+            <label class="enrollment-choice"><input type="checkbox" name="require_pre_registration" value="1"><span><strong>Require hardware approval</strong><small>Only devices registered to this profile may enroll.</small></span></label>
+          </div>
+        </section>
+
+        <section class="enrollment-feature-panel enrollment-feature-secure">
+          <div class="enrollment-feature-heading">
+            <div><span class="enrollment-feature-icon">W</span><div><h3>Warden-only device</h3><p>Turn the endpoint into a Warden-managed workspace after identity assignment.</p></div></div>
+            <label class="mobile-switch" title="Enable Warden-only mode"><input type="checkbox" name="warden_only_mode" value="1" x-model="wardenOnly" checked><span></span></label>
+          </div>
+          <p class="enrollment-safety-copy">Enabled by default. After the first Warden identity is successfully provisioned, Warden creates the recovery administrator, disables other interactive local accounts, and restarts the PC. It never locks the device before both approved accounts are usable.</p>
+          <div class="enrollment-form-grid enrollment-form-grid-two" x-show="wardenOnly">
+            <div><label class="form-label">Recovery administrator</label><input name="recovery_admin_username" class="form-input" value="WardenRecovery" maxlength="20" autocomplete="off" :required="wardenOnly" :disabled="!wardenOnly"></div>
+            <div><label class="form-label">Recovery administrator password</label><input name="recovery_admin_password" type="password" class="form-input" minlength="12" autocomplete="new-password" placeholder="Stored tenant-encrypted" :required="wardenOnly" :disabled="!wardenOnly"></div>
+          </div>
+        </section>
+
+        <section class="enrollment-feature-panel">
+          <div class="enrollment-feature-heading"><div><span class="enrollment-feature-icon preparation">✓</span><div><h3>Automatic preparation</h3><p>Queue signed policy, application, and update jobs as soon as enrollment succeeds.</p></div></div></div>
+          <div class="enrollment-form-grid enrollment-form-grid-two">
+            <div><label class="form-label">Enrollment policy</label><select name="policy_template_id" class="form-input form-select"><option value="builtin:warden_enrollment_baseline" selected>Warden Enrollment Baseline · Recommended</option><option value="">No automatic policy</option>{% for template in policy_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}</select><p class="form-hint">Applied automatically after the agent securely enrolls.</p></div>
+            <div><label class="form-label">Required applications</label><div class="enrollment-app-picker">{% for app in app_library %}<label class="form-check text-xs text-ink-300"><input type="checkbox" name="required_app_ids" value="{{ app.id }}"> {{ app.name }} {{ app.version }}</label>{% else %}<span class="text-xs text-ink-500">Upload applications in App Library first.</span>{% endfor %}</div></div>
+          </div>
+          <label class="enrollment-choice enrollment-choice-inline"><input type="checkbox" name="install_updates" value="1"><span><strong>Install operating-system updates</strong><small>Include available OS updates during first-time preparation.</small></span></label>
+        </section>
+
+        <div class="enrollment-form-action"><div><strong>Ready to save?</strong><span>You can create multiple profiles for different branches or device types.</span></div><button class="btn btn-primary" type="submit">Create enrollment profile <span aria-hidden="true">→</span></button></div>
+      </form>
+    </div>
+
+    {% if profiles %}
+    <section class="enrollment-saved-profiles">
+      <div class="enrollment-section-heading"><div><span class="enrollment-kicker">Reusable configurations</span><h2>Saved profiles</h2></div><span>{{ profiles|length }} total</span></div>
+    <div class="enrollment-profile-grid">
+      {% for profile in profiles %}
+      <article class="enrollment-profile-card {{ 'is-inactive' if not profile.is_active }}">
+        <div class="enrollment-profile-card-head">
+          <span class="enrollment-profile-monogram">{{ profile.name[:1]|upper }}</span>
+          <div><h3>{{ profile.name }}</h3><p>{{ profile.deployment_method|upper }} deployment</p></div>
+          <span class="enrollment-status {{ 'is-active' if profile.is_active }}"><i></i>{{ 'Active' if profile.is_active else 'Inactive' }}</span>
+        </div>
+        <div class="enrollment-profile-facts">
+          <div><span>Hostname</span><strong>{{ profile.hostname_pattern or 'Unchanged' }}</strong></div>
+          <div><span>DNS suffix</span><strong>{{ profile.domain_suffix or 'None' }}</strong></div>
+          <div><span>Reserved</span><strong>{{ profile.device_claims|length }} devices</strong></div>
+        </div>
+        <div class="enrollment-profile-tags">
+          <span>{{ 'Approval required' if profile.require_pre_registration else 'Installer access' }}</span>
+          {% if profile.reclaim_existing %}<span>Reinstall recovery</span>{% endif %}
+          {% if profile.warden_only_mode and profile.lockdown_config %}<span class="secure">Warden-only</span>{% else %}<span>Accounts preserved</span>{% endif %}
+          {% set preparation = profile.post_enrollment or {} %}
+          {% if preparation.policy_template_id %}<span>Policy ready</span>{% endif %}
+          {% if preparation.install_updates %}<span>OS updates</span>{% endif %}
+        </div>
+        <form method="POST" action="{{ url_for('settings.add_enrollment_devices', profile_id=profile.id) }}" class="enrollment-register-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label class="form-label">Pre-register hardware UUIDs <span class="text-ink-700">(one per line)</span></label>
+          <div><textarea name="hardware_ids" class="form-input" placeholder="4c4c4544-0038-..." required></textarea><button class="btn btn-secondary btn-sm" type="submit">Add devices</button></div>
+        </form>
+        {% if profile.is_active %}
+        <form method="POST" action="{{ url_for('settings.deactivate_enrollment_profile', profile_id=profile.id) }}" class="enrollment-deactivate-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">Deactivate profile</button>
+        </form>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    </section>
+
+    <details class="enrollment-instructions">
+      <summary><span><i>?</i> Deployment instructions</span><small>Intune, Autopilot, GPO, SCCM, RMM, Linux &amp; macOS</small></summary>
+      <div class="enrollment-instruction-grid">
+        <div><strong class="text-ink-200">Intune / Autopilot</strong><p class="mt-1">Upload the MSI as a required Windows app and assign it to the Autopilot device group. Install in system context before the Enrollment Status Page completes.</p></div>
+        <div><strong class="text-ink-200">Active Directory GPO</strong><p class="mt-1">Add the MSI under Computer Configuration → Software Installation, or run it from a computer startup script using <span class="font-mono-data">msiexec /i WardenAgent.msi /qn</span>.</p></div>
+        <div><strong class="text-ink-200">SCCM / third-party RMM</strong><p class="mt-1">Deploy the MSI silently in system context. Detection can use the Warden Agent Windows service. Re-running the MSI upgrades or reconnects the existing installation.</p></div>
+        <div><strong class="text-ink-200">Linux / macOS <span class="badge badge-alpha">Alpha</span></strong><p class="mt-1">Extract the ZIP and run <span class="font-mono-data">sudo ./install.sh</span>. Linux registers a systemd service; macOS registers a launch daemon. Pilot on non-critical devices first. Grant Screen Recording and Accessibility through local settings or MDM for remote control.</p></div>
+        <div><strong class="text-ink-200">Credential safety</strong><p class="mt-1">Use a limited enrollment count where practical and revoke the installer after rollout. Each enrolled endpoint receives its own API key and client certificate.</p></div>
+      </div>
+    </details>
+    {% endif %}
+
+    <!-- Generate new token form -->
+    <div id="enrollment-installer" class="enrollment-stage enrollment-installer-stage">
+      <div class="enrollment-stage-heading">
+        <span class="enrollment-stage-number">02</span>
+        <div><span class="enrollment-kicker">Distribution</span><h2>Generate deployment installer</h2><p>Bind an active profile to a short-lived installer for the target operating system.</p></div>
+      </div>
+      <form method="POST" action="{{ url_for('settings.create_token') }}" x-data="enrollmentTokenForm" class="space-y-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="enrollment-installer-grid">
+          <div class="enrollment-installer-profile">
+            <label class="form-label">Enrollment profile</label>
+            <select name="profile_id" class="form-input form-select" required>
+              <option value="">Select profile…</option>
+              {% for profile in profiles if profile.is_active %}
+              <option value="{{ profile.id }}">{{ profile.name }} · {{ profile.deployment_method|upper }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Expires in</label>
+            <select name="expiry_hours" class="form-input form-select">
+              <option value="24">24 hours</option>
+              <option value="48">48 hours</option>
+              <option value="168">7 days</option>
+              <option value="720">30 days</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Operating system</label>
+            <select name="target_platform" class="form-input form-select">
+              <option value="windows-amd64">Windows · x64</option>
+              <option value="linux-amd64">Linux · x64 — Alpha</option>
+              <option value="linux-arm64">Linux · ARM64 — Alpha</option>
+              <option value="darwin-arm64">macOS · Apple silicon — Alpha</option>
+              <option value="darwin-amd64">macOS · Intel — Alpha</option>
+            </select>
+          </div>
+        </div>
+        <div class="enrollment-installer-options">
+          <label class="enrollment-choice"><input type="checkbox" name="reusable" value="1" x-model="reusable" checked><span><strong>Reusable installer</strong><small>Recommended for GPO, SCCM, Intune, and other fleet-wide deployment.</small></span></label>
+          <div class="enrollment-max-uses" x-show="reusable" x-cloak>
+            <label class="form-label">Max enrollments <span class="text-ink-700">(blank = unlimited until expiry)</span></label>
+            <input type="number" name="max_uses" min="1" class="form-input" placeholder="Unlimited">
+          </div>
+          <button type="submit" class="btn btn-primary">Generate installer <span aria-hidden="true">→</span></button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Recent tokens table -->
+    <section id="enrollment-deployments" class="enrollment-deployments">
+      <div class="enrollment-section-heading"><div><span class="enrollment-kicker">Activity</span><h2>Deployment installers</h2></div><span>{{ tokens|length }} recent</span></div>
+    <div class="w-table-wrap enrollment-table-wrap">
+      <table class="w-table">
+        <thead><tr><th>Profile</th><th>Branch</th><th>Token (partial)</th><th>Created</th><th>Expires</th><th>Status</th><th>Build</th><th class="text-right">Download</th></tr></thead>
+        <tbody>
+          {% for token in tokens %}
+          <tr>
+            <td><div class="text-sm font-medium text-ink-100">{{ token.profile_name }}</div><div class="text-xs text-ink-500">{{ token.target_platform | replace('-', ' · ') | title }} {% if not token.target_platform.startswith('windows-') %}<span class="badge badge-alpha">Alpha</span>{% endif %}</div></td>
+            <td class="text-sm font-medium text-ink-100">{{ token.branch_name }}</td>
+            <td class="text-xs font-mono-data text-ink-300">{{ token.token_partial }}…</td>
+            <td class="text-xs text-ink-500">{{ token.created_at | timeago }}</td>
+            <td class="text-xs text-ink-500">{{ token.expires_at_str }}</td>
+            <td>
+              {% if token.max_uses == 1 %}
+                {% if token.used_at %}
+                <span class="badge badge-online text-xs">Used</span>
+                {% elif token.is_expired %}
+                <span class="badge badge-offline text-xs">Expired</span>
+                {% else %}
+                <span class="badge badge-pending text-xs">Active</span>
+                {% endif %}
+              {% else %}
+                {% if token.is_expired or not token.is_active %}
+                <span class="badge badge-offline text-xs">{{ token.use_count }}{% if token.max_uses %}/{{ token.max_uses }}{% endif %} used — closed</span>
+                {% else %}
+                <span class="badge badge-pending text-xs">{{ token.use_count }}{% if token.max_uses %}/{{ token.max_uses }}{% endif %} used</span>
+                {% endif %}
+              {% endif %}
+            </td>
+            <td>
+              {% if token.build_status == 'completed' %}
+              <span class="badge badge-online text-xs">Ready</span>
+              {% elif token.build_status == 'building' %}
+              <span class="badge badge-running text-xs">Building…</span>
+              {% elif token.build_status == 'failed' %}
+              <span class="badge badge-failed text-xs">Failed</span>
+              {% elif token.build_status == 'pending' %}
+              <span class="badge badge-pending text-xs">Queued</span>
+              {% else %}
+              <span class="text-xs text-ink-700">—</span>
+              {% endif %}
+            </td>
+            <td class="text-right">
+              {% if token.build_status == 'completed' and (token.max_uses != 1 or not token.used_at) and not token.is_expired %}
+              <a href="{{ url_for('build_service.download_installer', req_id=token.id) }}" class="btn btn-primary btn-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Zip
+              </a>
+              {% if token.msi_ready and token.target_platform == 'windows-amd64' %}
+              <a href="{{ url_for('build_service.download_msi', req_id=token.id) }}" class="btn btn-secondary btn-sm" title="Recommended for reconnecting or upgrading an existing agent; also supports GPO, SCCM and Intune">
+                MSI
+              </a>
+              {% endif %}
+              {% else %}
+              <span class="text-xs text-ink-700">—</span>
+              {% endif %}
+              {% if token.token_id and token.is_active and not token.is_expired %}
+              <form method="POST" action="{{ url_for('settings.revoke_enrollment_token', token_id=token.token_id) }}" class="inline-block ml-1">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-secondary btn-sm" type="submit">Revoke</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8"><div class="empty-state py-10"><p class="text-sm text-ink-500">No installers generated yet</p></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

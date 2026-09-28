@@ -1,0 +1,7 @@
+{% for req in requests %}
+{% include "partials/escalation_card.html" %}
+{% else %}
+<div class="empty-state bg-base-850 border border-base-600 rounded-xl">
+  <p class="text-sm text-ink-700">No pending escalation requests.</p>
+</div>
+{% endfor %}

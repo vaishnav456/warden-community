@@ -1,0 +1,20 @@
+{% for entry in entries %}
+<tr>
+  <td><span class="badge badge-info">{{ entry.event }}</span></td>
+  <td class="text-xs font-mono-data text-accent-400">{{ entry.company_slug }}</td>
+  <td class="text-xs text-ink-300">{{ entry.actor }}</td>
+  <td class="text-xs text-ink-500 font-mono-data">{{ entry.endpoint_hostname or '—' }}</td>
+  <td class="max-w-md">
+    {% if entry.detail %}
+    <div class="audit-detail-grid">
+      {% for key, value in entry.detail.items() %}
+      <span class="audit-detail"><b>{{ key | replace('_', ' ') }}</b><em>{{ value }}</em></span>
+      {% endfor %}
+    </div>
+    {% else %}<span class="text-ink-700">—</span>{% endif %}
+  </td>
+  <td class="text-xs text-ink-700 whitespace-nowrap">{{ entry.created_at | timeago }}</td>
+</tr>
+{% else %}
+<tr><td colspan="6" class="text-center py-8 text-ink-700 text-sm">No audit entries</td></tr>
+{% endfor %}

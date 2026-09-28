@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Request Access — {{ company.name }}{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Request Tenant Access</span>{% endblock %}
+{% block content %}
+<div class="max-w-lg">
+  <h2 class="text-base font-semibold text-ink-100">Request access to {{ company.name }}</h2>
+  <p class="text-xs text-ink-500 mt-0.5">
+    This tenant's data is encrypted at rest. Viewing their console requires
+    an explicit, time-boxed grant approved by one of their own admins —
+    it isn't automatic just because your account is superadmin.
+  </p>
+
+  <div class="w-table-wrap mt-4">
+    <table class="w-table">
+      <thead><tr><th>Reason</th><th>Status</th><th>Requested</th><th>Expires</th></tr></thead>
+      <tbody>
+        {% for grant in grants %}
+        <tr>
+          <td class="text-xs text-ink-300">{{ grant.reason }}</td>
+          <td><span class="badge badge-{{ grant.status }}">{{ grant.status | upper }}</span></td>
+          <td class="text-xs text-ink-500">{{ grant.created_at }}</td>
+          <td class="text-xs text-ink-500">{{ grant.expires_at or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4"><div class="empty-state py-6"><p class="text-sm text-ink-500">No prior requests.</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="POST" action="{{ url_for('superadmin.request_access', company_id=company.id) }}" class="mt-6 space-y-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+      <label class="form-label">Reason for access (shown to the tenant)</label>
+      <textarea name="reason" class="form-input" rows="3" required placeholder="e.g. investigating support ticket #123"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Send Request</button>
+  </form>
+</div>
+{% endblock %}

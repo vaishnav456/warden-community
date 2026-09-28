@@ -1,0 +1,21 @@
+-- PostgREST roles. Mirrors the standard Supabase self-host role layout, minus
+-- everything (Auth/Storage/Realtime) warden doesn't use — just the two roles
+-- PostgREST's PGRST_JWT_SECRET-based auth actually needs: an unprivileged
+-- "anon" (never used by the app — db.py always sends a service_role JWT —
+-- but PGRST_DB_ANON_ROLE must point at something that exists) and a
+-- "service_role" that owns the real privileges, matching db.py's assumption
+-- that its API key bypasses any row-level access control.
+CREATE ROLE anon NOLOGIN NOINHERIT;
+CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
+
+-- The actual DB login PostgREST connects as (PGRST_DB_URI). NOINHERIT +
+-- explicit SET ROLE per request (which PostgREST does based on the JWT's
+-- "role" claim) — it must never act with its own privileges directly.
+--
+-- Copy this file to 01-roles.sql and replace the password below before
+-- first `docker compose up` (docker-entrypoint-initdb.d only runs against
+-- an empty data volume). 01-roles.sql itself is gitignored — it holds a
+-- real credential, unlike this template.
+CREATE ROLE postgrest_authenticator NOINHERIT LOGIN PASSWORD 'change-me-generate-a-random-password';
+GRANT anon TO postgrest_authenticator;
+GRANT service_role TO postgrest_authenticator;

@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repository for secrets
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}:/repo"
+          zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          dir /repo --no-banner --no-color --redact --exit-code 1
+
+  python-tests:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: http://postgrest:3000
+      SUPABASE_SERVICE_KEY: test-only-service-key
+      SECRET_KEY: test-only-not-a-production-secret
+      BUILD_SERVICE_KEY: test-only-build-service-key
+      ED25519_PRIVATE_KEY_B64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      TENANT_MASTER_KEK_B64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DEVICE_CA_DIR: /tmp/warden-test-device-ca
+      DEVICE_CA_AUTO_BOOTSTRAP: "true"
+      PYTHONPATH: ${{ github.workspace }}/server:${{ github.workspace }}/tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r server/requirements.txt
+      - working-directory: server
+        run: python -m unittest discover -s tests -q
+
+  go-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [agent-posix, home-node]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - working-directory: ${{ matrix.module }}
+        run: go test ./...
+
+  windows-agent-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent-go/go.mod
+          cache-dependency-path: agent-go/go.sum
+      - working-directory: agent-go
+        run: go test ./...
+
+  compose-configuration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: cp server/.env.example server/.env
+      - run: cp build-service/.env.example build-service/.env
+      - run: cp db-init/01-roles.sql.example db-init/01-roles.sql
+      - run: cp db-init/04-bootstrap-admin.sql.example db-init/04-bootstrap-admin.sql
+      - run: docker compose config --quiet

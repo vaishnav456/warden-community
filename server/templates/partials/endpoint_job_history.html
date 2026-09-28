@@ -1,0 +1,39 @@
+{% set job_counts = namespace(active=0, completed=0, failed=0) %}
+{% for j in jobs %}
+  {% if j.status in ('pending', 'approved', 'running') %}{% set job_counts.active = job_counts.active + 1 %}
+  {% elif j.status == 'completed' %}{% set job_counts.completed = job_counts.completed + 1 %}
+  {% elif j.status in ('failed', 'cancelled') %}{% set job_counts.failed = job_counts.failed + 1 %}{% endif %}
+{% endfor %}
+<div class="endpoint-job-counters" aria-label="Job summary">
+  <span><i class="is-active"></i><b>{{ job_counts.active + (pending_escalations | default([]) | length) }}</b><small>Active / approval</small></span>
+  <span><i class="is-complete"></i><b>{{ job_counts.completed }}</b><small>Completed</small></span>
+  <span><i class="is-failed"></i><b>{{ job_counts.failed }}</b><small>Needs review</small></span>
+</div>
+<section class="endpoint-job-history" aria-labelledby="job-history-title">
+  <div class="endpoint-job-section-title"><div><h3 id="job-history-title">Recent history</h3><p>The latest 30 requests for {{ endpoint.hostname }}. Status refreshes automatically.</p></div><a href="/jobs?endpoint_id={{ endpoint.id }}" class="endpoint-job-refresh">Open all jobs</a></div>
+  {% for approval in pending_escalations | default([]) %}
+  <article class="endpoint-job-record" data-status="pending">
+    <div class="endpoint-job-state"><i></i></div>
+    <div class="endpoint-job-record-main">
+      <div class="endpoint-job-record-title"><div><h4>{{ approval.operation.replace('_',' ').title() }}</h4><span class="badge badge-pending">Awaiting approval</span></div><time>{{ approval.requested_at | timeago }}</time></div>
+      <div class="endpoint-job-meta"><span>The Agent has not received this operation</span>{% if approval.requires_dual_approval %}<span>Two administrators required</span>{% else %}<span>One administrator required</span>{% endif %}</div>
+      <div class="endpoint-job-error is-approval"><strong>Approval required</strong><p>Review this request in the approval queue. A job is created only after approval.</p></div>
+    </div>
+    <div class="endpoint-job-record-actions"><a class="btn btn-primary btn-sm" href="/escalations">Review approval</a></div>
+  </article>
+  {% endfor %}
+  {% for j in jobs %}
+  <article class="endpoint-job-record" data-status="{{ j.status }}">
+    <div class="endpoint-job-state"><i></i></div>
+    <div class="endpoint-job-record-main">
+      <div class="endpoint-job-record-title"><div><h4>{{ j.type.replace('_',' ').title() }}</h4><span class="badge badge-{{ j.status }}">{{ j.status | replace('_', ' ') }}</span></div><time>{{ j.created_at | timeago }}</time></div>
+      <div class="endpoint-job-meta"><span>Queued {{ j.created_at | timeago }}</span>{% if j.completed_at %}<span>Finished {{ j.completed_at | timeago }}</span>{% endif %}{% if j.exit_code is not none %}<span>Exit code {{ j.exit_code }}</span>{% endif %}</div>
+      {% if j.error_msg %}<div class="endpoint-job-error"><strong>Action failed</strong><p>{{ j.error_msg }}</p></div>{% endif %}
+      {% if j.log_output %}<details class="endpoint-job-output"><summary>View output</summary><pre id="job-{{ j.id }}-log" class="terminal">{{ j.log_output }}</pre></details>{% endif %}
+    </div>
+    <div class="endpoint-job-record-actions"><a class="btn btn-secondary btn-sm" href="/jobs/{{ j.id }}">Details</a>{% if j.status in ('pending', 'approved') %}<button hx-post="/endpoints/{{ endpoint.id }}/cancel-job/{{ j.id }}" hx-confirm="Cancel this queued job?" class="btn btn-sm endpoint-job-cancel">Cancel</button>{% endif %}</div>
+  </article>
+  {% else %}{% if not pending_escalations | default([]) %}
+  <div class="endpoint-job-empty"><span><svg class="custom-icon" aria-hidden="true"><use href="/static/warden-icons.svg?v={{ asset_v }}#jobs"></use></svg></span><h4>No job history yet</h4><p>Choose a quick action above. Warden will show queueing, execution, output, and failures here.</p></div>
+  {% endif %}{% endfor %}
+</section>

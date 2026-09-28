@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Structured policy identifiers and private-key variable declarations are not secret values"
+paths = [
+  '''(^|/)agent-go/policy_catalog\.json$''',
+  '''(^|/)server/policy_catalog\.json$''',
+  '''(^|/)server/services/signing\.py$'''
+]

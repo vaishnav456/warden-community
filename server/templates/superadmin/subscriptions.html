@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% set active_page = "superadmin_subscriptions" %}{% block title %}Subscriptions{% endblock %}
+{% block breadcrumb %}<span>Platform</span><span>/</span><span class="text-ink-100">Subscriptions</span>{% endblock %}
+{% block content %}
+<div class="fleet-page-header"><div><h1>Subscriptions</h1><p>Current commercial state, renewal source and lifecycle for every tenant.</p></div></div>
+<div class="w-table-wrap"><table class="w-table"><thead><tr><th>Tenant</th><th>Plan</th><th>Status</th><th>Lifecycle</th><th>Provider</th><th>Renews</th><th></th></tr></thead><tbody>{% for s in subscriptions %}<tr><td><strong>{{ s.companies.name }}</strong></td><td>{{ s.plans.name }}</td><td><span class="badge badge-{{ 'online' if s.status=='active' else 'offline' }}">{{ s.status|replace('_',' ') }}</span></td><td>{{ s.lifecycle_state|replace('_',' ') }}</td><td>{{ s.provider }}{% if s.provider=='manual' %}<div class="text-xs text-ink-500">Managed internally</div>{% endif %}</td><td>{{ s.renews_at or 'Manual' }}</td><td class="text-right"><a class="btn btn-secondary btn-sm" href="{{ url_for('superadmin.tenant_detail',company_id=s.company_id) }}">Manage {{ wicon('arrow-right', 'button-glyph') }}</a></td></tr>{% else %}<tr><td colspan="7" class="text-center text-ink-500">No subscriptions found.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

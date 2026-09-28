@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Escalations{% endblock %}
+
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <span class="text-ink-700">Warden</span><span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100">Escalations</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold text-ink-100 tracking-tight">Escalation Queue</h1>
+    <p class="text-sm text-ink-500 mt-0.5">All privilege escalation requests</p>
+  </div>
+  <a href="/escalations/saved" class="text-sm text-accent-400 hover:underline font-medium">Saved Policies →</a>
+</div>
+
+{# Status tabs #}
+<div class="flex gap-1 mb-5">
+  {% for s, label in [('pending','Pending'),('pending_secondary','Dual Approval'),('approved','Approved'),('denied','Denied'),('expired','Expired'),('all','All')] %}
+  <a href="/escalations?status={{ s }}"
+     class="px-3 py-1.5 text-sm rounded-lg font-medium transition-colors
+            {% if status_filter == s %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">
+    {{ label }}
+  </a>
+  {% endfor %}
+</div>
+
+{# Cards #}
+<div id="escalation-cards"
+     {% if status_filter == 'pending' %}
+     hx-get="/partials/escalation-cards"
+     hx-trigger="every 5s"
+     hx-sync="this:drop"
+     hx-swap="innerHTML"
+     {% endif %}
+     class="space-y-3">
+  {% include "partials/escalation_cards.html" %}
+</div>
+
+{% if has_more %}
+<div class="mt-4 text-center">
+  <a href="/escalations?status={{ status_filter }}&page={{ page + 1 }}"
+     class="text-sm text-accent-400 hover:underline">Load more →</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Branches — {{ company.name }}{% endblock %}
+{% block breadcrumb %}
+<nav class="flex items-center gap-2 text-sm">
+  <a href="/admin" class="text-ink-700 hover:text-ink-300">Companies</a>
+  <span class="text-ink-700">/</span>
+  <span class="font-medium text-ink-100">{{ company.name }} — Branches</span>
+</nav>
+{% endblock %}
+{% block content %}
+<div x-data="superadminBranchesPage" data-company-id="{{ company.id }}">
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-semibold text-ink-100 tracking-tight">{{ company.name }} — Branches</h1>
+  <button @click="showCreate = true" class="btn btn-primary">+ Add Branch</button>
+</div>
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead><tr>
+      <th>Branch Name</th>
+      <th>City</th>
+      <th>Created</th>
+    </tr></thead>
+    <tbody>
+      {% for b in branches %}
+      <tr>
+        <td class="font-medium text-ink-100">{{ b.name }}</td>
+        <td class="text-ink-500">{{ b.city or '—' }}</td>
+        <td class="text-ink-500">{{ b.created_at | timeago }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="py-12 text-center text-ink-700">No branches yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div x-show="showCreate" x-cloak class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+  <div @click.stop class="bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-sm p-6">
+    <h3 class="text-lg font-semibold text-ink-100 mb-4">Add Branch</h3>
+    <div x-show="error" class="flash flash-error mb-3" x-text="error"></div>
+    <form @submit.prevent="createBranch()" class="space-y-4">
+      <div><label class="form-label">Branch Name</label>
+        <input x-model="name" type="text" required class="form-input"></div>
+      <div><label class="form-label">City</label>
+        <input x-model="city" type="text" class="form-input"></div>
+      <div class="flex gap-3 justify-end">
+        <button type="button" @click="showCreate=false" class="btn btn-secondary">Cancel</button>
+        <button type="submit" :disabled="creating" class="btn btn-primary"><span x-show="!creating">Create</span><span x-show="creating">Creating…</span></button>
+      </div>
+    </form>
+  </div>
+</div>
+</div>
+{% endblock %}

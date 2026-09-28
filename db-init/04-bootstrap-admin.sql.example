@@ -1,0 +1,17 @@
+-- First superadmin — there's no signup route (auth.py has none), so this has
+-- to exist before anyone can log in at all. company_id/branch_id NULL:
+-- superadmin accounts aren't scoped to a company.
+--
+-- Copy this file to 04-bootstrap-admin.sql, replace the email/hash below,
+-- before first `docker compose up` (docker-entrypoint-initdb.d only runs
+-- against an empty data volume). Generate a hash with:
+--   python3 -c "import bcrypt; print(bcrypt.hashpw(b'your-password', bcrypt.gensalt(rounds=12)).decode())"
+-- 04-bootstrap-admin.sql itself is gitignored — it holds a real (if one-way
+-- hashed) credential, unlike this template.
+INSERT INTO endpt.admin_users (email, password_hash, full_name, role)
+VALUES (
+    'admin@example.com',
+    '$2b$12$change-me-generate-a-real-bcrypt-hash',
+    'Admin',
+    'superadmin'
+);

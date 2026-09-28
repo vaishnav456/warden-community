@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Settings — Alert Thresholds{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Alert Thresholds</span>{% endblock %}
+{% block content %}
+{% set settings_section = 'thresholds' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="flex-1 min-w-0 max-w-lg">
+    <div class="mb-5">
+      <h2 class="text-base font-semibold text-ink-100">Alert Thresholds</h2>
+      <p class="text-xs text-ink-500 mt-0.5">Automatically create alerts when an endpoint crosses these limits</p>
+    </div>
+    <div class="bg-base-850 rounded-xl border border-base-600 p-5" x-data="thresholdsForm" data-save-url="{{ url_for('settings.save_thresholds') }}">
+      <div x-show="saved" class="mb-3 text-sm text-status-online bg-status-online/10 border border-status-online/25 rounded px-3 py-2">Thresholds saved.</div>
+      <div x-show="error" class="mb-3 text-sm text-status-critical bg-status-critical/10 border border-status-critical/25 rounded px-3 py-2" x-text="error"></div>
+      <form @submit.prevent="submit()" class="space-y-4">
+        <div>
+          <label class="form-label">CPU usage above (%)</label>
+          <input x-ref="cpu" type="number" min="0" max="100" class="form-input" value="{{ thresholds.cpu_pct }}">
+        </div>
+        <div>
+          <label class="form-label">RAM usage above (%)</label>
+          <input x-ref="ram" type="number" min="0" max="100" class="form-input" value="{{ thresholds.ram_pct }}">
+        </div>
+        <div>
+          <label class="form-label">Free disk space below (GB)</label>
+          <input x-ref="disk" type="number" min="0" class="form-input" value="{{ thresholds.disk_free_gb }}">
+        </div>
+        <div>
+          <label class="form-label">Offline for longer than (minutes)</label>
+          <input x-ref="offline" type="number" min="1" class="form-input" value="{{ thresholds.offline_minutes }}">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Thresholds</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

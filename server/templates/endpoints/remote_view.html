@@ -1,0 +1,1252 @@
+{% extends "base.html" %}
+{% block title %}Remote Access — {{ endpoint.hostname }}{% endblock %}
+
+{% block extra_head %}
+<style nonce="{{ csp_nonce }}">
+  {# This page is a fullscreen immersive remote-desktop viewer — it reuses
+     base.html only for shared <head> assets (fonts, CSP nonce, csrf-token
+     meta, warden.js's getCsrfToken()), not the sidebar/header chrome, which
+     would eat into the screen area and add distracting UI around a canvas
+     that's meant to feel like a direct connection to the remote machine. #}
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+  #app-shell { width: 100vw; height: 100dvh; }
+  #app-sidebar, #app-header, #app-flash { display: none !important; }
+  #app-main { width: 100%; min-width: 0; height: 100%; padding: 0 !important; overflow: hidden !important; }
+  #app-main > .app-content {
+    width: 100% !important; max-width: none !important; height: 100%; margin: 0 !important;
+  }
+  #remote-wrap { display: flex; flex-direction: column; width: 100%; height: 100%; background: #0b1018; }
+
+  #toolbar {
+    flex: 0 0 auto; min-height: 3.65rem;
+    display: flex; align-items: center; gap: .65rem; padding: .55rem .75rem;
+    background: rgba(255,255,255,.94); color: #667085; font-size: .74rem; font-family: var(--font-sans);
+    user-select: none; white-space: nowrap; overflow-x: auto;
+    border-bottom: 1px solid rgba(16,24,40,.1); box-shadow: 0 10px 35px rgba(15,23,42,.12); backdrop-filter:blur(20px);
+  }
+  .remote-brand { display:flex; align-items:center; gap:.65rem; min-width:max-content; margin-right:auto; }
+  .remote-brand-mark { display:grid; place-items:center; width:2.35rem; height:2.35rem; color:#fff; border:0; border-radius:.75rem; background:linear-gradient(145deg,#1688ff,#6267ef); box-shadow:0 6px 16px rgba(10,122,255,.22); }
+  .remote-brand-mark svg { width:1.15rem; }
+  .remote-brand-copy strong,.remote-brand-copy small { display:block; }
+  .remote-brand-copy strong { color:#101828; font-size:.75rem; font-family:var(--font-mono); }
+  .remote-brand-copy small { margin-top:.15rem; color:#98a2b3; font-size:.58rem; }
+  .toolbar-group { display:flex; align-items:center; gap:.35rem; padding-left:.6rem; border-left:1px solid #e6eaf0; }
+  #status {
+    padding: .3rem .55rem; border-radius: 999px; background: #f1f4f8;
+    transition: background .3s, color .3s;
+  }
+  #status.connected { background: rgba(52,211,153,0.15); color: var(--online); }
+  #status.error     { background: rgba(248,113,113,0.15); color: var(--critical); }
+
+  #toolbar button {
+    min-height:2.15rem; padding: .35rem .65rem; border-radius: .65rem; border: 1px solid #e0e5ed;
+    cursor: pointer; background: #fff; color: #475467; font-size: .68rem;
+    white-space: nowrap;
+  }
+  #toolbar button:hover { color:#0a7aff; background:#edf6ff; border-color:#b9d7f8; }
+  #toolbar button.active { background:#eaf4ff; color:#0a7aff; }
+  #toolbar select { min-height:2.15rem; padding:.3rem .5rem; border:1px solid #e0e5ed; border-radius:.65rem; background:#fff; color:#475467; font-size:.66rem; }
+  #quality-stats { color:#98a2b3; font-size:.65rem; }
+  #btn-disconnect { background: var(--critical) !important; color: #fff !important; font-weight: 600; }
+  #btn-disconnect:hover { background: #FCA5A5 !important; }
+  @media (max-width: 800px) {
+    #toolbar { align-items:center; }
+    .remote-brand-copy small,#quality-stats { display:none; }
+    .toolbar-group { padding-left:.35rem; }
+  }
+
+  #canvas-wrap {
+    flex: 1 1 0; min-height: 0; overflow: hidden; background: #0b1018;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #screen { display: block; max-width: 100%; max-height: 100%; cursor: crosshair; image-rendering: auto; }
+  #canvas-wrap.view-only #screen { cursor: not-allowed; }
+  .remote-panel { position:fixed; z-index:40; top:3.8rem; right:.75rem; display:none; width:min(28rem,calc(100vw - 1.5rem)); max-height:calc(100dvh - 4.8rem); overflow:auto; padding:.9rem; border:1px solid #e0e5ed; border-radius:1rem; background:rgba(255,255,255,.98); box-shadow:0 1rem 3rem rgba(15,23,42,.2); }
+  .remote-panel.open { display:block; }
+  .remote-panel h3 { margin:0 0 .6rem; color:#101828; font-size:.8rem; }
+  .remote-panel textarea { width:100%; min-height:7rem; padding:.55rem; resize:vertical; border:1px solid #d8dee8; border-radius:.65rem; background:#fff; color:#101828; font:.72rem var(--font-mono); }
+  .remote-panel-actions { display:flex; justify-content:flex-end; gap:.4rem; margin-top:.5rem; }
+  .remote-panel-actions button,.key-grid button { min-width:0; padding:.42rem .45rem; border:1px solid #e0e5ed; border-radius:.55rem; background:#f8fafc; color:#344054; font-size:.68rem; overflow-wrap:anywhere; }
+  .key-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(4.4rem,1fr)); gap:.35rem; width:100%; }
+  #session-timeline { max-height:16rem; overflow:auto; }
+  #process-list { max-height:20rem; overflow:auto; }
+  .process-row { display:grid; grid-template-columns:1fr auto auto; gap:.6rem; align-items:center; padding:.4rem 0; border-bottom:1px solid var(--base-700); color:var(--ink-300); font-size:.68rem; }
+  .process-row small { color:var(--ink-700); font-family:var(--font-mono); }
+  .session-event { display:flex; gap:.5rem; padding:.4rem 0; border-bottom:1px solid var(--base-700); color:var(--ink-300); font-size:.68rem; }
+  .session-event time { color:var(--ink-700); font-family:var(--font-mono); }
+
+  /* Clipboard toast */
+  #clip-toast {
+    position: fixed; bottom: 1rem; right: 1rem; padding: .5rem 1rem;
+    background: var(--accent-500); color: var(--base-950); border-radius: .375rem;
+    font-size: .8rem; font-weight: 600; opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+
+  /* Drag-and-drop file overlay */
+  #drop-overlay {
+    position: absolute; inset: 0; z-index: 10;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(8, 11, 15, .85); color: var(--ink-100);
+    font-size: 1rem; font-family: var(--font-mono); text-align: center;
+    border: 3px dashed var(--accent-400); pointer-events: none;
+  }
+  #canvas-wrap.dragging #drop-overlay { display: flex; }
+  #canvas-wrap { position: relative; }
+
+  #transfers {
+    position: fixed; z-index: 20; right: 1rem; bottom: 1rem; width: min(26rem, calc(100vw - 2rem));
+    display: flex; flex-direction: column; gap: .4rem; pointer-events: none;
+  }
+  .transfer {
+    padding: .6rem .75rem; border: 1px solid var(--base-600); border-radius: .4rem;
+    background: rgba(255,255,255,.97); color: #101828; font: .72rem var(--font-mono);
+    box-shadow: 0 .5rem 1.5rem rgba(15,23,42,.16);
+  }
+  .transfer .meta { color: var(--ink-500); margin-top: .2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .transfer.done { border-color: var(--online); }
+  .transfer.failed { border-color: var(--critical); }
+
+  #path-modal, #remote-browser-modal {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    align-items: center; justify-content: center; padding: 1rem;
+    background: rgba(3, 7, 12, .76); backdrop-filter: blur(4px);
+  }
+  #path-modal.open, #remote-browser-modal.open { display: flex; }
+  .path-dialog {
+    width: min(34rem, 100%); padding: 1.1rem;
+    border: 1px solid var(--base-600); border-radius: .6rem;
+    background: #fff; color: #101828;
+    box-shadow: 0 1.5rem 4rem rgba(15,23,42,.22);
+  }
+  .path-dialog h2 { margin: 0 0 .35rem; font-size: 1rem; }
+  .path-dialog p { margin: 0 0 .8rem; color: var(--ink-500); font-size: .78rem; }
+  .path-option {
+    display: flex; gap: .55rem; align-items: flex-start; padding: .6rem;
+    margin: .4rem 0; border: 1px solid var(--base-600); border-radius: .4rem;
+    cursor: pointer; font: .76rem var(--font-mono);
+  }
+  .path-option:hover { border-color: var(--accent-400); }
+  .path-option small { display: block; margin-top: .15rem; color: var(--ink-500); overflow-wrap: anywhere; }
+  #custom-path {
+    width: 100%; margin-top: .4rem; padding: .55rem .65rem;
+    border: 1px solid var(--base-600); border-radius: .35rem;
+    background: #fff; color: #101828; font: .76rem var(--font-mono);
+  }
+  .path-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; }
+  .path-actions button {
+    padding: .45rem .8rem; border: 0; border-radius: .35rem; cursor: pointer;
+    background: #eef2f7; color: #344054;
+  }
+  #path-confirm { background: var(--accent-500); color: var(--base-950); font-weight: 600; }
+  #path-error { min-height: 1rem; margin-top: .45rem; color: var(--critical); font-size: .72rem; }
+  #remote-browser { display: none; margin-top: .7rem; border: 1px solid var(--base-600); border-radius: .4rem; overflow: hidden; }
+  #remote-browser.open { display: block; }
+  #browser-head { display: flex; gap: .4rem; align-items: center; padding: .5rem; background: var(--base-950); }
+  #browser-path { flex: 1; overflow: hidden; text-overflow: ellipsis; font: .72rem var(--font-mono); }
+  #browser-items { max-height: 16rem; overflow: auto; }
+  .browser-item { display: flex; width: 100%; gap: .5rem; padding: .5rem .65rem; border: 0; border-top: 1px solid var(--base-700); background: var(--base-850); color: var(--ink-100); text-align: left; cursor: pointer; }
+  .browser-item:hover { background: var(--base-700); }
+</style>
+{% endblock %}
+
+{% block content %}
+  {% set remote_caps = remote_capabilities | default({'view': true, 'control': true, 'clipboard': true, 'file_transfer': true, 'process_manager': true, 'reboot': true}) %}
+  <div id="remote-wrap">
+  <div id="toolbar">
+    <div class="remote-brand">
+        <span class="remote-brand-mark platform-mark-{{ endpoint.platform or 'windows' }}"><svg viewBox="0 0 24 24"><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if endpoint.platform == 'darwin' else (endpoint.platform or 'windows') }}"></use></svg></span>
+      <span class="remote-brand-copy"><strong>{{ endpoint.hostname }}{% if endpoint.platform in ['linux', 'darwin'] %} · ALPHA{% endif %}</strong><small>Secure remote session</small></span>
+    </div>
+    <span id="status">Connecting…</span>
+    <span id="quality-stats">0 fps · — ms</span>
+
+    <div class="toolbar-group">
+    <select id="monitor-select" title="Remote display" disabled><option value="0">Display 1</option></select>
+    <select id="scale-mode" title="Screen scaling"><option value="fit">Fit</option><option value="actual">100%</option><option value="stretch">Stretch</option></select>
+    <button id="btn-view-only" title="Disable remote input" {% if not remote_caps.control %}style="display:none"{% endif %}>View only</button>
+    </div>
+    <div class="toolbar-group">
+    <button id="btn-clipboard" title="Remote clipboard" {% if not remote_caps.clipboard %}style="display:none"{% endif %}>Clipboard</button>
+    <button id="btn-keyboard" title="On-screen special keys" {% if not remote_caps.control %}style="display:none"{% endif %}>Keyboard</button>
+    <button id="btn-timeline" title="Session activity">Timeline</button>
+    <button id="btn-processes" title="Remote process manager" {% if not remote_caps.process_manager %}style="display:none"{% endif %}>Processes</button>
+    {% if not support_mode | default(false) %}
+    <button id="btn-collab" title="Notes and chat">Notes</button>
+    <button id="btn-share" title="Create temporary support link">Share</button>
+    {% endif %}
+    {% if not support_mode | default(false) %}
+    <button id="btn-reboot" title="Reboot endpoint and reconnect" {% if not remote_caps.reboot %}style="display:none"{% endif %}>Reboot</button>
+    {% endif %}
+    {% if (endpoint.platform or 'windows') == 'windows' %}
+    <button id="btn-cad" title="Open the Windows security screen" {% if not remote_caps.control %}style="display:none"{% endif %}>Ctrl+Alt+Del</button>
+    {% endif %}
+    </div>
+    <div class="toolbar-group">
+    {% if not support_mode | default(false) %}
+    <button id="btn-upload" title="Choose a local file and remote destination" {% if not remote_caps.file_transfer %}style="display:none"{% endif %}>↑ Upload file</button>
+    <button id="btn-download" title="Download a file from the remote computer" {% if not remote_caps.file_transfer %}style="display:none"{% endif %}>↓ Download file</button>
+    {% endif %}
+    <input id="file-picker" type="file" hidden multiple>
+    <button id="btn-fullscreen" title="Fullscreen">⛶</button>
+    <button id="btn-disconnect">✕ Disconnect</button>
+    </div>
+  </div>
+  <div id="canvas-wrap">
+    <canvas id="screen" tabindex="0"></canvas>
+    <div id="drop-overlay">Drop files onto the remote computer<br><small>Files will be delivered to Public Desktop</small></div>
+  </div>
+<aside id="clipboard-panel" class="remote-panel"><h3>Remote clipboard</h3><textarea id="clipboard-text" placeholder="Paste or type text to send to the remote computer"></textarea><div class="remote-panel-actions"><button id="clipboard-copy">Copy remote text</button><button id="clipboard-send">Send & paste</button></div></aside>
+{% set remote_keys = ['Escape','Tab','Enter','Backspace','Delete','Home','End','PageUp','PageDown','ArrowUp','ArrowLeft','ArrowDown','ArrowRight','F1','F2','F3','F4','F5'] %}
+{% if (endpoint.platform or 'windows') == 'windows' %}{% set remote_keys = remote_keys + ['PrintScreen','Meta'] %}{% elif endpoint.platform == 'darwin' %}{% set remote_keys = remote_keys + ['Meta'] %}{% endif %}
+<aside id="keyboard-panel" class="remote-panel"><h3>Special keys</h3><div class="key-grid">{% for key in remote_keys %}<button type="button" data-remote-key="{{ key }}">{{ 'Command' if key == 'Meta' and endpoint.platform == 'darwin' else key }}</button>{% endfor %}</div></aside>
+<aside id="timeline-panel" class="remote-panel"><h3>Session timeline</h3><div id="session-timeline"></div></aside>
+<aside id="process-panel" class="remote-panel"><h3>Remote processes</h3><div class="remote-panel-actions"><button id="process-refresh">Refresh</button></div><div id="process-list">Select Refresh to load processes.</div></aside>
+<aside id="collab-panel" class="remote-panel"><h3>Audited session notes and chat</h3><div id="collab-events"></div><textarea id="collab-text" maxlength="4000" placeholder="Add a technician note…"></textarea><div class="remote-panel-actions"><button id="chat-send">Send chat</button><button id="note-save">Save note</button></div></aside>
+<div id="clip-toast"></div>
+<div id="transfers" aria-live="polite"></div>
+<div id="path-modal" role="dialog" aria-modal="true" aria-labelledby="path-title">
+  <div class="path-dialog">
+    <h2 id="path-title">Choose remote destination</h2>
+    <p id="path-files"></p>
+    <label class="path-option">
+      <input type="radio" name="remote-path" value="public" checked>
+      <span>{{ 'Shared transfer folder' if endpoint.platform in ['linux', 'darwin'] else 'Public Desktop' }}<small>{{ '/Users/Shared' if endpoint.platform == 'darwin' else ('/tmp/Warden Transfers' if endpoint.platform == 'linux' else 'C:\\Users\\Public\\Desktop') }}</small></span>
+    </label>
+    <input type="radio" name="remote-path" value="custom" hidden>
+    <input id="custom-path" type="hidden">
+    <button id="browse-upload" type="button">Browse Desktop, Documents or Downloads…</button>
+    <div id="path-error"></div>
+    <div class="path-actions">
+      <button id="path-cancel" type="button">Cancel</button>
+      <button id="path-confirm" type="button">Upload here</button>
+    </div>
+  </div>
+</div>
+<div id="remote-browser-modal" class="path-modal" role="dialog" aria-modal="true">
+  <div class="path-dialog">
+    <h2 id="browser-title">Remote files</h2>
+    <div id="remote-browser" class="open">
+      <div id="browser-head">
+        <button id="browser-up" type="button">↑ Up</button>
+        <span id="browser-path">Desktop, Documents and Downloads</span>
+      </div>
+      <div id="browser-items"></div>
+    </div>
+    <div id="browser-error" class="path-error"></div>
+    <div class="path-actions">
+      <button id="browser-cancel" type="button">Cancel</button>
+      <button id="browser-select-folder" type="button">Select this folder</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  const ENDPOINT_ID = {{ endpoint.id | tojson }};
+  const SESSION_ID  = {{ session.id  | tojson }};
+  const SUPPORT_MODE = {{ (support_mode | default(false)) | tojson }};
+  const REMOTE_CAPABILITIES = {{ remote_caps | tojson }};
+  const ENDPOINT_PLATFORM = {{ (endpoint.platform or 'windows') | tojson }};
+
+  const canvas   = document.getElementById('screen');
+  const ctx      = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const toast    = document.getElementById('clip-toast');
+  const transfers = document.getElementById('transfers');
+  const pathModal = document.getElementById('path-modal');
+
+  let ws, sw = 0, sh = 0, scale = 1;
+  let scaleMode = 'fit', viewOnly = !REMOTE_CAPABILITIES.control, reconnectAttempts = 0, allowReconnect = true;
+  let relayWasPaired = false, recoveringSession = false;
+  let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
+  let decodingFrame = false, frameQueue = [];
+  const MAX_FRAME_QUEUE = 60;
+  let waitingForFullFrame = false;
+
+  // Byte 0 of every binary WS message is a frame-type marker: 0x00 = full
+  // frame (rest of the message is JPEG bytes, drawn to fill the whole
+  // canvas), 0x01 = partial update (next 8 bytes = x,y,w,h as little-endian
+  // uint16 in native/canvas pixel coordinates, rest = JPEG for just that
+  // sub-rectangle). drawImage() scales the decoded bitmap to fill the given
+  // destination rectangle regardless of the JPEG's own — possibly smaller —
+  // encoded size, so this works unchanged whether or not the agent is
+  // sending a downscaled stream. See agent-go's remote_pipe.go
+  // (buildPartialFramePayload) and remote_helper.go's capture loop.
+  async function drawFrameMessage(blob) {
+    const head = new Uint8Array(await blob.slice(0, 9).arrayBuffer());
+    // If overload forced us to discard deltas, ignore further partials
+    // until the agent's periodic full frame gives the canvas a known-good
+    // baseline again.
+    if (waitingForFullFrame && head[0] !== 0x00) return false;
+    if (head[0] === 0x01) {
+      const view = new DataView(head.buffer, head.byteOffset + 1, 8);
+      const x = view.getUint16(0, true);
+      const y = view.getUint16(2, true);
+      const w = view.getUint16(4, true);
+      const h = view.getUint16(6, true);
+      const bmp = await createImageBitmap(blob.slice(9));
+      ctx.drawImage(bmp, x, y, w, h);
+      bmp.close();
+    } else {
+      waitingForFullFrame = false;
+      const bmp = await createImageBitmap(blob.slice(1));
+      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      bmp.close();
+    }
+    return true;
+  }
+
+  // Partial updates are deltas against the canvas' current contents, not
+  // independent snapshots like a full frame — unlike the old "keep only the
+  // newest pending frame, drop stale ones" behavior (correct for full
+  // frames, since a newer one is a complete state on its own), dropping a
+  // partial update here would permanently corrupt the canvas (missing
+  // exactly that region's change) until the next full-frame refresh. Queue
+  // and process every message in order instead.
+  async function queueFrame(blob) {
+    if (frameQueue.length >= MAX_FRAME_QUEUE) {
+      // Never allow a slow decoder/background tab to consume memory and
+      // accumulate minutes of remote-control latency. Partial frames are
+      // stateful, so after dropping them we wait for the agent's periodic
+      // full-frame resynchronization instead of drawing a corrupted chain.
+      frameQueue.length = 0;
+      waitingForFullFrame = true;
+    }
+    frameQueue.push(blob);
+    if (decodingFrame) return;
+    decodingFrame = true;
+    try {
+      while (frameQueue.length) {
+        const next = frameQueue.shift();
+        try {
+          if (await drawFrameMessage(next)) {
+            frameCount++;
+            lastFrameAt = performance.now();
+          }
+        } catch (error) {
+          console.warn('Dropped invalid remote frame', error);
+        }
+      }
+    } finally {
+      decodingFrame = false;
+    }
+  }
+  let _remoteClipboard = '';  // last known remote clipboard text
+  let _dropTargetResolver = null;
+  let _lastExplorerPath = '';
+
+  // ── Status helper ────────────────────────────────────────────────────────────
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || '';
+  }
+  function addSessionEvent(text) {
+    const row = document.createElement('div');
+    row.className = 'session-event';
+    const time = document.createElement('time');
+    time.textContent = new Date().toLocaleTimeString();
+    const label = document.createElement('span');
+    label.textContent = text;
+    row.append(time, label);
+    const timeline = document.getElementById('session-timeline');
+    timeline.prepend(row);
+    while (timeline.children.length > 200) timeline.lastElementChild.remove();
+  }
+
+  // ── Toast ────────────────────────────────────────────────────────────────────
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.style.opacity = '1';
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+  }
+
+  // ── WebSocket ────────────────────────────────────────────────────────────────
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/remote-ws/${ENDPOINT_ID}`);
+    ws.binaryType = 'blob';
+
+    // onopen only means the browser reached the relay server — not that the
+    // remote machine's agent has actually paired yet (that's what 'init'
+    // below signals). Labeling this "Connected" was misleading: it showed
+    // even when the agent side never joined at all.
+    ws.onopen  = () => { setStatus('Waiting for device…', ''); canvas.focus(); addSessionEvent('Relay connected; waiting for endpoint'); };
+    ws.onclose = () => {
+      setStatus(relayWasPaired ? 'Connection interrupted' : 'Connection failed', 'error');
+      addSessionEvent('Connection interrupted');
+      // ws_proxy closes the database session and revokes its one-time token whenever an
+      // established relay ends. Reopening a WebSocket with that same token
+      // can never succeed; the old loop retried it forever. A logged-in
+      // technician instead asks the server for a fresh session/job. A public
+      // one-use support link cannot mint broader credentials, so it ends.
+      if (allowReconnect && relayWasPaired && !SUPPORT_MODE) {
+        recoverRemoteSession();
+      }
+    };
+    ws.onerror = () => setStatus('Connection error', 'error');
+
+    ws.onmessage = async (e) => {
+      if (typeof e.data === 'string') {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
+
+        if (msg.type === 'init') {
+          sw = msg.w; sh = msg.h;
+          // Reassigning canvas.width/height clears the current image even when
+          // the dimensions are unchanged. Keep the last valid frame visible
+          // while the agent replaces its capture helper across login/logout.
+          if (canvas.width !== sw || canvas.height !== sh) {
+            canvas.width = sw;
+            canvas.height = sh;
+          }
+          _updateScale();
+          setStatus('Connected', 'connected');
+          relayWasPaired = true;
+          reconnectAttempts = 0;
+          addSessionEvent(`Connected at ${sw}×${sh}`);
+          stopStatusPoll();
+          return;
+        }
+
+        if (msg.type === 'clipboard_update' && msg.text) {
+          _remoteClipboard = msg.text;
+          // Silently sync browser clipboard if document is focused
+          if (document.hasFocus()) {
+            navigator.clipboard.writeText(msg.text).catch(() => {});
+          }
+          return;
+        }
+        if (msg.type === 'monitors') {
+          const select = document.getElementById('monitor-select');
+          select.replaceChildren();
+          (msg.monitors || []).forEach(monitor => {
+            const option = document.createElement('option');
+            option.value = monitor.id;
+            option.textContent = `${monitor.name} · ${monitor.w}×${monitor.h}`;
+            select.append(option);
+          });
+          select.disabled = (msg.monitors || []).length < 2;
+          addSessionEvent(`Detected ${(msg.monitors || []).length} display(s)`);
+          return;
+        }
+        if (msg.type === 'drop_target') {
+          if (msg.path) _lastExplorerPath = msg.path;
+          if (_dropTargetResolver) {
+            const resolve = _dropTargetResolver;
+            _dropTargetResolver = null;
+            resolve(msg.path || '');
+          }
+          return;
+        }
+        if (msg.type === 'process_list') {
+          const list = document.getElementById('process-list');
+          list.replaceChildren();
+          const processes = Array.isArray(msg.processes) ? msg.processes : (msg.processes ? [msg.processes] : []);
+          processes.forEach(process => {
+            const row = document.createElement('div');
+            row.className = 'process-row';
+            const name = document.createElement('span');
+            name.textContent = process.ProcessName || 'Unknown';
+            const details = document.createElement('small');
+            details.textContent = `PID ${process.Id} · ${Math.round((process.WorkingSet64 || 0) / 1048576)} MB`;
+            const kill = document.createElement('button');
+            kill.textContent = 'End';
+            kill.addEventListener('click', async () => {
+              if (await window.wardenConfirm({
+                title: 'End remote process?',
+                message: `End ${process.ProcessName} (PID ${process.Id})?`,
+                detail: 'Unsaved work in this process can be lost.', tone: 'danger', confirmLabel: 'End process',
+              })) send({type:'process_kill', pid:process.Id});
+            });
+            row.append(name, details, kill);
+            list.append(row);
+          });
+          addSessionEvent(`Loaded ${processes.length} processes`);
+          return;
+        }
+        if (msg.type === 'process_killed') {
+          showToast(`Process ${msg.pid} ended`);
+          send({type:'process_list'});
+          addSessionEvent(`Ended process ${msg.pid}`);
+          return;
+        }
+        if (msg.type === 'process_error') { showToast(msg.error || 'Process operation failed'); return; }
+        if (msg.type === 'chat_reply') {
+          if (msg.text) {
+            loadCollaboration();
+            addSessionEvent('Endpoint user replied to chat');
+            showToast('New endpoint chat reply');
+          }
+          return;
+        }
+        if (msg.type === 'chat_error') { showToast(msg.error || 'Endpoint chat failed'); return; }
+        if (msg.type === 'rebooting') {
+          setStatus('Endpoint rebooting…', '');
+          addSessionEvent('Endpoint reboot requested');
+          allowReconnect = false;
+          if (!SUPPORT_MODE) setTimeout(() => {
+            allowReconnect = true;
+            recoverRemoteSession(true);
+          }, 5000);
+          return;
+        }
+        return;
+      }
+
+      // Binary → JPEG frame (full or partial, see queueFrame/drawFrameMessage)
+      if (!sw || !sh) return;
+      queueFrame(e.data);
+    };
+  }
+
+  async function recoverRemoteSession(waitForEndpoint = false) {
+    if (recoveringSession) return;
+    recoveringSession = true;
+    try {
+      while (allowReconnect && reconnectAttempts < 40) {
+        const delay = Math.min(1000 * (2 ** reconnectAttempts++), 15000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        try {
+          const response = await fetch(
+            `/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/reconnect`,
+            {method:'POST', headers:{'X-CSRFToken':getCsrfToken()}}
+          );
+          const data = await response.json();
+          if (response.ok && data.viewer_url) {
+            location.replace(data.viewer_url);
+            return;
+          }
+          if (response.status === 409 && waitForEndpoint && data.error === 'endpoint_offline') {
+            setStatus('Waiting for endpoint after reboot…', '');
+            continue;
+          }
+          if ([403, 404, 409].includes(response.status)) {
+            setStatus(data.message || data.error || 'Unable to reconnect', 'error');
+            return;
+          }
+        } catch {
+          // Network is still unavailable; retry with capped backoff.
+        }
+      }
+      if (allowReconnect && reconnectAttempts >= 40) {
+        setStatus('Endpoint did not reconnect in time', 'error');
+      }
+    } finally {
+      recoveringSession = false;
+    }
+  }
+
+  // ── Status polling ──────────────────────────────────────────────────────────
+  // ws_proxy's own PAIR_TIMEOUT is 60s before the browser's WebSocket even
+  // closes with a generic reason. Poll the session row instead so a failure
+  // the agent already reported (see agent_api.remote_relay_failed) shows the
+  // real reason within a few seconds instead of a silent minute-long wait.
+  let statusPollTimer = null;
+  let statusPollInFlight = false;
+  function stopStatusPoll() {
+    if (statusPollTimer) { clearInterval(statusPollTimer); statusPollTimer = null; }
+  }
+  async function pollStatus() {
+    if (statusPollInFlight) return;
+    statusPollInFlight = true;
+    let res;
+    try {
+      res = await fetch(`/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/status`);
+    } catch {
+      return; // transient network hiccup — try again next tick
+    } finally {
+      statusPollInFlight = false;
+    }
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.status === 'closed') {
+      stopStatusPoll();
+      allowReconnect = false;
+      setStatus(data.fail_reason || 'Remote session ended', 'error');
+      if (ws) ws.close();
+    }
+  }
+  if (!SUPPORT_MODE) statusPollTimer = setInterval(pollStatus, 3000);
+
+  function send(obj) {
+    if (!REMOTE_CAPABILITIES.control && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','ctrl_alt_del','reboot_reconnect'].includes(obj.type)) return;
+    if (!REMOTE_CAPABILITIES.clipboard && obj.type === 'clipboard_write') return;
+    if (!REMOTE_CAPABILITIES.process_manager && ['process_list','process_kill'].includes(obj.type)) return;
+    if (!REMOTE_CAPABILITIES.reboot && obj.type === 'reboot_reconnect') return;
+    if (viewOnly && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','clipboard_write','ctrl_alt_del'].includes(obj.type)) return;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  // ── Scaling ──────────────────────────────────────────────────────────────────
+  // Reports how big the stream actually needs to be so the agent can encode
+  // (and, for DXGI's dirty-rect partial updates, crop) at that resolution
+  // instead of always paying full-native encode/transfer cost for detail
+  // nobody can see — drawImage() already scales whatever arrives back up to
+  // fill the canvas, so sending a smaller size costs nothing visually beyond
+  // a softer image. Device pixels (not CSS pixels) so it stays sharp on
+  // HiDPI displays. Debounced: ResizeObserver can fire many times per second
+  // while a window is being dragged to resize.
+  let viewportSendTimer = null;
+  function reportViewportSize() {
+    if (!sw || !sh || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const wrap = document.getElementById('canvas-wrap');
+    const dpr = window.devicePixelRatio || 1;
+    send({
+      type: 'viewport_size',
+      w: Math.max(1, Math.round(wrap.clientWidth * dpr)),
+      h: Math.max(1, Math.round(wrap.clientHeight * dpr)),
+    });
+  }
+
+  function _updateScale() {
+    if (!sw || !sh) return;
+    const wrap = document.getElementById('canvas-wrap');
+    if (scaleMode === 'stretch') {
+      canvas.style.width = wrap.clientWidth + 'px';
+      canvas.style.height = wrap.clientHeight + 'px';
+      scale = wrap.clientWidth / sw;
+    } else if (scaleMode === 'actual') {
+      scale = 1;
+      canvas.style.width = sw + 'px';
+      canvas.style.height = sh + 'px';
+    } else {
+      scale = Math.min(wrap.clientWidth / sw, wrap.clientHeight / sh);
+      canvas.style.width  = Math.round(sw * scale) + 'px';
+      canvas.style.height = Math.round(sh * scale) + 'px';
+    }
+    clearTimeout(viewportSendTimer);
+    viewportSendTimer = setTimeout(reportViewportSize, 300);
+  }
+  new ResizeObserver(_updateScale).observe(document.getElementById('canvas-wrap'));
+
+  // ── Canvas coordinates ───────────────────────────────────────────────────────
+  function canvasXY(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(sw - 1, Math.round((e.clientX - r.left) * sw / r.width))),
+      y: Math.max(0, Math.min(sh - 1, Math.round((e.clientY - r.top) * sh / r.height))),
+    };
+  }
+
+  function btnName(e) {
+    return e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left';
+  }
+
+  // ── Drag-and-drop file transfer ──────────────────────────────────────────────
+  // Not a real-time channel — uploads to the server, which dispatches the
+  // existing FILE_PUSH job type (async, picked up on the agent's next
+  // heartbeat, ~30s). See routes/endpoints.py's remote_file_push().
+  const canvasWrap = document.getElementById('canvas-wrap');
+  const MAX_DROP_BYTES = 8 * 1024 * 1024;
+
+  async function detectExplorerFolder() {
+    const result = new Promise(resolve => {
+      _dropTargetResolver = resolve;
+      setTimeout(() => {
+        if (_dropTargetResolver === resolve) _dropTargetResolver = null;
+        resolve('');
+      }, 3000);
+    });
+    send({ type: 'drop_target_request' });
+    return result;
+  }
+
+  function addTransfer(file) {
+    const el = document.createElement('div');
+    el.className = 'transfer';
+    el.innerHTML = `<div></div><div class="meta"></div>`;
+    el.firstElementChild.textContent = `${file.name} — detecting destination…`;
+    transfers.prepend(el);
+    return {
+      update(text, meta, cls) {
+        el.firstElementChild.textContent = `${file.name} — ${text}`;
+        el.lastElementChild.textContent = meta || '';
+        if (cls) el.classList.add(cls);
+      }
+    };
+  }
+
+  async function uploadFiles(files, requestedDir) {
+    for (const file of files) {
+      const item = addTransfer(file);
+      if (file.size > MAX_DROP_BYTES) {
+        item.update(`too large (max ${MAX_DROP_BYTES / (1024*1024)} MB)`, '', 'failed');
+        continue;
+      }
+      const destDir = requestedDir === undefined ? '' : requestedDir;
+      item.update('uploading…', destDir || 'Using Public Desktop');
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('dest_dir', destDir || '');
+      fd.append('csrf_token', getCsrfToken());
+      try {
+        const resp = await fetch(
+          `/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/file-push`,
+          { method: 'POST', body: fd, headers: { 'X-CSRFToken': getCsrfToken() } }
+        );
+        const data = await resp.json();
+        if (!resp.ok) {
+          item.update(data.message || data.error || 'failed', '', 'failed');
+        } else {
+          item.update('queued', data.dest_path);
+          pollTransfer(data.job_id, item, data.dest_path);
+        }
+      } catch {
+        item.update('upload failed', '', 'failed');
+      }
+    }
+  }
+
+  async function pollTransfer(jobID, item, destPath) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const resp = await fetch(`/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/file-job/${jobID}`);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      if (data.status === 'completed') {
+        item.update('delivered', destPath, 'done');
+        return;
+      }
+      if (data.status === 'failed' || data.status === 'cancelled') {
+        item.update('failed', data.error || destPath, 'failed');
+        return;
+      }
+      item.update(data.status === 'running' ? 'delivering…' : 'queued', destPath);
+    }
+    item.update('still queued — see Jobs for status', destPath);
+  }
+
+  ['dragenter', 'dragover'].forEach(evt =>
+    canvasWrap.addEventListener(evt, e => {
+      e.preventDefault();
+      if (SUPPORT_MODE) return;
+      if (e.dataTransfer.types.includes('Files')) canvasWrap.classList.add('dragging');
+    })
+  );
+  ['dragleave', 'dragend'].forEach(evt =>
+    canvasWrap.addEventListener(evt, e => {
+      if (e.target === canvasWrap) canvasWrap.classList.remove('dragging');
+    })
+  );
+
+  canvasWrap.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    if (SUPPORT_MODE) return;
+    canvasWrap.classList.remove('dragging');
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+
+    await uploadFiles(files, undefined);
+  });
+
+  // ── Mouse events ─────────────────────────────────────────────────────────────
+  // Pointer capture guarantees that a release still reaches us if latency or
+  // scaling moves the pointer outside the canvas between press and release.
+  // Without this, Windows can retain a stuck mouse-down state and ordinary
+  // dialog buttons (including OK) stop responding until another release lands.
+  const pressedRemoteButtons = new Set();
+  let lastPointerPosition = { x: 0, y: 0 };
+
+  function releaseRemoteButton(button) {
+    if (!pressedRemoteButtons.has(button)) return;
+    pressedRemoteButtons.delete(button);
+    send({ type: 'mouseup', button, ...lastPointerPosition });
+  }
+
+  function releaseAllRemoteButtons() {
+    Array.from(pressedRemoteButtons).forEach(releaseRemoteButton);
+  }
+
+  canvas.addEventListener('pointermove', e => {
+    lastPointerPosition = canvasXY(e);
+    send({ type: 'mousemove', ...lastPointerPosition });
+  });
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    canvas.focus();
+    lastPointerPosition = canvasXY(e);
+    const button = btnName(e);
+    pressedRemoteButtons.add(button);
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
+    send({ type: 'mousedown', button, ...lastPointerPosition });
+  });
+  canvas.addEventListener('pointerup', e => {
+    e.preventDefault();
+    lastPointerPosition = canvasXY(e);
+    releaseRemoteButton(btnName(e));
+    try { canvas.releasePointerCapture(e.pointerId); } catch {}
+  });
+  canvas.addEventListener('pointercancel', releaseAllRemoteButtons);
+  window.addEventListener('blur', releaseAllRemoteButtons);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAllRemoteButtons();
+  });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    send({ type: 'scroll', delta: e.deltaY > 0 ? 1 : -1 });
+  }, { passive: false });
+
+  // ── Keyboard events ──────────────────────────────────────────────────────────
+  canvas.addEventListener('keydown', async (e) => {
+    e.preventDefault();
+
+    // Ctrl+V — read browser clipboard and send to remote
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          send({ type: 'clipboard_write', text });
+          showToast('Pasted to remote');
+        }
+      } catch {
+        // Clipboard access denied — fall through to raw Ctrl+V keystrokes
+        send({ type: 'keydown', key: 'Control' });
+        send({ type: 'keydown', key: 'v' });
+        send({ type: 'keyup', key: 'v' });
+        send({ type: 'keyup', key: 'Control' });
+      }
+      return;
+    }
+
+    // Ctrl+C — send keystrokes; remote clipboard monitor will push result back
+    if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+      send({ type: 'keydown', key: 'Control' });
+      send({ type: 'keydown', key: 'c' });
+      send({ type: 'keyup',   key: 'c' });
+      send({ type: 'keyup',   key: 'Control' });
+      return;
+    }
+
+    // `key` is the produced character ("@" for Shift+2), while `code` is
+    // the physical key ("Digit2"). Send both so the agent can inject Digit2
+    // while the separately-forwarded Shift key is held.
+    send({
+      type: 'keydown', key: e.key, code: e.code,
+      shiftKey: e.shiftKey, ctrlKey: e.ctrlKey,
+      altKey: e.altKey, metaKey: e.metaKey
+    });
+  });
+
+  canvas.addEventListener('keyup', (e) => {
+    e.preventDefault();
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'c')) return;
+    send({
+      type: 'keyup', key: e.key, code: e.code,
+      shiftKey: e.shiftKey, ctrlKey: e.ctrlKey,
+      altKey: e.altKey, metaKey: e.metaKey
+    });
+  });
+
+  function releaseRemoteModifiers() {
+    [
+      ['Shift', 'ShiftLeft'], ['Shift', 'ShiftRight'],
+      ['Control', 'ControlLeft'], ['Control', 'ControlRight'],
+      ['Alt', 'AltLeft'], ['Alt', 'AltRight'],
+      ['Meta', 'MetaLeft'], ['Meta', 'MetaRight']
+    ].forEach(([key, code]) => send({
+      type: 'keyup', key, code,
+      shiftKey: false, ctrlKey: false, altKey: false, metaKey: false
+    }));
+  }
+  window.addEventListener('blur', releaseRemoteModifiers);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseRemoteModifiers();
+  });
+
+  // ── Paste event (Ctrl+V / browser paste) ────────────────────────────────────
+  canvas.addEventListener('paste', async (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    if (text) {
+      send({ type: 'clipboard_write', text });
+      showToast('Pasted to remote');
+    }
+  });
+
+  // ── Toolbar buttons ──────────────────────────────────────────────────────────
+  document.getElementById('btn-cad')?.addEventListener('click', () => {
+    // Windows deliberately ignores a synthetic Ctrl+Alt+Delete assembled
+    // with SendInput. Ask the LocalSystem service to invoke SendSAS instead.
+    send({ type: 'ctrl_alt_del' });
+    showToast('Ctrl+Alt+Delete sent');
+  });
+
+  const filePicker = document.getElementById('file-picker');
+  let pendingUploadFiles = [];
+  let detectedUploadPath = '';
+
+  document.getElementById('btn-upload')?.addEventListener('click', () => {
+    filePicker.value = '';
+    filePicker.click();
+  });
+
+  filePicker.addEventListener('change', async () => {
+    pendingUploadFiles = Array.from(filePicker.files || []);
+    if (!pendingUploadFiles.length) return;
+    document.getElementById('path-files').textContent =
+      pendingUploadFiles.length === 1
+        ? `Selected: ${pendingUploadFiles[0].name}`
+        : `${pendingUploadFiles.length} files selected`;
+    document.getElementById('path-error').textContent = '';
+    pathModal.classList.add('open');
+    document.querySelector('input[name="remote-path"][value="public"]').checked = true;
+  });
+
+  document.getElementById('path-cancel').addEventListener('click', () => {
+    pathModal.classList.remove('open');
+    pendingUploadFiles = [];
+  });
+  document.getElementById('path-confirm').addEventListener('click', async () => {
+    const selected = document.querySelector('input[name="remote-path"]:checked').value;
+    let destination = '';
+    if (selected === 'public') destination = ENDPOINT_PLATFORM === 'darwin' ? '/Users/Shared' : (ENDPOINT_PLATFORM === 'linux' ? '/tmp/Warden Transfers' : 'C:\\Users\\Public\\Desktop');
+    if (selected === 'custom') destination = document.getElementById('custom-path').value.trim();
+    const validDestination = ENDPOINT_PLATFORM === 'windows'
+      ? /^C:\\Users\\[^\\/:*?"<>|]+(?:\\[^:*?"<>|]+)*$/i.test(destination)
+      : /^\/(?:home|Users)\/[^/]+\/(?:Desktop|Documents|Downloads)(?:\/[^/]+)*$/.test(destination)
+        || /^\/(?:tmp|private\/tmp|Users\/Shared)(?:\/[^/]+)*$/.test(destination);
+    if (!validDestination) {
+      document.getElementById('path-error').textContent =
+        'Choose a detected user folder or the shared transfer folder.';
+      return;
+    }
+    const files = pendingUploadFiles;
+    pendingUploadFiles = [];
+    pathModal.classList.remove('open');
+    await uploadFiles(files, destination.replace(/[\\/]+$/, ''));
+  });
+
+  const browserModal = document.getElementById('remote-browser-modal');
+  let browserPath = '::folders::';
+  let browserMode = 'upload';
+  let folderLoadGeneration = 0;
+
+  async function loadRemoteFolder(path) {
+    const generation = ++folderLoadGeneration;
+    document.getElementById('browser-items').innerHTML = '<div class="browser-item">Loading…</div>';
+    document.getElementById('browser-error').textContent = '';
+    const queued = await fetch(`/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/files/browse`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken()},
+      body: JSON.stringify({path})
+    });
+    const queuedData = await queued.json();
+    if (generation !== folderLoadGeneration) return;
+    if (!queued.ok) throw new Error(queuedData.error || 'Unable to browse folder');
+    for (let i = 0; i < 25; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const response = await fetch(`/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/file-job/${queuedData.job_id}`);
+      if (!response.ok) continue;
+      const state = await response.json();
+      if (generation !== folderLoadGeneration) return;
+      if (state.status === 'failed') throw new Error(state.error || 'Unable to browse folder');
+      if (state.status !== 'completed') continue;
+      const listing = JSON.parse(state.log || '{}');
+      browserPath = listing.path || path;
+      document.getElementById('browser-path').textContent = browserPath;
+      const container = document.getElementById('browser-items');
+      container.innerHTML = '';
+      (listing.items || []).sort((a,b) => Number(b.is_dir)-Number(a.is_dir) || a.name.localeCompare(b.name)).forEach(entry => {
+        const button = document.createElement('button');
+        button.className = 'browser-item';
+        button.type = 'button';
+        button.textContent = `${entry.is_dir ? '📁' : '📄'} ${entry.name}`;
+        button.addEventListener('click', () => {
+          if (entry.is_dir) {
+            loadRemoteFolder(entry.path).catch(showBrowserError);
+          } else if (browserMode === 'download') {
+            browserModal.classList.remove('open');
+            queueRemoteDownload(entry.path);
+          } else {
+            showBrowserError(new Error('Files cannot be upload destinations; choose this folder instead.'));
+          }
+        });
+        container.appendChild(button);
+      });
+      return;
+    }
+    throw new Error('The endpoint did not return the folder listing in time');
+  }
+  function showBrowserError(error) {
+    document.getElementById('browser-error').textContent = error.message || String(error);
+  }
+  function openRemoteBrowser(mode) {
+    browserMode = mode;
+    browserPath = '::folders::';
+    document.getElementById('browser-title').textContent =
+      mode === 'upload' ? 'Choose upload folder' : 'Choose file or folder to download';
+    document.getElementById('browser-select-folder').textContent =
+      mode === 'upload' ? 'Select this folder' : 'Download this folder';
+    browserModal.classList.add('open');
+    loadRemoteFolder(browserPath).catch(showBrowserError);
+  }
+  document.getElementById('browse-upload').addEventListener('click', e => {
+    e.preventDefault();
+    openRemoteBrowser('upload');
+  });
+  document.getElementById('browser-cancel').addEventListener('click', () => {
+    folderLoadGeneration++;
+    browserModal.classList.remove('open');
+  });
+  document.getElementById('browser-up').addEventListener('click', () => {
+    if (browserPath === '::folders::') return;
+    const atRoot = ENDPOINT_PLATFORM === 'windows'
+      ? /^C:\\Users\\[^\\]+\\(?:Desktop|Documents|Downloads)$/i.test(browserPath)
+      : /^\/(?:home|Users)\/[^/]+\/(?:Desktop|Documents|Downloads)$/.test(browserPath);
+    const parent = ENDPOINT_PLATFORM === 'windows' ? browserPath.replace(/\\[^\\]+$/, '') : browserPath.replace(/\/[^/]+$/, '');
+    loadRemoteFolder(atRoot ? '::folders::' : parent).catch(showBrowserError);
+  });
+  document.getElementById('browser-select-folder').addEventListener('click', () => {
+    if (browserPath === '::folders::') {
+      showBrowserError(new Error('Open Desktop, Documents, or Downloads first.'));
+      return;
+    }
+    if (browserMode === 'download') {
+      browserModal.classList.remove('open');
+      queueRemoteDownload(browserPath);
+    } else {
+      document.getElementById('custom-path').value = browserPath;
+      document.querySelector('input[name="remote-path"][value="custom"]').checked = true;
+      browserModal.classList.remove('open');
+    }
+  });
+
+  async function queueRemoteDownload(srcPath) {
+    const name = srcPath.split(/[\\/]/).pop() || 'remote file';
+    const item = addTransfer({ name });
+    item.update('queueing download…', srcPath);
+    try {
+      const resp = await fetch(
+        `/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/file-pull`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCsrfToken()
+          },
+          body: JSON.stringify({ path: srcPath, csrf_token: getCsrfToken() })
+        }
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        item.update(data.message || data.error || 'failed', srcPath, 'failed');
+        return;
+      }
+      for (let i = 0; i < 40; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const stateResp = await fetch(
+          `/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/file-job/${data.job_id}`
+        );
+        if (!stateResp.ok) continue;
+        const state = await stateResp.json();
+        if (state.status === 'completed') {
+          item.update('download ready', srcPath, 'done');
+          window.location.assign(
+            `/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/file-job/${data.job_id}/download`
+          );
+          return;
+        }
+        if (state.status === 'failed' || state.status === 'cancelled') {
+          item.update('failed', state.error || srcPath, 'failed');
+          return;
+        }
+        item.update(state.status === 'running' ? 'reading remote file…' : 'queued', srcPath);
+      }
+      item.update('still queued — see Jobs for status', srcPath);
+    } catch {
+      item.update('download failed', srcPath, 'failed');
+    }
+  }
+  document.getElementById('btn-download')?.addEventListener('click', () => openRemoteBrowser('download'));
+
+  document.getElementById('btn-fullscreen').addEventListener('click', () => {
+    const el = document.getElementById('remote-wrap');
+    const request = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (request) request.call(el).catch?.(() => showToast('Fullscreen is unavailable'));
+    else showToast('Fullscreen is unavailable');
+  });
+
+  document.getElementById('scale-mode').addEventListener('change', e => {
+    scaleMode = e.target.value;
+    _updateScale();
+    addSessionEvent(`Scaling changed to ${e.target.options[e.target.selectedIndex].text}`);
+  });
+  document.getElementById('monitor-select').addEventListener('change', e => {
+    send({type:'monitor_select', id:Number(e.target.value)});
+    addSessionEvent(`Switched to ${e.target.options[e.target.selectedIndex].text}`);
+  });
+  document.getElementById('btn-view-only').addEventListener('click', e => {
+    const enabling = !viewOnly;
+    if (enabling) {
+      // Releases must be sent before view-only begins filtering input.
+      releaseAllRemoteButtons();
+      releaseRemoteModifiers();
+    }
+    viewOnly = enabling;
+    e.currentTarget.classList.toggle('active', viewOnly);
+    e.currentTarget.textContent = viewOnly ? 'View only: On' : 'View only';
+    canvasWrap.classList.toggle('view-only', viewOnly);
+    if (!enabling) canvas.focus();
+    addSessionEvent(viewOnly ? 'View-only mode enabled' : 'Remote input enabled');
+  });
+
+  function togglePanel(id) {
+    document.querySelectorAll('.remote-panel').forEach(panel => {
+      if (panel.id !== id) panel.classList.remove('open');
+    });
+    document.getElementById(id).classList.toggle('open');
+  }
+  document.getElementById('btn-clipboard').addEventListener('click', () => {
+    document.getElementById('clipboard-text').value = _remoteClipboard;
+    togglePanel('clipboard-panel');
+  });
+  document.getElementById('clipboard-send').addEventListener('click', () => {
+    const text = document.getElementById('clipboard-text').value;
+    if (text) { send({ type:'clipboard_write', text }); showToast('Sent to remote clipboard'); addSessionEvent('Clipboard text sent'); }
+  });
+  document.getElementById('clipboard-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(_remoteClipboard || document.getElementById('clipboard-text').value)
+      .then(() => showToast('Remote text copied'));
+  });
+  document.getElementById('btn-keyboard').addEventListener('click', () => togglePanel('keyboard-panel'));
+  document.querySelectorAll('[data-remote-key]').forEach(button => button.addEventListener('click', () => {
+    const key = button.dataset.remoteKey;
+    send({ type:'keydown', key, code:key });
+    send({ type:'keyup', key, code:key });
+    canvas.focus();
+  }));
+  document.getElementById('btn-timeline').addEventListener('click', () => togglePanel('timeline-panel'));
+  document.getElementById('btn-processes').addEventListener('click', () => {
+    togglePanel('process-panel');
+    send({type:'process_list'});
+  });
+  document.getElementById('process-refresh').addEventListener('click', () => send({type:'process_list'}));
+
+  async function postSessionEvent(type, body, extra = {}) {
+    const response = await fetch(`/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/events`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRFToken':getCsrfToken()},
+      body:JSON.stringify({type, body, ...extra})
+    });
+    if (!response.ok) throw new Error('Could not save session event');
+    return response.json();
+  }
+  async function loadCollaboration() {
+    const response = await fetch(`/endpoints/${ENDPOINT_ID}/remote-view/${SESSION_ID}/events`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const container = document.getElementById('collab-events');
+    container.replaceChildren();
+    (data.events || []).filter(event => ['note','chat_admin','chat_endpoint'].includes(event.event_type)).forEach(event => {
+      const row = document.createElement('div');
+      row.className = 'session-event';
+      const time = document.createElement('time');
+      time.textContent = new Date(event.created_at).toLocaleTimeString();
+      const body = document.createElement('span');
+      body.textContent = `${event.event_type === 'note' ? 'Note' : 'Chat'}: ${event.body}`;
+      row.append(time, body);
+      container.append(row);
+    });
+  }
+  let collaborationPosting = false;
+  let sharingSupportLink = false;
+  document.getElementById('btn-collab')?.addEventListener('click', () => { togglePanel('collab-panel'); loadCollaboration(); });
+  document.getElementById('note-save').addEventListener('click', async () => {
+    if (collaborationPosting) return;
+    const input = document.getElementById('collab-text');
+    if (!input.value.trim()) return;
+    collaborationPosting = true;
+    try {
+      await postSessionEvent('note', input.value.trim());
+      input.value = '';
+      await loadCollaboration();
+      addSessionEvent('Technician note saved');
+    } catch (error) {
+      showToast(error.message || 'Could not save note');
+    } finally {
+      collaborationPosting = false;
+    }
+  });
+  document.getElementById('chat-send').addEventListener('click', async () => {
+    if (collaborationPosting) return;
+    const input = document.getElementById('collab-text');
+    if (!input.value.trim()) return;
+    collaborationPosting = true;
+    try {
+      const text = input.value.trim();
+      await postSessionEvent('chat_admin', text);
+      send({type:'support_chat', text});
+      input.value = '';
+      await loadCollaboration();
+      addSessionEvent('Support chat sent');
+    } catch (error) {
+      showToast(error.message || 'Could not send chat');
+    } finally {
+      collaborationPosting = false;
+    }
+  });
+  document.getElementById('btn-share')?.addEventListener('click', async () => {
+    if (sharingSupportLink) return;
+    sharingSupportLink = true;
+    try {
+      const response = await fetch(`/endpoints/${ENDPOINT_ID}/support-link`, {
+        method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':getCsrfToken()},
+        body:JSON.stringify({minutes:60,max_uses:1})
+      });
+      const data = await response.json();
+      if (!response.ok) { showToast(data.error || 'Could not create support link'); return; }
+      await navigator.clipboard.writeText(data.url);
+      showToast('One-use support link copied');
+      addSessionEvent('Temporary support link created');
+    } catch {
+      showToast('Could not create support link');
+    } finally {
+      sharingSupportLink = false;
+    }
+  });
+  document.getElementById('btn-reboot')?.addEventListener('click', async () => {
+    if (!await window.wardenConfirm({
+      title: 'Reboot remote endpoint?',
+      message: 'The remote session will disconnect while Windows restarts.',
+      detail: 'Warden will wait for the Agent to return and then offer to reconnect.',
+      tone: 'danger', confirmLabel: 'Reboot endpoint',
+    })) return;
+    send({type:'reboot_reconnect'});
+  });
+
+  setInterval(() => {
+    const now = performance.now();
+    const elapsed = (now - lastStatsAt) / 1000;
+    const fps = elapsed ? Math.round(frameCount / elapsed) : 0;
+    const age = lastFrameAt ? Math.round(now - lastFrameAt) : 0;
+    document.getElementById('quality-stats').textContent = `${fps} fps · ${age || '—'} ms frame age`;
+    frameCount = 0;
+    lastStatsAt = now;
+  }, 2000);
+
+  let disconnecting = false;
+  document.getElementById('btn-disconnect').addEventListener('click', () => {
+    if (disconnecting) return;
+    disconnecting = true;
+    allowReconnect = false;
+    releaseRemoteModifiers();
+    ws && ws.close();
+    fetch(`/endpoints/${ENDPOINT_ID}/end-session/${SESSION_ID}`,
+      { method: 'POST', headers: { 'X-CSRFToken': getCsrfToken() } })
+      .finally(() => history.back());
+  });
+
+  window.addEventListener('beforeunload', () => {
+    stopStatusPoll();
+    clearTimeout(viewportSendTimer);
+    clearTimeout(toast._t);
+    frameQueue.length = 0;
+  });
+
+  connect();
+})();
+</script>
+{% endblock %}

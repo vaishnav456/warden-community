@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Settings — Encryption & Access{% endblock %}
+{% block breadcrumb %}<span class="font-medium text-ink-300">Settings</span> <span class="mx-1 text-ink-700">›</span> <span class="text-ink-300">Encryption & Access</span>{% endblock %}
+{% block content %}
+{% set settings_section = 'security' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include "settings/_navigation.html" %}
+  <div class="flex-1 min-w-0 space-y-6" x-data="securitySettingsPage">
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Data Encryption</h2>
+      <p class="text-xs text-ink-500 mt-0.5">
+        Job commands, output, and escalation details are encrypted per-tenant at rest.
+        Mode: <span class="badge text-xs">{{ company.encryption_mode | upper }}</span>
+      </p>
+
+      {% if company.encryption_mode == 'managed' %}
+      <div class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 text-sm text-ink-300 space-y-3">
+        <p>Managed mode — your key is held by the platform (wrapped by the
+           server's master key) so agents can keep reporting in 24/7 with no
+           admin logged in. Cross-tenant viewing by platform staff still
+           requires your explicit approval below.</p>
+        <form @submit.prevent="post($el, '{{ url_for('settings.set_encryption_mode') }}')" class="flex items-end gap-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="mode" value="byok">
+          <div>
+            <label class="form-label">Switch to BYOK — set a vault passphrase</label>
+            <input type="password" name="passphrase" class="form-input" placeholder="At least 12 characters" minlength="12" required>
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm">Switch to BYOK</button>
+        </form>
+        <p class="text-xs text-status-warning">Warning: BYOK means the platform never stores your
+           passphrase. New agent data can't be encrypted while your vault is
+           locked (e.g. after a server restart) until you unlock it again below.
+           Forgetting the passphrase means that data is permanently unrecoverable.</p>
+      </div>
+      {% else %}
+      <div class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 text-sm text-ink-300 space-y-3">
+        <p>BYOK mode — only you know the vault passphrase; the platform never
+           stores it. Unlock after every server restart so agents can keep
+           encrypting new data.</p>
+        <form @submit.prevent="post($el, '{{ url_for('settings.unlock_vault') }}')" class="flex items-end gap-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div>
+            <label class="form-label">Vault passphrase</label>
+            <input type="password" name="passphrase" class="form-input" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Unlock</button>
+          <button type="button" class="btn btn-secondary btn-sm"
+                  @click="post(null, '{{ url_for('settings.lock_vault') }}')">Lock now</button>
+        </form>
+        <details class="border-t border-base-600 pt-3">
+          <summary class="cursor-pointer font-medium">Change BYOK passphrase or return to managed mode</summary>
+          <form @submit.prevent="post($el, '{{ url_for('settings.rewrap_encryption_key') }}')" class="grid md:grid-cols-2 gap-3 mt-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div><label class="form-label">Current passphrase</label><input type="password" name="current_passphrase" required class="form-input"></div>
+            <div><label class="form-label">Target mode</label><select name="target_mode" class="form-input form-select"><option value="byok">Set a new BYOK passphrase</option><option value="managed">Return to managed encryption</option></select></div>
+            <div><label class="form-label">New passphrase (BYOK only)</label><input type="password" name="new_passphrase" minlength="12" class="form-input"></div>
+            <div class="flex items-end"><button class="btn btn-secondary" type="submit">Re-wrap encryption key</button></div>
+          </form>
+        </details>
+      </div>
+      {% endif %}
+    </div>
+
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Dual Approval</h2>
+      <p class="text-xs text-ink-500 mt-0.5">
+        Destructive operations (remove agent, reboot, shutdown, delete user, and enable multi-session RDP)
+        normally require <strong>two different admins</strong> to approve before they run — one admin can never
+        unilaterally authorize them.
+      </p>
+      <div class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 text-sm text-ink-300 space-y-3">
+        {% if company.require_dual_approval %}
+        <p>Currently <strong class="text-status-online">required</strong>. If your team only has one admin
+           account, you'll never be able to produce a second approver — those operations will stay stuck
+           pending approval forever unless you turn this off, or use the superadmin access-grant path as a
+           second approver instead.</p>
+        <button class="btn btn-danger btn-sm"
+                @click="confirmAndPost('Turn OFF the two-different-admins requirement? A single admin will then be able to approve reboot, shutdown, delete user, remove agent, and other destructive operations alone.', '{{ url_for('settings.set_dual_approval') }}?required=0')">
+          Turn off dual approval
+        </button>
+        {% else %}
+        <p>Currently <strong class="text-status-critical">off</strong> — a single admin can approve destructive
+           operations alone. This is a real reduction in security; only turn dual approval back on if you trust
+           it to reflect your actual risk tolerance.</p>
+        <button class="btn btn-secondary btn-sm"
+                @click="post(null, '{{ url_for('settings.set_dual_approval') }}?required=1')">
+          Turn on dual approval
+        </button>
+        {% endif %}
+      </div>
+    </div>
+
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Automatic Agent Updates</h2>
+      <p class="text-xs text-ink-500 mt-0.5">
+        When a new agent build finishes, endpoints normally stay on their current version until you click
+        <strong>Update Agent</strong> yourself. Turning this on has the background scheduler do that
+        automatically for any online endpoint that's behind the latest build.
+      </p>
+      <div class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 text-sm text-ink-300 space-y-3">
+        {% if company.auto_update_agents %}
+        <p>Currently <strong class="text-status-online">on</strong>. Every online endpoint running an older
+           agent version will get an Update Agent job automatically, within about a minute of a new build
+           completing — no manual click needed. A bad build affects every endpoint that checks in before you
+           catch it and push a fix.</p>
+        <button class="btn btn-danger btn-sm"
+                @click="confirmAndPost('Turn OFF automatic agent updates? Endpoints will stay on their current version until you click Update Agent yourself.', '{{ url_for('settings.set_auto_update') }}?enabled=0')">
+          Turn off auto-update
+        </button>
+        {% else %}
+        <p>Currently <strong class="text-status-critical">off</strong> — the default. You update each endpoint's
+           agent yourself via the Update Agent button. Turn this on only once you trust that a bad build won't
+           quietly roll out to your whole fleet before you notice.</p>
+        <button class="btn btn-secondary btn-sm"
+                @click="post(null, '{{ url_for('settings.set_auto_update') }}?enabled=1')">
+          Turn on auto-update
+        </button>
+        {% endif %}
+      </div>
+    </div>
+
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Platform Access Requests</h2>
+      <p class="text-xs text-ink-500 mt-0.5">
+        A superadmin needs your approval before their session can view decrypted data for your company.
+      </p>
+      <div class="w-table-wrap mt-3">
+        <table class="w-table">
+          <thead><tr><th>Requested by</th><th>Reason</th><th>Requested</th><th class="text-right">Actions</th></tr></thead>
+          <tbody>
+            {% for grant in grants %}
+            <tr>
+              <td class="text-sm text-ink-100">{{ grant.requested_by }}</td>
+              <td class="text-xs text-ink-300">{{ grant.reason }}</td>
+              <td class="text-xs text-ink-500">{{ grant.created_at }}</td>
+              <td class="text-right space-x-2">
+                <button class="btn btn-primary btn-sm"
+                        @click="post(null, '{{ url_for('settings.approve_access_grant', grant_id=grant.id) }}')">Approve (8h)</button>
+                <button class="btn btn-danger btn-sm"
+                        @click="post(null, '{{ url_for('settings.deny_access_grant', grant_id=grant.id) }}')">Deny</button>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4"><div class="empty-state py-10"><p class="text-sm text-ink-500">No pending access requests.</p></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <h2 class="text-base font-semibold text-ink-100">Agent TLS Trust Rotation</h2>
+      <p class="text-xs text-ink-500 mt-0.5">Stage one to three certificate SHA-256 fingerprints during a certificate change. Keep the current pin alongside the new pin until every endpoint has moved.</p>
+      <form @submit.prevent="rotatePins($el)" class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 space-y-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div><label class="form-label">Endpoint</label><select name="endpoint_id" required class="form-input form-select"><option value="">Choose endpoint</option>{% for endpoint in tls_rotation_endpoints %}<option value="{{ endpoint.id }}">{{ endpoint.hostname }} · {{ endpoint.status }}</option>{% endfor %}</select></div>
+        <div><label class="form-label">SHA-256 fingerprints</label><textarea name="fingerprints" required rows="3" class="form-input font-mono-data" placeholder="One fingerprint per line; include current and new during overlap"></textarea></div>
+        <div><label class="form-label">Reason</label><input name="reason" required maxlength="300" class="form-input" placeholder="Certificate renewal or CA migration"></div>
+        <p class="text-xs text-status-warning">Safety: this requires dual approval. Test one endpoint before rotating the fleet.</p>
+        <p x-show="tlsResult" x-text="tlsResult" class="text-sm text-status-online"></p>
+        <button class="btn btn-secondary" :disabled="posting">Request rotation</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

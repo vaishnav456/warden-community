@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Global Audit{% endblock %}
+{% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Global Audit Log</span>{% endblock %}
+{% block content %}
+<div class="fleet-page-header"><div><h1>Global audit log</h1><p>Search and export immutable administrative and endpoint activity across tenants.</p></div></div>
+<div class="flex items-center gap-3 mb-5 flex-wrap">
+  <select name="company_id" class="form-input form-select w-48"
+          hx-get="{{ url_for('superadmin.audit_log') }}" hx-trigger="change" hx-target="#audit-body">
+    <option value="">All companies</option>
+    {% for c in companies %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+  </select>
+  <select name="event_type" class="form-input form-select w-48"
+          hx-get="{{ url_for('superadmin.audit_log') }}" hx-trigger="change" hx-target="#audit-body">
+    <option value="">All events</option>
+    <option value="login">Login</option>
+    <option value="escalation_approved">Escalation approved</option>
+    <option value="job_dispatched">Job dispatched</option>
+    <option value="endpoint_deleted">Endpoint deleted</option>
+  </select>
+  <a href="{{ url_for('superadmin.export_audit') }}" class="btn btn-secondary btn-sm ml-auto">{{ wicon('download', 'button-glyph') }} Export CSV</a>
+</div>
+<div class="w-table-wrap">
+  <table class="w-table">
+    <thead><tr><th>Event</th><th>Company</th><th>Actor</th><th>Endpoint</th><th>Detail</th><th>Time</th></tr></thead>
+    <tbody id="audit-body">
+      {% include "superadmin/_audit_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
