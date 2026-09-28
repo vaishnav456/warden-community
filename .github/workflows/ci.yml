@@ -12,7 +12,7 @@ jobs:
   secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Scan repository for secrets
         run: >-
           docker run --rm
@@ -33,7 +33,7 @@ jobs:
       DEVICE_CA_AUTO_BOOTSTRAP: "true"
       PYTHONPATH: ${{ github.workspace }}/server:${{ github.workspace }}/tools
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -51,7 +51,7 @@ jobs:
         module: [agent-posix, home-node]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod
@@ -62,7 +62,7 @@ jobs:
   windows-agent-tests:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: agent-go/go.mod
@@ -73,7 +73,7 @@ jobs:
   compose-configuration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cp .env.example .env
       - run: cp server/.env.example server/.env
       - run: cp build-service/.env.example build-service/.env
