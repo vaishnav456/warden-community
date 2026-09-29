@@ -26,6 +26,7 @@ button { font:inherit; }
 .landing-primary-button:hover { background:#066e82; box-shadow:0 13px 28px rgba(8,127,150,.24); transform:translateY(-1px); }
 .landing-secondary-button { padding:12px 17px; border:1px solid #ccd7df; color:#344550; background:#fff; }
 .landing-secondary-button:hover { border-color:#9fb1bd; background:#f9fbfc; }
+.landing-github-button svg { width:18px; height:18px; fill:currentColor; }
 .landing-primary-button.is-large,.landing-secondary-button.is-large { min-height:50px; padding:0 21px; font-size:13px; }
 .landing-menu { display:none; width:42px; height:42px; border:0; border-radius:10px; background:#eef3f6; }
 .landing-menu span { display:block; width:17px; height:1.5px; margin:5px auto; background:#30444f; }
