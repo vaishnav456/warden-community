@@ -1935,122 +1935,20 @@ func normaliseInventoryPath(value string) string {
 // ── Update agent ──────────────────────────────────────────────────────────────
 
 func updateAgent(jobID string, p map[string]interface{}, _ logFn) (int, string, error) {
-	// Replacing the service binary stops both the service and its desktop
-	// helper.  Doing that in the middle of a remote-control session can leave
-	// injected input state behind and, more importantly, interrupts the
-	// Winlogon secure desktop while a UAC consent prompt is being observed.
-	// Require the operator to disconnect first so an update can never make a
-	// UAC interaction appear to have been accepted or dismissed.
-	relayMu.Lock()
-	remoteActive := relayLive != nil
-	relayMu.Unlock()
-	if remoteActive {
-		return 1, "", fmt.Errorf("agent update refused while remote access is active; disconnect the remote session and retry")
-	}
-
-	downloadURL, _ := p["download_url"].(string)
-	sha256hex, _ := p["sha256"].(string)
 	version, _ := p["version"].(string)
-	providerURL, _ := p["credential_provider_url"].(string)
-	providerSHA256, _ := p["credential_provider_sha256"].(string)
 	if cmp, err := compareAgentVersions(version, agentVersion); err != nil {
 		return 1, "", fmt.Errorf("invalid update version: %w", err)
 	} else if cmp <= 0 {
 		return 0, fmt.Sprintf("Update skipped: installed version %s is not older than %s", agentVersion, version), nil
 	}
-	if downloadURL == "" {
-		return 1, "", fmt.Errorf("missing download_url")
-	}
-	if runtime.GOOS == "windows" && (providerURL == "" || providerSHA256 == "") {
-		return 1, "", fmt.Errorf("Windows update is missing its Credential Provider artifact")
-	}
-	stageDir, err := jobStageDir(jobID)
-	if err != nil {
-		return 1, "", err
-	}
-	os.MkdirAll(stageDir, 0700)
-	handoff := false
-	defer func() {
-		if !handoff {
-			_ = os.RemoveAll(stageDir)
-		}
-	}()
-	dest := filepath.Join(stageDir, "warden-agent-new.exe")
-	if err := downloadFile(downloadURL, dest, sha256hex); err != nil {
-		return 1, "", fmt.Errorf("download failed: %w", err)
-	}
-	if requireAuthenticodeUpdates() {
-		if err := verifyAuthenticode(dest); err != nil {
-			return 1, "", fmt.Errorf("update signature verification failed: %w", err)
-		}
-	}
-	providerDest := filepath.Join(stageDir, wardenCredentialProviderAsset)
-	if err := downloadFile(providerURL, providerDest, providerSHA256); err != nil {
-		return 1, "", fmt.Errorf("Credential Provider download failed: %w", err)
-	}
-	if requireAuthenticodeUpdates() {
-		if err := verifyAuthenticode(providerDest); err != nil {
-			return 1, "", fmt.Errorf("Credential Provider signature verification failed: %w", err)
-		}
-	}
-	exePath, err := os.Executable()
-	if err != nil {
-		return 1, "", fmt.Errorf("get executable path: %w", err)
-	}
-	batPath := filepath.Join(dataDir, "update.bat")
-	backupPath := filepath.Join(dataDir, "warden-agent-backup.exe")
-	providerAssetPath := filepath.Join(filepath.Dir(exePath), wardenCredentialProviderAsset)
-	providerBackupPath := filepath.Join(stageDir, "WardenCredentialProvider-backup.dll")
-	batContent := fmt.Sprintf(
-		"@echo off\r\n"+
-			"timeout /t 5 /nobreak >nul\r\n"+
-			"sc stop WardenAgent >nul 2>&1\r\n"+
-			"timeout /t 3 /nobreak >nul\r\n"+
-			"copy /y \"%s\" \"%s\" >nul || goto rollback_failed\r\n"+
-			"if not exist \"%s\" goto provider_backup_done\r\n"+
-			"copy /y \"%s\" \"%s\" >nul || goto rollback\r\n"+
-			":provider_backup_done\r\n"+
-			"copy /y \"%s\" \"%s\" >nul || goto rollback\r\n"+
-			"copy /y \"%s\" \"%s\" >nul || goto rollback\r\n"+
-			"del /q \"%s\" >nul 2>&1\r\n"+
-			"sc start WardenAgent >nul 2>&1\r\n"+
-			"set /a health_wait=0\r\n"+
-			":wait_healthy\r\n"+
-			"if exist \"%s\" goto success\r\n"+
-			"timeout /t 2 /nobreak >nul\r\n"+
-			"set /a health_wait+=1\r\n"+
-			"if %%health_wait%% lss 30 goto wait_healthy\r\n"+
-			":rollback\r\n"+
-			"sc stop WardenAgent >nul 2>&1\r\n"+
-			"timeout /t 3 /nobreak >nul\r\n"+
-			"copy /y \"%s\" \"%s\" >nul\r\n"+
-			"if exist \"%s\" (copy /y \"%s\" \"%s\" >nul) else (del /q \"%s\" >nul 2>&1)\r\n"+
-			"sc start WardenAgent >nul 2>&1\r\n"+
-			"goto cleanup\r\n"+
-			":success\r\n"+
-			"del /q \"%s\" >nul 2>&1\r\n"+
-			"del /q \"%s\" >nul 2>&1\r\n"+
-			"goto cleanup\r\n"+
-			":rollback_failed\r\n"+
-			"sc start WardenAgent >nul 2>&1\r\n"+
-			":cleanup\r\n"+
-			"rmdir /s /q \"%s\"\r\n"+
-			"del /q \"%%~f0\"\r\n",
-		exePath, backupPath,
-		providerAssetPath, providerAssetPath, providerBackupPath,
-		dest, exePath, providerDest, providerAssetPath, updateHealthPath,
-		updateHealthPath, backupPath, exePath,
-		providerBackupPath, providerBackupPath, providerAssetPath, providerAssetPath,
-		backupPath, providerBackupPath, stageDir,
-	)
-	if err := os.WriteFile(batPath, []byte(batContent), 0600); err != nil {
-		return 1, "", fmt.Errorf("write update script: %w", err)
-	}
-	if err := exec.Command("cmd", "/c", "start", "", batPath).Start(); err != nil {
-		return 1, "", fmt.Errorf("launch update script: %w", err)
-	}
-	handoff = true // update.bat owns cleanup after copying the staged binary
-	return 0, fmt.Sprintf("Update to version %s initiated", version), nil
+
+	// Use the same persistent SYSTEM Scheduled Task handoff as a full agent
+	// reinstall. A child cmd.exe can be terminated with the Windows service,
+	// which strands the endpoint between stop, replacement and rollback. The
+	// scheduled helper survives service shutdown and reboot, verifies both
+	// artifacts again, waits for a version-specific health marker, and restores
+	// the previous binary and Credential Provider if startup fails.
+	return prepareAgentReinstall(jobID, p)
 }
 
 func compareAgentVersions(a, b string) (int, error) {
