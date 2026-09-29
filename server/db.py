@@ -1543,6 +1543,18 @@ def has_inflight_job(endpoint_id, job_type):
     return bool(rows)
 
 
+def has_recent_job(endpoint_id, job_type, minutes=15):
+    """Return whether an operation was recently queued for this endpoint."""
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=max(1, int(minutes)))
+    ).isoformat()
+    rows = _get(
+        f"jobs?endpoint_id=eq.{_q(endpoint_id)}&type=eq.{_q(job_type)}"
+        f"&created_at=gte.{_q(cutoff)}&select=id&limit=1"
+    )
+    return bool(rows)
+
+
 def has_job(endpoint_id, job_type):
     """True when this endpoint has ever received this one-shot operation."""
     rows = _get(

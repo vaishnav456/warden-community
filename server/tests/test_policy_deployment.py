@@ -105,6 +105,25 @@ class ScheduledJobRaceTests(unittest.TestCase):
         )
         legacy_create.assert_not_called()
 
+    def test_auto_update_waits_for_post_restart_heartbeat(self):
+        from services import scheduler
+        company = {"id": "company-1"}
+        endpoint = {
+            "id": "endpoint-1", "branch_id": "branch-1", "status": "online",
+            "platform": "windows", "agent_version": "2.6.36",
+        }
+        build = {"agent_version": "2.6.37", "sha256": "a" * 64}
+        with mock.patch.object(scheduler.db, "get_auto_update_company", return_value=company), \
+             mock.patch.object(scheduler.db, "get_endpoints", return_value=[endpoint]), \
+             mock.patch.object(scheduler.db, "endpoint_target_platform", return_value="windows-amd64"), \
+             mock.patch.object(scheduler.db, "get_latest_completed_build", return_value=build), \
+             mock.patch.object(scheduler, "update_payload", return_value={"version": "2.6.37"}), \
+             mock.patch.object(scheduler.db, "has_recent_job", return_value=True) as recent, \
+             mock.patch.object(scheduler.db, "create_system_job_once") as create_once:
+            scheduler._check_auto_updates()
+        recent.assert_called_once_with("endpoint-1", "UPDATE_AGENT", minutes=15)
+        create_once.assert_not_called()
+
 
 class GroupPolicyDeploymentTests(unittest.TestCase):
     def setUp(self):

@@ -3,6 +3,7 @@ module warden-home-node
 go 1.27.0
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/netbirdio/go-nat v0.0.0-20260821095157-6b2c8c5c74e8
 	github.com/pion/ice/v4 v4.4.4
 	github.com/pion/webrtc/v4 v4.2.22

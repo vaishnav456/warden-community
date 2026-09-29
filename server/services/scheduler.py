@@ -155,6 +155,17 @@ def _check_auto_updates():
                         "scheduler: endpoint %s reported invalid version %r; update allowed for recovery",
                         ep["id"], current_version,
                     )
+            # The update job finishes before the restarted service reports its
+            # new version. Avoid dispatching another updater during that gap.
+            try:
+                if db.has_recent_job(ep["id"], "UPDATE_AGENT", minutes=15):
+                    continue
+            except Exception as e:
+                log.warning(
+                    "scheduler: recent update lookup failed for endpoint %s: %s",
+                    ep["id"], e,
+                )
+                continue
             try:
                 created = db.create_system_job_once(
                     company_id, ep.get("branch_id"), ep["id"], "UPDATE_AGENT", payload,

@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
@@ -67,6 +68,21 @@ _pairs: dict[str, _Pair] = {}   # session_id → _Pair
 _pairs_lock = asyncio.Lock()
 
 
+class _HomePair:
+    __slots__ = ("initiator_ws", "target_ws", "ready", "done")
+
+    def __init__(self):
+        self.initiator_ws = None
+        self.target_ws = None
+        self.ready = asyncio.Event()
+        self.done = asyncio.Event()
+
+
+_home_pairs: dict[str, _HomePair] = {}
+_home_pairs_lock = asyncio.Lock()
+_MAX_HOME_RELAY_PAIRS = 256
+
+
 async def _get_or_create_pair(session_id: str) -> _Pair:
     async with _pairs_lock:
         if session_id not in _pairs:
@@ -105,6 +121,27 @@ async def _attach_peer(session_id: str, side: str, websocket):
             return None
         setattr(pair, attr, websocket)
         return pair
+
+
+async def _attach_home_peer(session_id: str, side: str, websocket):
+    async with _home_pairs_lock:
+        pair = _home_pairs.get(session_id)
+        if pair is None:
+            if len(_home_pairs) >= _MAX_HOME_RELAY_PAIRS:
+                return None
+            pair = _HomePair()
+            _home_pairs[session_id] = pair
+        attr = f"{side}_ws"
+        existing = getattr(pair, attr)
+        if existing is not None and not getattr(existing, "closed", False):
+            return None
+        setattr(pair, attr, websocket)
+        return pair
+
+
+async def _cleanup_home_pair(session_id: str) -> None:
+    async with _home_pairs_lock:
+        _home_pairs.pop(session_id, None)
 
 
 # ── Relay helpers ─────────────────────────────────────────────────────────────
@@ -332,6 +369,91 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
         await _cleanup_pair(session_id)
 
 
+def _home_session_active(session) -> bool:
+    if not session or session.get("status") not in {"offered", "answered", "failed"}:
+        return False
+    try:
+        expires = datetime.fromisoformat(str(session.get("expires_at") or "").replace("Z", "+00:00"))
+        return expires > datetime.now(timezone.utc)
+    except (TypeError, ValueError):
+        return False
+
+
+async def _handle_home_initiator(websocket, session_id: str, kind: str, key: str) -> None:
+    session = db.get_home_p2p_session(session_id)
+    if not _home_session_active(session):
+        await websocket.close(1008, "expired or invalid session")
+        return
+    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    if kind == "endpoint":
+        principal = db.get_endpoint_by_api_key_hash(key_hash)
+        expected = session.get("endpoint_id")
+    else:
+        principal = db.get_home_node_by_key_hash(key_hash)
+        expected = session.get("initiator_node_id")
+    if not principal or str(principal.get("id")) != str(expected):
+        await websocket.close(1008, "unauthorized")
+        return
+    pair = await _attach_home_peer(session_id, "initiator", websocket)
+    if pair is None:
+        await websocket.close(1013, "relay capacity or duplicate peer")
+        return
+    if pair.target_ws:
+        pair.ready.set()
+    try:
+        await asyncio.wait_for(pair.ready.wait(), timeout=PAIR_TIMEOUT)
+        target = pair.target_ws
+        if target is None:
+            raise asyncio.TimeoutError
+        log.info("Encrypted Home relay active (%s session %s)", kind, session_id)
+        health_tracker.increment_connections()
+        done, pending = await asyncio.wait(
+            [asyncio.ensure_future(_relay(websocket, target)),
+             asyncio.ensure_future(_relay(target, websocket))],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+    except asyncio.TimeoutError:
+        log.warning("Home relay pairing timed out (session %s)", session_id)
+    except (OSError, websockets.exceptions.WebSocketException) as exc:
+        log.warning("Home relay error (session %s): %s", session_id, exc)
+    finally:
+        if pair.ready.is_set():
+            health_tracker.decrement_connections()
+        pair.done.set()
+        await _cleanup_home_pair(session_id)
+        for ws in (websocket, pair.target_ws):
+            if ws is not None:
+                try:
+                    await ws.close(1000)
+                except Exception:
+                    pass
+
+
+async def _handle_home_target(websocket, session_id: str, key: str) -> None:
+    session = db.get_home_p2p_session(session_id)
+    if not _home_session_active(session):
+        await websocket.close(1008, "expired or invalid session")
+        return
+    node = db.get_home_node_by_key_hash(hashlib.sha256(key.encode()).hexdigest())
+    if not node or str(node.get("id")) != str(session.get("node_id")):
+        await websocket.close(1008, "unauthorized")
+        return
+    pair = await _attach_home_peer(session_id, "target", websocket)
+    if pair is None:
+        await websocket.close(1013, "relay capacity or duplicate peer")
+        return
+    if pair.initiator_ws:
+        pair.ready.set()
+    try:
+        await asyncio.wait_for(pair.done.wait(), timeout=PAIR_TIMEOUT + 600)
+    except asyncio.TimeoutError:
+        pair.done.set()
+    finally:
+        await _cleanup_home_pair(session_id)
+
+
 # ── Main dispatcher ───────────────────────────────────────────────────────────
 
 async def _handle(websocket) -> None:
@@ -364,6 +486,32 @@ async def _handle(websocket) -> None:
             await websocket.close(1008, "missing key")
             return
         await _handle_agent(websocket, session_id, api_key)
+
+    # Warden Home direct-first fallback. The relay sees only the already
+    # encrypted inner mTLS byte stream; endpoint/node credentials are bound
+    # to the short-lived rendezvous row before either socket can attach.
+    elif len(parts) >= 3 and parts[0] == "home-relay":
+        side, session_id = parts[1], parts[2]
+        if side == "endpoint":
+            key = websocket.request.headers.get("X-Agent-Key", "")
+            if not key:
+                await websocket.close(1008, "missing key")
+                return
+            await _handle_home_initiator(websocket, session_id, "endpoint", key)
+        elif side == "source":
+            key = websocket.request.headers.get("X-Warden-Home-Key", "")
+            if not key:
+                await websocket.close(1008, "missing key")
+                return
+            await _handle_home_initiator(websocket, session_id, "source", key)
+        elif side == "node":
+            key = websocket.request.headers.get("X-Warden-Home-Key", "")
+            if not key:
+                await websocket.close(1008, "missing key")
+                return
+            await _handle_home_target(websocket, session_id, key)
+        else:
+            await websocket.close(1008, "bad relay side")
 
     else:
         log.warning("WS relay: unrecognised path %s", raw_path)

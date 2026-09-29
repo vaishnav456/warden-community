@@ -11,9 +11,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -59,6 +62,103 @@ const (
 
 func (a homeP2PAddr) Network() string { return "warden-home-p2p" }
 func (a homeP2PAddr) String() string  { return string(a) }
+
+type homeRelayConn struct {
+	ws      *websocket.Conn
+	readMu  sync.Mutex
+	writeMu sync.Mutex
+	reader  io.Reader
+}
+
+func (c *homeRelayConn) Read(p []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	for {
+		for c.reader == nil {
+			messageType, reader, err := c.ws.NextReader()
+			if err != nil {
+				return 0, err
+			}
+			if messageType == websocket.BinaryMessage {
+				c.reader = reader
+			}
+		}
+		n, err := c.reader.Read(p)
+		if n > 0 {
+			if errors.Is(err, io.EOF) {
+				c.reader = nil
+			}
+			return n, nil
+		}
+		if errors.Is(err, io.EOF) {
+			c.reader = nil
+			continue
+		}
+		return 0, err
+	}
+}
+
+func (c *homeRelayConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	writer, err := c.ws.NextWriter(websocket.BinaryMessage)
+	if err != nil {
+		return 0, err
+	}
+	n, writeErr := writer.Write(p)
+	closeErr := writer.Close()
+	if writeErr != nil {
+		return n, writeErr
+	}
+	return n, closeErr
+}
+
+func (c *homeRelayConn) Close() error                       { return c.ws.Close() }
+func (c *homeRelayConn) LocalAddr() net.Addr                { return homeP2PAddr("endpoint-relay") }
+func (c *homeRelayConn) RemoteAddr() net.Addr               { return homeP2PAddr("home-node-relay") }
+func (c *homeRelayConn) SetDeadline(t time.Time) error      { return nil }
+func (c *homeRelayConn) SetReadDeadline(t time.Time) error  { return c.ws.SetReadDeadline(t) }
+func (c *homeRelayConn) SetWriteDeadline(t time.Time) error { return c.ws.SetWriteDeadline(t) }
+
+func dialHomeRelay(sessionID string) (net.Conn, error) {
+	base, err := url.Parse(serverURL())
+	if err != nil || (base.Scheme != "https" && base.Scheme != "http") {
+		return nil, errors.New("invalid Warden relay URL")
+	}
+	if base.Scheme == "https" {
+		base.Scheme = "wss"
+	} else {
+		base.Scheme = "ws"
+	}
+	base.Path = "/home-relay/endpoint/" + url.PathEscape(sessionID)
+	base.RawQuery = ""
+	headers := http.Header{}
+	headers.Set("X-Agent-Key", apiKey)
+	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second, Proxy: http.ProxyFromEnvironment}
+	if httpClient != nil {
+		if transport, ok := httpClient.Transport.(*http.Transport); ok && transport.TLSClientConfig != nil {
+			dialer.TLSClientConfig = transport.TLSClientConfig.Clone()
+		}
+	}
+	ws, response, err := dialer.Dial(base.String(), headers)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("encrypted relay connection failed: %w", err)
+	}
+	ws.SetReadLimit(128 * 1024)
+	return &homeRelayConn{ws: ws}, nil
+}
+
+func fallbackHomeRelay(sessionID string, directErr error) (net.Conn, error) {
+	conn, relayErr := dialHomeRelay(sessionID)
+	if relayErr == nil {
+		logInfo("Warden Home direct P2P unavailable; using end-to-end encrypted HTTPS relay")
+		return conn, nil
+	}
+	return nil, fmt.Errorf("direct P2P failed (%v); HTTPS relay failed (%v)", directErr, relayErr)
+}
 
 func dialHomeP2P(username string, node homeNode) (net.Conn, error) {
 	api, err := sharedAgentP2PAPI()
@@ -144,7 +244,8 @@ func dialHomeP2P(username string, node homeNode) (net.Conn, error) {
 			if message == "" {
 				message = "Home Node rejected P2P negotiation"
 			}
-			return fail(errors.New(message))
+			_ = pc.Close()
+			return fallbackHomeRelay(sessionID, errors.New(message))
 		}
 		if answer, _ := result["answer_sdp"].(string); status == "answered" && answer != "" {
 			if err = pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}); err != nil {
@@ -154,9 +255,11 @@ func dialHomeP2P(username string, node homeNode) (net.Conn, error) {
 			case rwc := <-ready:
 				return &homeP2PConn{ReadWriteCloser: rwc, pc: pc}, nil
 			case err := <-failed:
-				return fail(err)
+				_ = pc.Close()
+				return fallbackHomeRelay(sessionID, err)
 			case <-time.After(25 * time.Second):
-				return fail(errors.New("no direct P2P path; check UDP/STUN access or use another node mode"))
+				_ = pc.Close()
+				return fallbackHomeRelay(sessionID, errors.New("no direct P2P path through ICE/STUN"))
 			}
 		}
 		time.Sleep(750 * time.Millisecond)

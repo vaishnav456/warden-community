@@ -2,6 +2,7 @@ import asyncio
 import pathlib
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -43,9 +44,11 @@ class MessageStream:
 class RelayLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         ws_proxy._pairs.clear()
+        ws_proxy._home_pairs.clear()
 
     async def asyncTearDown(self):
         ws_proxy._pairs.clear()
+        ws_proxy._home_pairs.clear()
 
     def test_pair_timeout_covers_heartbeat_consent_and_helper_startup(self):
         self.assertGreaterEqual(ws_proxy.PAIR_TIMEOUT, 30 + 60 + 20)
@@ -121,6 +124,33 @@ class RelayLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(websocket.closed_with, (1011, "browser did not connect in time"))
         self.assertNotIn("session-1", ws_proxy._pairs)
+
+    @patch.object(ws_proxy.db, "get_home_node_by_key_hash")
+    @patch.object(ws_proxy.db, "get_home_p2p_session")
+    async def test_home_target_key_must_match_session_node(self, get_session, get_node):
+        get_session.return_value = {
+            "id": "home-session", "node_id": "node-a", "status": "answered",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(),
+        }
+        get_node.return_value = {"id": "node-b"}
+        websocket = FakeWebSocket()
+        await ws_proxy._handle_home_target(websocket, "home-session", "node-key")
+        self.assertEqual(websocket.closed_with, (1008, "unauthorized"))
+        self.assertNotIn("home-session", ws_proxy._home_pairs)
+
+    @patch.object(ws_proxy.db, "get_endpoint_by_api_key_hash")
+    @patch.object(ws_proxy.db, "get_home_p2p_session")
+    async def test_expired_home_session_rejects_endpoint(self, get_session, get_endpoint):
+        get_session.return_value = {
+            "id": "home-session", "endpoint_id": "endpoint-a", "status": "answered",
+            "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+        }
+        get_endpoint.return_value = {"id": "endpoint-a"}
+        websocket = FakeWebSocket()
+        await ws_proxy._handle_home_initiator(
+            websocket, "home-session", "endpoint", "agent-key",
+        )
+        self.assertEqual(websocket.closed_with, (1008, "expired or invalid session"))
 
 
 if __name__ == "__main__":
