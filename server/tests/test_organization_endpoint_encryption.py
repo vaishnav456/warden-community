@@ -117,6 +117,19 @@ class EndpointPrivateDataTests(unittest.TestCase):
         self.assertIn("hardware_id_hash=eq.", query)
         self.assertNotIn("VISIBLE-HARDWARE", query)
 
+    def test_legacy_plaintext_fields_remain_readable_but_v2_corruption_fails(self):
+        self.assertEqual(
+            db.decrypt_field(self.company, "legacy job error", "job.error-message"),
+            "legacy job error",
+        )
+        legacy_payload = {"reason": "created before encryption"}
+        self.assertIs(
+            db.decrypt_field(self.company, legacy_payload, "job.payload"),
+            legacy_payload,
+        )
+        with self.assertRaises(Exception):
+            db.decrypt_field(self.company, "v2:not-valid", "job.error-message")
+
 
 if __name__ == "__main__":
     unittest.main()

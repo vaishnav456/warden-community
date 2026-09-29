@@ -206,9 +206,21 @@ def encrypt_field(company, plaintext, purpose="generic"):
 def decrypt_field(company, ciphertext_b64, purpose="generic"):
     if ciphertext_b64 is None:
         return None
+    # Rows created before tenant encryption may contain native JSON values or
+    # plaintext strings. Keep modern v2 ciphertext fail-closed while allowing
+    # those legacy rows to remain readable during a rolling migration.
+    if not isinstance(ciphertext_b64, str):
+        return ciphertext_b64
+    import binascii
+    from cryptography.exceptions import InvalidTag
     from services.tenant_crypto import decrypt_value
-    return decrypt_value(company["id"], company.get("encryption_mode", "managed"),
-                          company.get("wrapped_dek"), ciphertext_b64, purpose)
+    try:
+        return decrypt_value(company["id"], company.get("encryption_mode", "managed"),
+                             company.get("wrapped_dek"), ciphertext_b64, purpose)
+    except (binascii.Error, InvalidTag, UnicodeDecodeError, json.JSONDecodeError):
+        if ciphertext_b64.startswith("v2:"):
+            raise
+        return ciphertext_b64
 
 
 _ENDPOINT_TEXT_FIELDS = {
