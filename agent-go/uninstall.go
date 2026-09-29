@@ -32,7 +32,7 @@ func runUninstallCLI() int {
 		fmt.Printf("Could not load agent credentials: %v\n", err)
 		return 1
 	}
-	if err := initComms(key, effectiveCertFingerprints(c)); err != nil {
+	if err := initComms(key, effectiveCertFingerprints(c), c.TLSTrustMode); err != nil {
 		fmt.Printf("Could not initialize pinned communications: %v\n", err)
 		return 1
 	}

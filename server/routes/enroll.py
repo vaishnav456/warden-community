@@ -3,6 +3,7 @@ Warden — Enrollment route
 Public HTTPS endpoint. Agents POST here with a one-time token to get their API key.
 No VPN/WireGuard involved — agent communicates directly over HTTPS.
 """
+import base64
 import hashlib
 import logging
 import secrets
@@ -207,12 +208,16 @@ def enroll():
     os_info = body.get("os_info") or {}
     csr_pem = body.get("csr_pem", "").strip()
     installation_id = body.get("installation_id", "").strip().lower()
+    enrollment_nonce = body.get("enrollment_nonce", "").strip().lower()
 
     if not all([token, hostname, installation_id]):
         return jsonify({"error": "missing_fields"}), 400
 
     if not re.fullmatch(r"[0-9a-f]{32}", installation_id):
         return jsonify({"error": "invalid_installation_id"}), 400
+
+    if enrollment_nonce and not re.fullmatch(r"[0-9a-f]{64}", enrollment_nonce):
+        return jsonify({"error": "invalid_enrollment_nonce"}), 400
 
     if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9]?$', hostname):
         return jsonify({"error": "invalid_hostname"}), 400
@@ -539,8 +544,8 @@ def enroll():
             except Exception:
                 log.exception("Could not queue zero-touch updates for endpoint %s", endpoint["id"])
 
-    from services.signing import get_server_pubkey_b64
-    return jsonify({
+    from services.signing import get_server_pubkey_b64, sign_canonical_payload
+    response = {
         "api_key":               api_key,
         "endpoint_id":           str(endpoint["id"]),
         "server_ed25519_pubkey": get_server_pubkey_b64(),
@@ -548,4 +553,21 @@ def enroll():
         "branch_id":             str(branch_id) if branch_id else None,
         "allowed_operations":    sorted(ALLOWED_OPERATIONS),
         "client_cert_pem":       client_cert_pem,
-    })
+        "enrollment_nonce":      enrollment_nonce,
+    }
+    # New CDN-safe agents authenticate the entire credential-bearing response
+    # with the key already embedded in their installer. Binding the proof to a
+    # fresh 256-bit request nonce prevents replay. Older strict-leaf agents do
+    # not send a nonce and continue to rely on their build-time TLS leaf pin.
+    if enrollment_nonce:
+        proof = {
+            key: response[key] for key in (
+                "api_key", "endpoint_id", "server_ed25519_pubkey",
+                "company_id", "branch_id", "client_cert_pem",
+                "enrollment_nonce",
+            )
+        }
+        response["enrollment_signature"] = base64.b64encode(
+            sign_canonical_payload(proof)
+        ).decode()
+    return jsonify(response)

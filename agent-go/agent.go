@@ -99,8 +99,8 @@ func runAgent(stopCh <-chan struct{}) {
 		logError("Failed to initialize durable replay protection: %v", err)
 		return
 	}
-	if err := initComms(key, effectiveCertFingerprints(c)); err != nil {
-		logError("Failed to initialize pinned communications: %v", err)
+	if err := initComms(key, effectiveCertFingerprints(c), c.TLSTrustMode); err != nil {
+		logError("Failed to initialize secure communications: %v", err)
 		return
 	}
 	// A self-update does not run the interactive `install` command. Repair the
@@ -517,22 +517,27 @@ func doEnroll(token string) error {
 			return fmt.Errorf("persist installation identity: %w", err)
 		}
 	}
-	if pinned.ServerEd25519Pubkey == "" || pinned.CertFingerprint == "" {
+	if pinned.ServerEd25519Pubkey == "" || (normalizeTLSTrustMode(pinned.TLSTrustMode) != "webpki" && pinned.CertFingerprint == "") {
 		return fmt.Errorf(
-			"enrollment requires build-provisioned signing and TLS pins",
+			"enrollment requires a build-provisioned signing key and TLS trust configuration",
 		)
 	}
+	enrollmentNonce, err := newEnrollmentNonce()
+	if err != nil {
+		return err
+	}
 
-	resp, err := apiPostPinned("/enroll", map[string]interface{}{
-		"token":           token,
-		"hostname":        hostname,
-		"hardware_id":     hardwareID,
-		"device_identity": deviceIdentity,
-		"agent_version":   agentVersion,
-		"os_info":         osInfo,
-		"csr_pem":         string(csrPEM),
-		"installation_id": pinned.InstallationID,
-	}, pinned.CertFingerprint, 30)
+	resp, err := apiPostEnrollment("/enroll", map[string]interface{}{
+		"token":            token,
+		"hostname":         hostname,
+		"hardware_id":      hardwareID,
+		"device_identity":  deviceIdentity,
+		"agent_version":    agentVersion,
+		"os_info":          osInfo,
+		"csr_pem":          string(csrPEM),
+		"installation_id":  pinned.InstallationID,
+		"enrollment_nonce": enrollmentNonce,
+	}, pinned.CertFingerprint, pinned.TLSTrustMode, 30)
 	if err != nil {
 		return fmt.Errorf("enrollment POST failed: %w", err)
 	}
@@ -544,6 +549,9 @@ func doEnroll(token string) error {
 	pubKey, _ := resp["server_ed25519_pubkey"].(string)
 	if pubKey != pinned.ServerEd25519Pubkey {
 		return fmt.Errorf("enrollment signing key does not match build pin")
+	}
+	if err := verifyEnrollmentResponse(resp, pinned.ServerEd25519Pubkey, enrollmentNonce); err != nil {
+		return fmt.Errorf("verify enrollment response: %w", err)
 	}
 
 	serverURLVal := pinned.ServerURL
@@ -558,6 +566,7 @@ func doEnroll(token string) error {
 		ServerEd25519Pubkey: pinned.ServerEd25519Pubkey,
 		CertFingerprint:     pinned.CertFingerprint,
 		CertFingerprints:    effectiveCertFingerprints(pinned),
+		TLSTrustMode:        normalizeTLSTrustMode(pinned.TLSTrustMode),
 		InstallationID:      pinned.InstallationID,
 		CompanyID:           strVal(resp["company_id"]),
 		BranchID:            strVal(resp["branch_id"]),
@@ -584,6 +593,14 @@ func doEnroll(token string) error {
 
 	logInfo("Enrollment successful. EndpointID: %s, hostname: %s", c.EndpointID, hostname)
 	return nil
+}
+
+func newEnrollmentNonce() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate enrollment nonce: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 func newInstallationID() (string, error) {

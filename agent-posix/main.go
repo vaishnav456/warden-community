@@ -42,21 +42,21 @@ import (
 	memPkg "github.com/shirou/gopsutil/v3/mem"
 )
 
-const agentVersion = "2.3.3"
+const agentVersion = "2.3.4"
 
 var (
-	buildServerURL, buildServerEd25519Pubkey, buildCertFingerprint      string
-	dataDir, installDir, configPath, credentialsPath, keyPath, certPath string
-	elevationsPath                                                      string
-	cfg                                                                 Config
-	apiKey                                                              string
-	httpClient                                                          *http.Client
-	remoteMu                                                            sync.Mutex
-	configMu                                                            sync.RWMutex
-	clientMu                                                            sync.RWMutex
-	remoteActive                                                        *remoteSession
-	jobIDPattern                                                        = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
-	usernamePattern                                                     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
+	buildServerURL, buildServerEd25519Pubkey, buildCertFingerprint, buildTLSTrustMode string
+	dataDir, installDir, configPath, credentialsPath, keyPath, certPath               string
+	elevationsPath                                                                    string
+	cfg                                                                               Config
+	apiKey                                                                            string
+	httpClient                                                                        *http.Client
+	remoteMu                                                                          sync.Mutex
+	configMu                                                                          sync.RWMutex
+	clientMu                                                                          sync.RWMutex
+	remoteActive                                                                      *remoteSession
+	jobIDPattern                                                                      = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+	usernamePattern                                                                   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
 )
 
 const (
@@ -100,6 +100,7 @@ type Config struct {
 	ServerEd25519Pubkey string   `json:"server_ed25519_pubkey"`
 	CertFingerprint     string   `json:"cert_fingerprint"`
 	CertFingerprints    []string `json:"cert_fingerprints,omitempty"`
+	TLSTrustMode        string   `json:"tls_trust_mode,omitempty"`
 	InstallationID      string   `json:"installation_id,omitempty"`
 	EnrollmentToken     string   `json:"enrollment_token,omitempty"`
 	EndpointID          string   `json:"endpoint_id,omitempty"`
@@ -248,14 +249,14 @@ func seedConfig() error {
 		}
 		return nil
 	}
-	if buildServerEd25519Pubkey == "" || buildCertFingerprint == "" {
+	if buildServerEd25519Pubkey == "" || (normalizeTLSTrustMode(buildTLSTrustMode) != "webpki" && buildCertFingerprint == "") {
 		return errors.New("missing config.json and build pins")
 	}
 	id, err := randomHex(16)
 	if err != nil {
 		return err
 	}
-	c := Config{ServerURL: buildServerURL, ServerEd25519Pubkey: buildServerEd25519Pubkey, CertFingerprint: buildCertFingerprint, CertFingerprints: []string{buildCertFingerprint}, InstallationID: id}
+	c := Config{ServerURL: buildServerURL, ServerEd25519Pubkey: buildServerEd25519Pubkey, CertFingerprint: buildCertFingerprint, CertFingerprints: []string{buildCertFingerprint}, TLSTrustMode: normalizeTLSTrustMode(buildTLSTrustMode), InstallationID: id}
 	return writeJSON(configPath, c, 0600)
 }
 
@@ -536,32 +537,44 @@ func pins() []string {
 	}
 	return []string{c.CertFingerprint}
 }
-func tlsConfig(expected []string) (*tls.Config, error) {
-	trusted := map[string]bool{}
-	for _, p := range expected {
-		p = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), ":", ""))
-		if len(p) != 64 {
-			return nil, errors.New("invalid TLS fingerprint")
-		}
-		trusted[p] = true
+func normalizeTLSTrustMode(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "webpki") {
+		return "webpki"
 	}
-	t := &tls.Config{MinVersion: tls.VersionTLS12, VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-		if len(raw) == 0 {
-			return errors.New("missing TLS certificate")
+	return "strict_leaf"
+}
+func tlsConfig(expected []string, trustMode string) (*tls.Config, error) {
+	trusted := map[string]bool{}
+	if normalizeTLSTrustMode(trustMode) != "webpki" {
+		for _, p := range expected {
+			p = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), ":", ""))
+			if len(p) != 64 {
+				return nil, errors.New("invalid TLS fingerprint")
+			}
+			trusted[p] = true
 		}
-		h := sha256.Sum256(raw[0])
-		if !trusted[hex.EncodeToString(h[:])] {
-			return errors.New("TLS certificate fingerprint mismatch")
+	}
+	t := &tls.Config{MinVersion: tls.VersionTLS12}
+	if normalizeTLSTrustMode(trustMode) != "webpki" {
+		t.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
+			if len(raw) == 0 {
+				return errors.New("missing TLS certificate")
+			}
+			h := sha256.Sum256(raw[0])
+			if !trusted[hex.EncodeToString(h[:])] {
+				return errors.New("TLS certificate fingerprint mismatch")
+			}
+			return nil
 		}
-		return nil
-	}}
+	}
 	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
 		t.Certificates = []tls.Certificate{cert}
 	}
 	return t, nil
 }
 func initHTTP() error {
-	t, err := tlsConfig(pins())
+	c := configSnapshot()
+	t, err := tlsConfig(pins(), c.TLSTrustMode)
 	if err != nil {
 		return err
 	}
@@ -625,7 +638,7 @@ func enroll(token string) error {
 	if err != nil {
 		return err
 	}
-	t, err := tlsConfig([]string{c.CertFingerprint})
+	t, err := tlsConfig([]string{c.CertFingerprint}, c.TLSTrustMode)
 	if err != nil {
 		return err
 	}
@@ -635,14 +648,21 @@ func enroll(token string) error {
 	host, _ := os.Hostname()
 	info := systemInfo()
 	identity := deviceIdentity()
+	enrollmentNonce, err := randomHex(32)
+	if err != nil {
+		return err
+	}
 	var response map[string]interface{}
-	err = post("/enroll", map[string]interface{}{"token": token, "hostname": host, "hardware_id": identity["hardware_id"], "device_identity": identity, "agent_version": agentVersion, "os_info": info, "csr_pem": string(csr), "installation_id": c.InstallationID}, false, &response)
+	err = post("/enroll", map[string]interface{}{"token": token, "hostname": host, "hardware_id": identity["hardware_id"], "device_identity": identity, "agent_version": agentVersion, "os_info": info, "csr_pem": string(csr), "installation_id": c.InstallationID, "enrollment_nonce": enrollmentNonce}, false, &response)
 	if err != nil {
 		return err
 	}
 	serverKey, _ := response["server_ed25519_pubkey"].(string)
 	if serverKey != c.ServerEd25519Pubkey {
 		return errors.New("server signing key does not match build pin")
+	}
+	if err = verifyEnrollmentResponse(response, c.ServerEd25519Pubkey, enrollmentNonce); err != nil {
+		return fmt.Errorf("verify enrollment response: %w", err)
 	}
 	secret, _ := response["api_key"].(string)
 	if secret == "" {
@@ -663,6 +683,34 @@ func enroll(token string) error {
 	c.CompanyID = stringValue(response["company_id"])
 	c.BranchID = stringValue(response["branch_id"])
 	return saveConfig(c)
+}
+
+func verifyEnrollmentResponse(response map[string]interface{}, pubkeyB64, expectedNonce string) error {
+	pubkey, err := base64.StdEncoding.DecodeString(pubkeyB64)
+	if err != nil || len(pubkey) != ed25519.PublicKeySize {
+		return errors.New("invalid build-pinned server signing key")
+	}
+	if nonce, _ := response["enrollment_nonce"].(string); nonce != expectedNonce {
+		return errors.New("enrollment nonce mismatch")
+	}
+	signatureB64, _ := response["enrollment_signature"].(string)
+	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("invalid enrollment signature encoding")
+	}
+	proof := map[string]interface{}{}
+	for _, key := range []string{"api_key", "endpoint_id", "server_ed25519_pubkey", "company_id", "branch_id", "client_cert_pem", "enrollment_nonce"} {
+		value, exists := response[key]
+		if !exists {
+			return fmt.Errorf("enrollment response missing signed field %s", key)
+		}
+		proof[key] = value
+	}
+	message, err := json.Marshal(proof)
+	if err != nil || !ed25519.Verify(ed25519.PublicKey(pubkey), message, signature) {
+		return errors.New("invalid enrollment response signature")
+	}
+	return nil
 }
 func generateCSR() ([]byte, []byte, error) {
 	host, _ := os.Hostname()
@@ -1844,7 +1892,8 @@ func remoteLoop(url, sessionID string, session *remoteSession) {
 		remoteMu.Unlock()
 	}()
 	_ = post("/api/agent/remote-consent", map[string]interface{}{"session_id": sessionID, "status": "not_required"}, true, nil)
-	t, err := tlsConfig(pins())
+	c := configSnapshot()
+	t, err := tlsConfig(pins(), c.TLSTrustMode)
 	if err != nil {
 		log.Printf("remote TLS: %v", err)
 		reportRemoteFailure(sessionID, err)

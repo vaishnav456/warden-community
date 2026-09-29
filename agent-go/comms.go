@@ -20,8 +20,9 @@ var (
 	httpClient *http.Client
 	clientMu   sync.Mutex
 
-	pinnedFPs  map[string]struct{}
-	pinnedFPMu sync.Mutex
+	pinnedFPs    map[string]struct{}
+	pinnedFPMu   sync.Mutex
+	tlsTrustMode = "strict_leaf"
 
 	serverClockMu     sync.RWMutex
 	serverClockOffset time.Duration
@@ -71,7 +72,14 @@ func normalizeFingerprint(value string) (string, error) {
 	return fp, nil
 }
 
-func initComms(key string, certFingerprints []string) error {
+func normalizeTLSTrustMode(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "webpki") {
+		return "webpki"
+	}
+	return "strict_leaf"
+}
+
+func initComms(key string, certFingerprints []string, trustMode string) error {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	apiKey = key
@@ -83,12 +91,14 @@ func initComms(key string, certFingerprints []string) error {
 		}
 		pins[fp] = struct{}{}
 	}
-	if len(pins) == 0 {
+	trustMode = normalizeTLSTrustMode(trustMode)
+	if trustMode != "webpki" && len(pins) == 0 {
 		return fmt.Errorf("at least one TLS certificate fingerprint is required")
 	}
 	pinnedFPMu.Lock()
 	pinnedFPs = pins
 	pinnedFPMu.Unlock()
+	tlsTrustMode = trustMode
 	httpClient = buildPinningClient()
 	return nil
 }
@@ -139,20 +149,22 @@ func buildPinningClient() *http.Client {
 		tlsCfg.Certificates = []tls.Certificate{clientCert}
 		logInfo("mTLS client certificate loaded for outgoing connections.")
 	}
-	tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-		if len(rawCerts) == 0 {
-			return fmt.Errorf("server supplied no TLS leaf certificate")
-		}
-		h := sha256.Sum256(rawCerts[0])
-		actualFP := hex.EncodeToString(h[:])
+	if tlsTrustMode != "webpki" {
+		tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("server supplied no TLS leaf certificate")
+			}
+			h := sha256.Sum256(rawCerts[0])
+			actualFP := hex.EncodeToString(h[:])
 
-		pinnedFPMu.Lock()
-		_, trusted := pinnedFPs[actualFP]
-		pinnedFPMu.Unlock()
-		if !trusted {
-			return fmt.Errorf("TLS certificate fingerprint mismatch (got %s)", actualFP)
+			pinnedFPMu.Lock()
+			_, trusted := pinnedFPs[actualFP]
+			pinnedFPMu.Unlock()
+			if !trusted {
+				return fmt.Errorf("TLS certificate fingerprint mismatch (got %s)", actualFP)
+			}
+			return nil
 		}
-		return nil
 	}
 	return &http.Client{
 		Timeout:       time.Duration(heartbeatTimeoutSec) * time.Second,
@@ -320,6 +332,17 @@ func apiPostPinned(path string, body map[string]interface{}, certFingerprint str
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return result, nil
+}
+
+// apiPostEnrollment uses normal WebPKI verification for CDN-fronted servers,
+// where the valid leaf certificate can differ by edge or rotate without the
+// origin operator controlling it. The enrollment response is independently
+// authenticated with the build-pinned Ed25519 key and bound to a fresh nonce.
+func apiPostEnrollment(path string, body map[string]interface{}, certFingerprint, trustMode string, timeoutSec int) (map[string]interface{}, error) {
+	if normalizeTLSTrustMode(trustMode) != "webpki" {
+		return apiPostPinned(path, body, certFingerprint, timeoutSec)
+	}
+	return apiPost(path, body, false, timeoutSec)
 }
 
 func reportJobResult(jobID, status string, exitCode int, logOutput, errorMsg string) error {

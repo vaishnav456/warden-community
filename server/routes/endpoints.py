@@ -1210,6 +1210,7 @@ def generate_installer():
         "server_url": config.SERVER_URL,
         "server_ed25519_pubkey": get_server_pubkey_b64(),
         "cert_fingerprint": fingerprint,
+        "tls_trust_mode": "webpki",
         "company_id": str(company["id"]),
         "company_slug": company["slug"],
         "branch_id": str(branch_id),

@@ -77,10 +77,10 @@ def run_go_build(build_request: dict, dist_dir: pathlib.Path,
     server_url = cfg.get("server_url", "")
     pubkey = cfg.get("server_ed25519_pubkey", "")
     fingerprint = cfg.get("cert_fingerprint", "")
-    if not pubkey or not fingerprint:
+    trust_mode = cfg.get("tls_trust_mode", "strict_leaf")
+    if not pubkey or (trust_mode != "webpki" and not fingerprint):
         raise ValueError(
-            "config_json missing server_ed25519_pubkey/cert_fingerprint "
-            "— required for build-time TLS/signing pins"
+            "config_json missing server_ed25519_pubkey or required TLS trust configuration"
         )
 
     exe_path = dist_dir / ("warden-agent.exe" if goos == "windows" else "warden-agent")
@@ -89,7 +89,8 @@ def run_go_build(build_request: dict, dist_dir: pathlib.Path,
         f"{subsystem}-s -w "
         f"-X main.buildServerURL={server_url} "
         f"-X main.buildServerEd25519Pubkey={pubkey} "
-        f"-X main.buildCertFingerprint={fingerprint}"
+        f"-X main.buildCertFingerprint={fingerprint} "
+        f"-X main.buildTLSTrustMode={trust_mode}"
     )
     if goos == "windows":
         display_name_b64 = base64.urlsafe_b64encode(

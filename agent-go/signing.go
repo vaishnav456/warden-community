@@ -35,6 +35,44 @@ func loadServerPubkey(b64 string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(raw), nil
 }
 
+func verifyEnrollmentResponse(response map[string]interface{}, pubkeyB64, expectedNonce string) error {
+	pubkey, err := loadServerPubkey(pubkeyB64)
+	if err != nil {
+		return err
+	}
+	nonce, _ := response["enrollment_nonce"].(string)
+	if nonce == "" || nonce != expectedNonce {
+		return fmt.Errorf("enrollment nonce mismatch")
+	}
+	signatureB64, _ := response["enrollment_signature"].(string)
+	if signatureB64 == "" {
+		return fmt.Errorf("enrollment response missing signature")
+	}
+	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil {
+		return fmt.Errorf("invalid enrollment signature encoding: %w", err)
+	}
+	proof := map[string]interface{}{}
+	for _, key := range []string{
+		"api_key", "endpoint_id", "server_ed25519_pubkey", "company_id",
+		"branch_id", "client_cert_pem", "enrollment_nonce",
+	} {
+		value, exists := response[key]
+		if !exists {
+			return fmt.Errorf("enrollment response missing signed field %s", key)
+		}
+		proof[key] = value
+	}
+	message, err := json.Marshal(proof)
+	if err != nil {
+		return fmt.Errorf("canonicalize enrollment response: %w", err)
+	}
+	if !ed25519.Verify(pubkey, message, signature) {
+		return fmt.Errorf("invalid enrollment response signature")
+	}
+	return nil
+}
+
 // verifyEnvelope checks the Ed25519 signature, expiry, and clock skew.
 // Returns the parsed Envelope on success.
 // The rawJSON must be the full envelope JSON as received from the server.

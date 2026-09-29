@@ -108,7 +108,7 @@ func reconnectConfig(current, bootstrap AgentConfig) (AgentConfig, error) {
 	}
 	if strings.TrimSpace(bootstrap.ServerURL) == "" ||
 		strings.TrimSpace(bootstrap.ServerEd25519Pubkey) == "" ||
-		len(effectiveCertFingerprints(bootstrap)) == 0 {
+		(normalizeTLSTrustMode(bootstrap.TLSTrustMode) != "webpki" && len(effectiveCertFingerprints(bootstrap)) == 0) {
 		return AgentConfig{}, fmt.Errorf("installer bootstrap configuration is incomplete")
 	}
 	installationID := strings.TrimSpace(current.InstallationID)

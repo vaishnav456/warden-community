@@ -26,7 +26,7 @@ const (
 	pollIntervalSec     = 30
 	heartbeatTimeoutSec = 10
 	jobTimeoutSec       = 300
-	agentVersion        = "2.6.38"
+	agentVersion        = "2.6.39"
 )
 
 type AgentConfig struct {
@@ -34,6 +34,7 @@ type AgentConfig struct {
 	ServerEd25519Pubkey string   `json:"server_ed25519_pubkey"`
 	CertFingerprint     string   `json:"cert_fingerprint"`
 	CertFingerprints    []string `json:"cert_fingerprints,omitempty"`
+	TLSTrustMode        string   `json:"tls_trust_mode,omitempty"`
 	InstallationID      string   `json:"installation_id,omitempty"`
 	CompanyID           string   `json:"company_id"`
 	BranchID            string   `json:"branch_id"`
@@ -56,6 +57,7 @@ var (
 	buildServerURL           string
 	buildServerEd25519Pubkey string
 	buildCertFingerprint     string
+	buildTLSTrustMode        string
 	// Base64 keeps spaces and Unicode out of Go's -ldflags parser. It affects
 	// only the Windows Services display label; serviceName stays stable.
 	buildServiceDisplayNameB64 string
@@ -106,7 +108,7 @@ func seedBuildConfig() error {
 	if _, err := os.Stat(configPath); err == nil {
 		return nil
 	}
-	if buildServerEd25519Pubkey == "" || buildCertFingerprint == "" {
+	if buildServerEd25519Pubkey == "" || (normalizeTLSTrustMode(buildTLSTrustMode) != "webpki" && buildCertFingerprint == "") {
 		return nil
 	}
 	server := buildServerURL
@@ -122,6 +124,7 @@ func seedBuildConfig() error {
 		ServerEd25519Pubkey: buildServerEd25519Pubkey,
 		CertFingerprint:     buildCertFingerprint,
 		CertFingerprints:    []string{buildCertFingerprint},
+		TLSTrustMode:        normalizeTLSTrustMode(buildTLSTrustMode),
 		InstallationID:      installationID,
 	})
 }
