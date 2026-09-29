@@ -29,6 +29,27 @@ class FrontendContractTests(unittest.TestCase):
         self.assertTrue((SERVER_DIR / "static" / "vendor" / "alpinejs.min.js").is_file())
         self.assertTrue((SERVER_DIR / "static" / "fonts" / "inter" / "400.css").is_file())
 
+    def test_public_landing_uses_real_product_flows_and_local_assets(self):
+        page = (TEMPLATES_DIR / "landing.html").read_text(encoding="utf-8")
+        css = (SERVER_DIR / "static" / "css" / "landing.css").read_text(encoding="utf-8")
+        javascript = (SERVER_DIR / "static" / "js" / "landing.js").read_text(encoding="utf-8")
+        marketing = (SERVER_DIR / "routes" / "marketing.py").read_text(encoding="utf-8")
+        dashboard = (SERVER_DIR / "routes" / "dashboard.py").read_text(encoding="utf-8")
+        for contract in (
+            "Effective policy", "Physical topology", "Remote approval",
+            "Home storage", "Data security", "AES-256-GCM",
+            "wraps the organization DEK only", "No file contents",
+            "github.com/vaishnav456/warden-community",
+        ):
+            source = marketing if contract.startswith("github.com") else page
+            self.assertIn(contract, source)
+        self.assertIn('@media (prefers-reduced-motion:reduce)', css)
+        self.assertIn("IntersectionObserver", javascript)
+        self.assertIn("ArrowRight", javascript)
+        self.assertIn('@bp.route("/")', marketing)
+        self.assertIn('@bp.route("/dashboard")', dashboard)
+        self.assertNotRegex(page, r"<(?:script|link)\\b[^>]+(?:src|href)=[\"']https?://")
+
     def test_container_runtime_is_non_root_and_read_only(self):
         server_dockerfile = (SERVER_DIR / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("USER 10001:10001", server_dockerfile)
@@ -142,7 +163,7 @@ class FrontendContractTests(unittest.TestCase):
         from services.page_help import page_help_for
 
         organization_pages = (
-            "/", "/endpoints", "/topology", "/endpoints/example", "/endpoints/example/remote-view/session",
+            "/dashboard", "/endpoints", "/topology", "/endpoints/example", "/endpoints/example/remote-view/session",
             "/assets", "/users", "/directory", "/storage", "/apps", "/jobs",
             "/jobs/example", "/escalations", "/escalations/saved", "/alerts",
             "/compliance", "/patches", "/effective-policy", "/network",

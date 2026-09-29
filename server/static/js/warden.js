@@ -1672,6 +1672,7 @@ function endpointDetail() {
     remoteReason: '',
     remoteConsentTitle: 'Warden remote support',
     remoteConsentMessage: 'Your support technician can see this screen and, if requested, control this computer.',
+    remoteRequested: { clipboard: false, file_transfer: false, process_manager: false, reboot: false },
     experienceSubmitting: false,
     experienceError: '',
     // Create-user modal state
@@ -2029,6 +2030,7 @@ function endpointDetail() {
             reason: this.remoteReason.trim(),
             consent_title: this.remoteConsentTitle.trim(),
             consent_message: this.remoteConsentMessage.trim(),
+            requested_capabilities: this.remoteRequested,
           }),
         });
         if (res.ok && res.viewer_url) {
@@ -2051,6 +2053,12 @@ function endpointDetail() {
         return this.capabilityDetails.remote_input !== false && this.capabilityDetails.remote_consent !== false;
       }
       return this.capabilityDetails.remote_input !== false;
+    },
+    remoteCapabilityEnabled(name) {
+      if (this.remoteAccessMode === 'view_only') return false;
+      if (name === 'clipboard') return this.capabilityDetails.remote_clipboard !== false;
+      if (name === 'process_manager') return this.capabilityDetails.remote_process_manager !== false;
+      return true;
     },
     async submitExperience(formEl) {
       if (this.experienceSubmitting) return;

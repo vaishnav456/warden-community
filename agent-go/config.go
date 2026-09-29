@@ -26,7 +26,7 @@ const (
 	pollIntervalSec     = 30
 	heartbeatTimeoutSec = 10
 	jobTimeoutSec       = 300
-	agentVersion        = "2.6.34"
+	agentVersion        = "2.6.35"
 )
 
 type AgentConfig struct {

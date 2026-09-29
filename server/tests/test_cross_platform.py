@@ -32,6 +32,19 @@ class CrossPlatformTests(unittest.TestCase):
         self.assertFalse(caps["clipboard"])
         self.assertTrue(caps["process_manager"])
 
+    def test_remote_session_intersects_explicit_optional_capabilities(self):
+        caps = _remote_session_capabilities(
+            "full_control", "company_admin", {"capability_details": {}},
+            {"clipboard": False, "file_transfer": True,
+             "process_manager": False, "reboot": False},
+        )
+        self.assertTrue(caps["view"])
+        self.assertTrue(caps["control"])
+        self.assertFalse(caps["clipboard"])
+        self.assertTrue(caps["file_transfer"])
+        self.assertFalse(caps["process_manager"])
+        self.assertFalse(caps["reboot"])
+
     def test_platform_specific_build_target_normalizes_architecture(self):
         self.assertEqual(db.endpoint_target_platform({"platform": "linux", "arch": "x86_64"}), "linux-amd64")
         self.assertEqual(db.endpoint_target_platform({"platform": "darwin", "arch": "arm64"}), "darwin-arm64")

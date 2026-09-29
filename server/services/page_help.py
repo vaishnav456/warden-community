@@ -13,7 +13,7 @@ def _guide(title, overview, workflow, safety, troubleshooting):
 
 
 GUIDES = {
-    "/": _guide("Dashboard guide", "A tenant-wide operational summary. Counts reflect the current tenant only and link to the underlying records.",
+    "/dashboard": _guide("Dashboard guide", "An organization-wide operational summary. Counts reflect the current organization only and link to the underlying records.",
         ("Start with critical alerts and offline endpoints.", "Review recent jobs before making broad changes.", "Use status and audit pages to confirm control-plane health and administrator activity."),
         ("This page is read-only.", "Tenant and branch restrictions still apply to every linked page.", "A healthy dashboard does not replace endpoint compliance review."),
         ("Refresh after an agent heartbeat interval.", "Check Platform status when several unrelated cards stop updating.", "Check enrollment and firewall settings when only one endpoint is missing.")),

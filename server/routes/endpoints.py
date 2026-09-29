@@ -1253,7 +1253,7 @@ def generate_installer():
 _REMOTE_PRIVILEGED_ROLES = {"company_admin", "branch_admin"}
 
 
-def _remote_session_capabilities(access_mode, role, endpoint=None):
+def _remote_session_capabilities(access_mode, role, endpoint=None, requested=None):
     control = access_mode in {"full_control", "unattended"}
     privileged = role in _REMOTE_PRIVILEGED_ROLES
     details = (endpoint or {}).get("capability_details") or {}
@@ -1264,7 +1264,7 @@ def _remote_session_capabilities(access_mode, role, endpoint=None):
     remote_input = details.get("remote_input") is not False
     remote_clipboard = details.get("remote_clipboard") is not False
     remote_process_manager = details.get("remote_process_manager") is not False
-    return {
+    granted = {
         "view": True,
         "control": control and remote_input,
         "clipboard": control and remote_clipboard,
@@ -1272,6 +1272,25 @@ def _remote_session_capabilities(access_mode, role, endpoint=None):
         "process_manager": control and privileged and remote_process_manager,
         "reboot": control and privileged,
     }
+    if isinstance(requested, dict):
+        for name in ("clipboard", "file_transfer", "process_manager", "reboot"):
+            granted[name] = granted[name] and requested.get(name) is True
+    return granted
+
+
+def _remote_capability_labels(capabilities):
+    labels = ["View screen"]
+    if capabilities.get("control"):
+        labels.append("Keyboard and mouse")
+    if capabilities.get("clipboard"):
+        labels.append("Clipboard")
+    if capabilities.get("file_transfer"):
+        labels.append("File transfer")
+    if capabilities.get("process_manager"):
+        labels.append("Process manager")
+    if capabilities.get("reboot"):
+        labels.append("Restart endpoint")
+    return labels
 
 
 def _require_remote_session_capability(session, capability="view"):
@@ -1341,7 +1360,13 @@ def start_remote_session(endpoint_id):
     consent_message = str(body.get("consent_message") or "Your support technician can see this screen and, if requested, control this computer.").strip()[:500]
     if not consent_title or not consent_message:
         return jsonify({"error": "consent_warning_required"}), 400
-    capabilities = _remote_session_capabilities(access_mode, role, endpoint)
+    requested_capabilities = body.get("requested_capabilities")
+    if requested_capabilities is not None and not isinstance(requested_capabilities, dict):
+        return jsonify({"error": "invalid_requested_capabilities"}), 400
+    capabilities = _remote_session_capabilities(
+        access_mode, role, endpoint, requested_capabilities,
+    )
+    capability_labels = _remote_capability_labels(capabilities)
     consent_required = access_mode != "unattended"
 
     server_base = config.SERVER_URL.rstrip("/")
@@ -1433,6 +1458,7 @@ def start_remote_session(endpoint_id):
                 "reason": reason,
                 "consent_title": consent_title,
                 "consent_message": consent_message,
+                "requested_access": capability_labels,
             },
             created_by=g.admin["id"],
         )
@@ -1451,6 +1477,7 @@ def start_remote_session(endpoint_id):
         "consent_required": consent_required,
         "reason": reason,
         "consent_title": consent_title,
+        "requested_access": capability_labels,
     }, endpoint_id=endpoint_id)
 
     return jsonify({
@@ -1510,6 +1537,8 @@ def remote_view_status(endpoint_id, session_id):
     return jsonify({
         "status": session.get("status"),
         "fail_reason": session.get("fail_reason"),
+        "consent_required": bool(session.get("consent_required")),
+        "consent_status": session.get("consent_status"),
     })
 
 

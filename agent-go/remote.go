@@ -187,7 +187,7 @@ func sendSecureAttentionSequence() error {
 	return nil
 }
 
-func runRemoteConsentPrompt(helperName, reason, warningTitle, warningMessage string) int {
+func runRemoteConsentPrompt(helperName, reason, warningTitle, warningMessage string, requestedAccess []string) int {
 	if len(helperName) > 160 {
 		helperName = helperName[:160]
 	}
@@ -206,22 +206,27 @@ func runRemoteConsentPrompt(helperName, reason, warningTitle, warningMessage str
 	if warningMessage == "" {
 		warningMessage = "Your support technician can see this screen and may control this computer."
 	}
+	accessText := "View screen"
+	if len(requestedAccess) > 0 {
+		accessText = strings.Join(requestedAccess, "\n• ")
+	}
 	return runWardenUserDialog(
 		warningTitle,
 		fmt.Sprintf("%s is requesting access", helperName),
-		fmt.Sprintf("%s\n\nSupport reason: %s", warningMessage, reason),
+		fmt.Sprintf("%s\n\nReason\n%s\n\nRequested access\n• %s", warningMessage, reason, accessText),
 		"Choose Yes to allow this one session. Choose No to keep the computer private.",
 		"warning", true,
 	)
 }
 
-func requestRemoteConsent(sessionID, helperName, reason, warningTitle, warningMessage string) error {
+func requestRemoteConsent(sessionID, helperName, reason, warningTitle, warningMessage string, requestedAccess []string) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return err
 	}
+	accessJSON, _ := json.Marshal(requestedAccess)
 	helper, err := launchInteractiveHelper(exePath, []string{
-		"--remote-consent", helperName, reason, warningTitle, warningMessage,
+		"--remote-consent", helperName, reason, warningTitle, warningMessage, string(accessJSON),
 	})
 	if err != nil {
 		reportRemoteConsent(sessionID, "denied")

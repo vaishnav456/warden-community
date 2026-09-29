@@ -933,11 +933,10 @@
 </div>
 
 {# Least-privilege remote support request. #}
-<div x-show="showRemoteModal" x-cloak class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" @keydown.escape.window="showRemoteModal = false">
-  <div @click.stop class="endpoint-dialog bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-lg p-6">
-    <div class="section-kicker mb-2">Audited support session</div>
-    <h3 class="text-lg font-semibold text-ink-100 mb-2">Start remote support</h3>
-    <p class="text-sm text-ink-500 leading-relaxed">Choose only the access needed. Attended sessions ask the person at the endpoint before connecting.</p>
+<div x-show="showRemoteModal" x-cloak class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" @click.self="showRemoteModal = false" @keydown.escape.window="showRemoteModal = false">
+  <div @click.stop class="endpoint-dialog remote-access-dialog w-full max-w-2xl">
+    <header class="remote-access-head"><span class="remote-access-mark">W</span><div><div class="section-kicker">Warden secure support</div><h3>Request endpoint access</h3><p>The signed-in user sees who is connecting, why, and exactly what the session can do.</p></div></header>
+    <div class="remote-access-body">
     <div class="mt-4">
       <label class="form-label" for="remote-reason">Reason or ticket</label>
       <input id="remote-reason" class="form-input" maxlength="500" x-model.trim="remoteReason" placeholder="Example: INC-1042 · troubleshoot Outlook">
@@ -952,18 +951,30 @@
       <p class="mt-2 text-xs text-status-warning" x-show="capabilityDetails.remote_input === false">This agent currently supports view-only remote access. Install its input-control dependency and wait for the next heartbeat to enable full control.</p>
       <p class="mt-2 text-xs text-ink-500" x-show="remoteAccessMode === 'unattended'">Unattended access bypasses the local prompt and is fully audited. Sensitive tools remain restricted by role.</p>
     </div>
+    <div class="remote-capability-picker" x-show="remoteAccessMode !== 'view_only'">
+      <div><span class="form-label">Additional session capabilities</span><small>Off by default. The server also checks your role and the endpoint’s reported support.</small></div>
+      <label :class="{'is-disabled': !remoteCapabilityEnabled('clipboard')}"><input type="checkbox" x-model="remoteRequested.clipboard" :disabled="!remoteCapabilityEnabled('clipboard')"><span><b>Clipboard</b><small>Send text to the endpoint</small></span></label>
+      <label><input type="checkbox" x-model="remoteRequested.file_transfer"><span><b>File transfer</b><small>Upload and retrieve approved paths</small></span></label>
+      <label :class="{'is-disabled': !remoteCapabilityEnabled('process_manager')}"><input type="checkbox" x-model="remoteRequested.process_manager" :disabled="!remoteCapabilityEnabled('process_manager')"><span><b>Process manager</b><small>Inspect and stop processes</small></span></label>
+      <label><input type="checkbox" x-model="remoteRequested.reboot"><span><b>Restart endpoint</b><small>Restart and reconnect this session</small></span></label>
+    </div>
+    <div class="remote-consent-preview" x-show="remoteAccessMode !== 'unattended'">
+      <span><i></i> Endpoint approval required</span>
+      <p>The session remains blocked until the person at the endpoint chooses <strong>Allow</strong>. Denial and the 60-second timeout fail closed.</p>
+    </div>
     <details class="remote-consent-customizer mt-4" x-show="remoteAccessMode !== 'unattended'">
       <summary>Customize the warning shown on the endpoint</summary>
       <div><label class="form-label" for="remote-consent-title">Warning title</label><input id="remote-consent-title" class="form-input" maxlength="120" x-model.trim="remoteConsentTitle"></div>
       <div><label class="form-label" for="remote-consent-message">User-facing explanation</label><textarea id="remote-consent-message" class="form-input" rows="3" maxlength="500" x-model.trim="remoteConsentMessage"></textarea></div>
       <p>The Agent shows the technician, reason, requested access, and explicit Allow/Deny choices. Deny and timeout both fail closed.</p>
     </details>
-    <div class="mt-6 flex justify-end gap-2">
+    </div>
+    <footer class="remote-access-actions">
       <button type="button" @click="showRemoteModal = false" :disabled="startingSession" class="btn btn-secondary">Cancel</button>
       <button type="button" @click="startRemoteSession()" :disabled="startingSession || !remoteReason.trim() || !remoteModeAvailable()" class="btn btn-primary">
-        <span x-show="!startingSession">Request access</span><span x-show="startingSession">Waiting…</span>
+        <span x-show="!startingSession">Send approval request</span><span x-show="startingSession">Preparing secure request…</span>
       </button>
-    </div>
+    </footer>
   </div>
 </div>
 

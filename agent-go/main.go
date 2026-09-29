@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -24,10 +25,14 @@ func main() {
 			os.Exit(runReinstallHelper(os.Args[2], os.Args[3], os.Args[4], requireSignature, os.Args[6], os.Args[7]))
 			return
 		case "--remote-consent":
-			if len(os.Args) != 6 {
+			if len(os.Args) < 6 || len(os.Args) > 7 {
 				os.Exit(2)
 			}
-			os.Exit(runRemoteConsentPrompt(os.Args[2], os.Args[3], os.Args[4], os.Args[5]))
+			var requestedAccess []string
+			if len(os.Args) == 7 {
+				_ = json.Unmarshal([]byte(os.Args[6]), &requestedAccess)
+			}
+			os.Exit(runRemoteConsentPrompt(os.Args[2], os.Args[3], os.Args[4], os.Args[5], requestedAccess))
 			return
 		case "--user-announcement":
 			if len(os.Args) != 5 {

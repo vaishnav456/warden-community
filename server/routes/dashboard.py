@@ -10,7 +10,7 @@ from middleware.auth import login_required, company_required
 bp = Blueprint("dashboard", __name__)
 
 
-@bp.route("/")
+@bp.route("/dashboard")
 @login_required
 @company_required
 def index():

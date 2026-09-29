@@ -2191,6 +2191,14 @@ func setupRemoteAccess(_ string, p map[string]interface{}) (int, string, error) 
 	consentRequired, _ := p["consent_required"].(bool)
 	consentTitle, _ := p["consent_title"].(string)
 	consentMessage, _ := p["consent_message"].(string)
+	requestedAccess := make([]string, 0, 6)
+	if raw, ok := p["requested_access"].([]interface{}); ok {
+		for _, item := range raw {
+			if label, ok := item.(string); ok && strings.TrimSpace(label) != "" {
+				requestedAccess = append(requestedAccess, strings.TrimSpace(label))
+			}
+		}
+	}
 	if consentRequired {
 		helperName, _ := p["helper_name"].(string)
 		reason, _ := p["reason"].(string)
@@ -2200,7 +2208,7 @@ func setupRemoteAccess(_ string, p map[string]interface{}) (int, string, error) 
 		if reason == "" {
 			reason = "Interactive support"
 		}
-		if err := requestRemoteConsent(sessionID, helperName, reason, consentTitle, consentMessage); err != nil {
+		if err := requestRemoteConsent(sessionID, helperName, reason, consentTitle, consentMessage, requestedAccess); err != nil {
 			return fail(err.Error(), err)
 		}
 	} else {

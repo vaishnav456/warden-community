@@ -431,7 +431,13 @@ func syncWardenHomeNow(username string, raw interface{}) error {
 	return nil
 }
 
-var wardenDriveLetters = []string{"W:", "V:", "U:", "T:", "S:", "R:"}
+// Prefer W: for a recognizable Warden drive, then search every safe user
+// drive letter. Limiting this to W: through R: made healthy shares fail on
+// workstations that already had several mapped corporate drives.
+var wardenDriveLetters = []string{
+	"W:", "V:", "U:", "T:", "S:", "R:", "Q:", "P:", "O:", "N:",
+	"M:", "L:", "K:", "J:", "I:", "H:", "G:", "F:", "E:", "D:",
+}
 
 // exposeWardenSharesDrive maps the local synchronized cache into the signed-in
 // user's DOS-device namespace. A mapping created by LocalSystem in session 0
@@ -483,7 +489,7 @@ func exposeWardenSharesDrive(username string) error {
 		}
 		return nil
 	}
-	return errors.New("no free drive letter is available (tried W: through R:)")
+	return fmt.Errorf("no free Warden Shares drive letter is available (checked W: through D:)")
 }
 
 func runInteractiveHomeCommand(username, executable string, args []string) (uint32, error) {

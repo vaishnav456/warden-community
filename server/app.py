@@ -73,6 +73,7 @@ from routes.assets import bp as assets_bp
 from routes.security_management import bp as security_management_bp
 from routes.home import bp as home_bp, node_api_bp as home_node_api_bp
 from routes.topology import bp as topology_bp
+from routes.marketing import bp as marketing_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(dashboard_bp)
@@ -97,6 +98,7 @@ app.register_blueprint(security_management_bp)
 app.register_blueprint(home_bp)
 app.register_blueprint(home_node_api_bp)
 app.register_blueprint(topology_bp)
+app.register_blueprint(marketing_bp)
 
 # ── Request hooks ─────────────────────────────────────────────────────────────
 

@@ -561,6 +561,11 @@
     }
     if (!res.ok) return;
     const data = await res.json();
+    if (data.consent_required && data.consent_status === 'pending') {
+      setStatus('Waiting for endpoint approval…', '');
+    } else if (data.consent_required && data.consent_status === 'approved' && (!ws || ws.readyState !== WebSocket.OPEN)) {
+      setStatus('Approved · connecting…', '');
+    }
     if (data.status === 'closed') {
       stopStatusPoll();
       allowReconnect = false;
