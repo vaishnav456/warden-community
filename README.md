@@ -1,60 +1,23 @@
 # Warden Community
 
-Warden is an open endpoint-management and secure remote-operations platform for Windows, Linux, and macOS environments. It combines enrollment, identity and local-account management, policy deployment, inventory, remote support, network controls, topology, and encrypted Warden Home storage.
+Warden is an open endpoint-management platform for Windows, Linux, and macOS environments.
+
+Prefer a managed service? [Try hosted Warden free for 14 days](https://warden.uranledgr.com/trial?source=github). No card is required. Trial organizations and enrolled endpoints are deleted when the trial ends unless the organization upgrades.
+
+Hosted trials are separate from this self-hosted project. See [Hosted trial terms and data handling](docs/HOSTED_TRIAL.md).
 
 > **Project status: alpha.** This repository is suitable for development and controlled pilots. Review the security model, test recovery, and use signed production artifacts before managing important endpoints.
 
-## Features
+## What makes Warden different
 
-- **Enrollment and fleet management** — scoped and expiring enrollment
-  profiles, single-use or bounded reusable installers, hardware-aware device
-  reclaim, branches, groups/tags, bulk actions, endpoint health, inventory,
-  asset lifecycle, and automatic agent-update controls.
-- **Cross-platform agents** — Windows management plus alpha Linux and macOS
-  agents with platform-specific capability reporting. The console shows only
-  actions supported by the selected endpoint.
-- **Directory and device identity** — a Warden-native directory that works
-  without Active Directory or Microsoft Entra, email-based identities, local
-  account provisioning, endpoint assignment, password lifecycle, profile
-  photos, offline-access windows, and an optional Windows Credential Provider.
-- **Policy and compliance** — reusable and cloneable policy templates,
-  organization → branch → group/tag → endpoint precedence, effective-policy
-  explanation, drift reporting, Windows policy/registry deployment, security
-  baselines, firewall policies, and compliance evidence.
-- **Software, patch, and vulnerability operations** — application library,
-  controlled installer deployment, software inventory, executable paths,
-  patch status and rollout controls, advisory synchronization, and findings
-  with remediation workflow.
-- **Secure remote operations** — attended approval, capability-scoped remote
-  desktop sessions, keyboard and special-key support, process and service
-  operations, command jobs, file operations, session claims, leases, timeouts,
-  and auditable results.
-- **Endpoint experience** — managed wallpaper and lock-screen assets,
-  announcements, restart and shutdown workflows, job retention, and bulk
-  deployment with endpoint status feedback.
-- **Network controls and topology** — application/IP/domain firewall rules,
-  network-flow collection, optional packet capture, local-address inventory,
-  interactive floors and rooms, device placement, infrastructure assets,
-  links, and live endpoint state.
-- **Windows security controls** — BitLocker enablement and recovery-key escrow,
-  local administrator management, Windows-only enrollment lockdown, firewall
-  self-protection, tamper resistance, and signed self-update. These controls
-  are intentionally not presented as Linux or macOS features.
-- **Warden Home storage (alpha)** — organization-owned Windows or Linux storage
-  nodes, per-user home folders and shared drives, quotas, read-only/read-write
-  grants, offline cache, primary/replica selection, failover and shared-storage
-  active-active modes, encrypted node data, and direct peer-to-peer file
-  transfer without routing file contents through the control plane.
-- **Security and operations** — MFA, role and branch scoping, dual approval for
-  sensitive actions, signed commands, TLS pinning, short-lived device
-  certificates, per-device credentials, envelope encryption, audit-chain
-  verification, alerts, scheduling, backup/restore verification, and SBOM and
-  security-release tooling.
+- A built-in directory can provision endpoint accounts and sign-in identities without Active Directory or Microsoft Entra.
+- Policy resolves predictably from organization to branch, group/tag, and endpoint, with an explanation of the effective result.
+- The console is capability-aware: Windows, Linux, and macOS endpoints show only the controls their agent supports.
+- Interactive topology maps place endpoints, rooms, network equipment, and links on a live floor plan.
+- Warden Home (alpha) provides organization-owned home folders and shared drives with direct peer-to-peer transfer, replicas, and failover.
+- Windows controls include enrollment lockdown, BitLocker recovery escrow, managed firewall rules, remote support, and signed agent updates.
 
-Windows currently has the broadest management coverage. Linux, macOS, Warden
-Home, and zero-touch integrations are alpha and should be validated against the
-target OS, network, and identity environment before wider deployment. Optional
-Microsoft Entra/Autopilot integration extends enrollment but is not required.
+Windows currently has the broadest management coverage. Linux, macOS, Warden Home, and zero-touch integrations are alpha.
 
 ## Repository layout
 

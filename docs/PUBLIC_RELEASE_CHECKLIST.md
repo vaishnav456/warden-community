@@ -1,6 +1,6 @@
 # Public release checklist
 
-Complete this checklist before making the repository public or publishing binaries.
+Complete this checklist before publishing a release or binary artifact.
 
 ## Ownership and licensing
 

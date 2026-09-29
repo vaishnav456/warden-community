@@ -20,4 +20,4 @@ Harassment, threats, discriminatory language, deliberate disruption, impersonati
 
 Report conduct concerns privately to the maintainers through the repository owner's contact channel. Maintainers may edit or remove contributions, comments, issues, or other participation and may temporarily or permanently restrict participation.
 
-Before public launch, maintainers should publish a dedicated conduct contact address.
+Until a dedicated conduct address is published, use the private contact method on the repository owner's GitHub profile.

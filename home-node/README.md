@@ -49,7 +49,7 @@ private key locally and obtains its certificate and CA bundle from Warden.
 - LAN/VPN-only nodes use the **Local network** mode and a private HTTPS URL.
   Internet-facing nodes use **Public server** mode. Both modes receive their
   private certificate automatically and enforce mTLS.
-- A public node can use any domain or subdomain the tenant controls, such as
+- A public node can use any domain or subdomain the organization controls, such as
   `home.example.com` or `files.example.com`. Its DNS record must point to the
   Home Node. Warden includes that registered name in the issued certificate.
 - Local-only nodes do not need a public domain. A stable private IP or private
@@ -57,7 +57,7 @@ private key locally and obtains its certificate and CA bundle from Warden.
   HTTPS URLs; names requested by the node itself are ignored.
 - Certificates renew automatically before expiry. Do not pin a rotating leaf
   fingerprint. Endpoints validate the Warden CA chain, hostname and signed
-  tenant/node identity instead.
+  organization/node identity instead.
 - Private nodes serving roaming endpoints can use **P2P VPN** without a public
   DNS record. Both Windows executables automatically allow only their own
   direct-transport sockets: UDP `55000` on the Home Node and UDP `55100` on
@@ -107,7 +107,7 @@ manager separate from the storage server.
 
 ## Setup order
 
-1. In the tenant portal, open **Warden Home**, create the node, and immediately
+1. In the organization portal, open **Warden Home**, create the node, and immediately
    save the one-time Node key and encryption key in a secret manager.
 2. Copy `warden-home.example.json`, fill in the displayed values, leave the five
    certificate path fields blank, and install the service. The executable
@@ -115,7 +115,7 @@ manager separate from the storage server.
    - Windows (Administrator): `warden-home-node-windows-amd64.exe install -config warden-home.json`
    - Linux (root): `./warden-home-node-linux-amd64 install -config warden-home.json`
 3. Confirm the portal shows the node as **Online**.
-4. Create a home/shared space and assign it to the tenant, branch, endpoint
+4. Create a home/shared space and assign it to the organization, branch, endpoint
    tag, or identity. Online agents sync immediately; offline agents sync after
    their next connection.
 
