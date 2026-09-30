@@ -28,7 +28,7 @@
 <body @keydown.escape.window="closeOverlays()" @keydown.ctrl.k.window.prevent="openCommand()" @keydown.meta.k.window.prevent="openCommand()">
 <div id="app-shell" class="flex h-screen overflow-hidden" :class="sidebarStateClass">
 
-  <div id="sidebar-backdrop" x-show="mobileMenuOpen" x-cloak @click="closeMobileNavigation()" aria-hidden="true"></div>
+  <button id="sidebar-backdrop" type="button" @click="closeMobileNavigation()" aria-label="Close navigation" tabindex="-1"></button>
 
   <!-- Sidebar -->
   <aside id="app-sidebar" x-cloak :aria-hidden="navigationHidden" :inert="navigationInert" class="w-60 flex-shrink-0 bg-base-950 border-r border-base-700 flex flex-col h-full overflow-hidden" aria-label="Primary navigation">
@@ -52,7 +52,7 @@
       </button>
     </div>
 
-    <nav class="sidebar-nav flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-0.5" @click="closeMobileNavigation()">
+    <nav class="sidebar-nav flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-0.5" @click="handleNavigationClick($event)">
       <div class="nav-section-label">Main</div>
       <a href="/" class="nav-item {{ 'active' if active_page == 'dashboard' }}">
         {{ wicon('dashboard') }}
@@ -176,7 +176,7 @@
   </aside>
 
   <!-- Main -->
-  <div class="flex-1 flex flex-col min-w-0 overflow-hidden bg-base-900">
+  <div id="app-workspace" :inert="mobileMenuOpen" class="flex-1 flex flex-col min-w-0 overflow-hidden bg-base-900">
     <header id="app-header" class="bg-base-900 border-b border-base-700 flex items-center justify-between px-6 py-3 flex-shrink-0">
       <div class="flex items-center gap-3 min-w-0">
         <button type="button" class="mobile-menu-button navigation-toggle-button" @click="toggleNavigation()" :aria-expanded="navigationExpanded" aria-controls="app-sidebar" aria-label="Toggle navigation">
@@ -246,7 +246,7 @@
   </div>
 </dialog>
 
-<nav class="mobile-tab-bar" aria-label="Mobile navigation">
+<nav class="mobile-tab-bar" :inert="mobileMenuOpen" aria-label="Mobile navigation">
   <a href="/" class="{{ 'active' if active_page == 'dashboard' }}">{{ wicon('dashboard', 'custom-icon') }}<span>Home</span></a>
   <a href="/endpoints" class="{{ 'active' if active_page == 'endpoints' }}">{{ wicon('endpoint', 'custom-icon') }}<span>Devices</span></a>
   <a href="/directory" class="{{ 'active' if active_page == 'directory' }}">{{ wicon('users', 'custom-icon') }}<span>People</span></a>

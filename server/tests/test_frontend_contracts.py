@@ -288,7 +288,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('<option value="false">Disabled</option>', policy_page)
         self.assertIn('input[type="file"]::file-selector-button', stylesheet)
 
-    def test_shell_has_responsive_persistent_navigation(self):
+    def test_shell_has_responsive_overlay_navigation(self):
         base = (TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
         javascript = WARDEN_JS.read_text(encoding="utf-8")
         stylesheet = (SERVER_DIR / "static" / "css" / "warden.css").read_text(encoding="utf-8")
@@ -298,7 +298,12 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("#app-sidebar .sidebar-nav", workbench)
         self.assertIn("overflow-y:auto", workbench)
         self.assertIn("toggleNavigation()", base)
-        self.assertIn("warden.sidebarCollapsed", javascript)
+        self.assertNotIn("warden.sidebarCollapsed", javascript)
+        self.assertIn('handleNavigationClick($event)', base)
+        self.assertIn(':inert="mobileMenuOpen"', base)
+        self.assertNotIn('id="sidebar-backdrop" x-show', base)
+        self.assertIn(".sidebar-mobile-open #sidebar-backdrop", workbench)
+        self.assertIn("position:fixed; inset:8px auto 8px 8px", workbench)
         self.assertIn("sidebar-mobile-open", stylesheet)
         self.assertIn(".fleet-summary-strip > *", stylesheet)
 

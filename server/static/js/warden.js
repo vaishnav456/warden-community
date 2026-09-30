@@ -2548,36 +2548,23 @@ function enrollmentProfileForm() {
 /* ── Root app ──────────────────────────────── */
 function wardenApp() {
   return {
-    sidebarCollapsed: false,
     mobileMenuOpen: false,
-    compactViewport: false,
     sidebarStateClass: '',
-    navigationExpanded: true,
-    navigationHidden: false,
-    navigationInert: false,
+    navigationExpanded: false,
+    navigationHidden: true,
+    navigationInert: true,
     commandOpen: false,
     commandQuery: '',
     flashes: [],
     _flashId: 0,
 
     init() {
-      this.sidebarCollapsed = localStorage.getItem('warden.sidebarCollapsed') === 'true';
       this.syncNavigationState();
-      this._navigationResizeHandler = () => this.syncNavigationState();
-      window.addEventListener('resize', this._navigationResizeHandler, { passive: true });
-    },
-
-    destroy() {
-      window.removeEventListener('resize', this._navigationResizeHandler);
     },
 
     syncNavigationState() {
-      this.compactViewport = window.innerWidth <= 860;
-      if (!this.compactViewport) this.mobileMenuOpen = false;
-      this.sidebarStateClass = this.compactViewport
-        ? (this.mobileMenuOpen ? 'sidebar-mobile-open' : '')
-        : (this.sidebarCollapsed ? 'sidebar-collapsed' : '');
-      this.navigationExpanded = this.compactViewport ? this.mobileMenuOpen : !this.sidebarCollapsed;
+      this.sidebarStateClass = this.mobileMenuOpen ? 'sidebar-mobile-open' : '';
+      this.navigationExpanded = this.mobileMenuOpen;
       this.navigationHidden = !this.navigationExpanded;
       this.navigationInert = !this.navigationExpanded;
     },
@@ -2600,6 +2587,7 @@ function wardenApp() {
     },
 
     openCommand() {
+      this.closeMobileNavigation(false);
       this.commandOpen = true;
       this.commandQuery = '';
       this.$nextTick(() => document.getElementById('warden-command-input')?.focus());
@@ -2626,19 +2614,22 @@ function wardenApp() {
     },
 
     toggleNavigation() {
-      if (this.compactViewport) {
-        this.mobileMenuOpen = !this.mobileMenuOpen;
-      } else {
-        this.sidebarCollapsed = !this.sidebarCollapsed;
-        localStorage.setItem('warden.sidebarCollapsed', String(this.sidebarCollapsed));
-      }
+      if (this.mobileMenuOpen) { this.closeMobileNavigation(); return; }
+      this._navigationOpener = document.activeElement;
+      this.mobileMenuOpen = true;
       this.syncNavigationState();
+      this.$nextTick(() => document.querySelector('#app-sidebar .sidebar-close')?.focus());
     },
 
-    closeMobileNavigation() {
-      if (!this.compactViewport || !this.mobileMenuOpen) return;
+    closeMobileNavigation(restoreFocus = true) {
+      if (!this.mobileMenuOpen) return;
       this.mobileMenuOpen = false;
       this.syncNavigationState();
+      if (restoreFocus) this.$nextTick(() => this._navigationOpener?.focus());
+    },
+
+    handleNavigationClick(event) {
+      if (event.target.closest('a[href]')) this.closeMobileNavigation(false);
     },
   };
 }
