@@ -1699,7 +1699,7 @@ def create_policy_deployment(company_id, branch_id, template, payload, created_b
                              target_selector=None, rollout_percentage=100):
     """Atomically create a policy rollout and all of its endpoint jobs."""
     company = get_company_by_id(company_id)
-    encrypted_payload = encrypt_field(company, payload)
+    encrypted_payload = encrypt_field(company, payload, "job.payload")
     params = {
         "p_company_id": str(company_id),
         "p_branch_id": str(branch_id),
@@ -1967,7 +1967,7 @@ def create_warden_identity_with_jobs(company, username, display_name, password_h
         "p_endpoint_ids": [str(value) for value in endpoint_ids],
         "p_profile_photo": profile_photo or None,
         "p_profile_photo_mime": profile_photo_mime or None,
-        "p_encrypted_payload": encrypt_field(company, payload),
+        "p_encrypted_payload": encrypt_field(company, payload, "job.payload"),
     }) or []
     return rows[0] if rows else None
 
@@ -1986,7 +1986,7 @@ def create_warden_identity_with_setup_and_jobs(
         "p_endpoint_ids": [str(value) for value in endpoint_ids],
         "p_profile_photo": profile_photo or None,
         "p_profile_photo_mime": profile_photo_mime or None,
-        "p_encrypted_payload": encrypt_field(company, payload),
+        "p_encrypted_payload": encrypt_field(company, payload, "job.payload"),
         "p_setup_token_hash": setup_token_hash,
         "p_setup_expires_at": setup_expires_at,
     }) or []
@@ -2014,7 +2014,7 @@ def rotate_warden_identity_password(company, identity_id, password_hash,
     return _rpc("rotate_warden_identity_password", {
         "p_company_id": str(company["id"]), "p_identity_id": str(identity_id),
         "p_password_hash": password_hash, "p_created_by": str(created_by),
-        "p_encrypted_payload": encrypt_field(company, payload),
+        "p_encrypted_payload": encrypt_field(company, payload, "job.payload"),
     })
 
 
@@ -2022,7 +2022,7 @@ def set_warden_identity_enabled(company, identity_id, enabled, created_by, paylo
     return _rpc("set_warden_identity_enabled", {
         "p_company_id": str(company["id"]), "p_identity_id": str(identity_id),
         "p_enabled": bool(enabled), "p_created_by": str(created_by),
-        "p_encrypted_payload": encrypt_field(company, payload),
+        "p_encrypted_payload": encrypt_field(company, payload, "job.payload"),
     })
 
 
@@ -2032,8 +2032,8 @@ def reassign_warden_identity(company, identity_id, endpoint_ids, created_by,
         "p_company_id": str(company["id"]), "p_identity_id": str(identity_id),
         "p_endpoint_ids": [str(value) for value in endpoint_ids],
         "p_created_by": str(created_by),
-        "p_provision_payload": encrypt_field(company, provision_payload),
-        "p_revoke_payload": encrypt_field(company, revoke_payload),
+        "p_provision_payload": encrypt_field(company, provision_payload, "job.payload"),
+        "p_revoke_payload": encrypt_field(company, revoke_payload, "job.payload"),
     }) or []
     return rows[0] if rows else None
 
@@ -2178,7 +2178,7 @@ def get_patch_deployments(company_id, limit=30):
 
 
 def create_patch_deployment(company, policy, pilot_ids, broad_ids, payload, created_by):
-    encrypted = encrypt_field(company, payload)
+    encrypted = encrypt_field(company, payload, "job.payload")
     return _rpc("create_patch_deployment", {
         "p_company_id": str(company["id"]), "p_policy_id": str(policy["id"]),
         "p_pilot_ids": [str(item) for item in pilot_ids],
