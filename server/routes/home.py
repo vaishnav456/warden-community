@@ -159,6 +159,8 @@ def _home_transfer_view(job, endpoints):
                 and candidate.get("version") == 1
                 and all(type(candidate.get(key)) is int and candidate[key] >= 0 for key in counters)):
             report = {key: candidate[key] for key in counters}
+            folders = candidate.get("folders_created", 0)
+            report["folders_created"] = folders if type(folders) is int and folders >= 0 else 0
             report["files"] = [entry for entry in candidate.get("files", [])[:100] if isinstance(entry, dict)] if isinstance(candidate.get("files"), list) else []
             report["omitted_details"] = candidate.get("omitted_details", 0)
             report["username"] = candidate.get("username") or ""
@@ -175,7 +177,7 @@ def _home_transfer_view(job, endpoints):
             item["label"] = "Incomplete"
             item["tone"] = "badge-offline"
         else:
-            item["label"] = "Succeeded" if report["uploaded"] + report["downloaded"] else ("Up to date" if report["unchanged"] else "No files found")
+            item["label"] = "Succeeded" if report["uploaded"] + report["downloaded"] + report["folders_created"] else ("Up to date" if report["unchanged"] else "No files found")
             item["tone"] = "badge-online"
     elif status == "failed":
         item["label"] = "Failed"

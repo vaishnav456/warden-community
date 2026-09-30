@@ -52,6 +52,12 @@ class HomeTransferStatusTests(unittest.TestCase):
             self.assertEqual(item["label"], "Incomplete")
         self.assertEqual(self.view(json.dumps(report(failed=1)), "failed")["label"], "Failed")
 
+    def test_empty_folder_receipts_count_as_success(self):
+        item = self.view(json.dumps(report(uploaded=0, uploaded_bytes=0, folders_created=2)))
+        self.assertEqual(item["label"], "Succeeded")
+        self.assertEqual(item["report"]["folders_created"], 2)
+        self.assertEqual(self.view(json.dumps(report()))["report"]["folders_created"], 0)
+
     def test_malformed_receipt_is_unverified(self):
         for output in ("{truncated", json.dumps(report(uploaded=True)), json.dumps(report(failed=-1))):
             self.assertEqual(self.view(output)["label"], "Completed · unverified")

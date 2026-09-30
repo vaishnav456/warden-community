@@ -23,7 +23,7 @@ func homeSyncNotice(report homeSyncReport) (title, message, severity string) {
 	if report.Status != "completed" || report.Failed > 0 || report.Skipped > 0 {
 		return "Warden Home sync needs attention", fmt.Sprintf("Sync did not fully complete. %d uploaded, %d downloaded, %d failed, %d skipped. Check the Warden sync job details before assuming your files are backed up.", report.Uploaded, report.Downloaded, report.Failed, report.Skipped), "warning"
 	}
-	return "Warden Home sync complete", fmt.Sprintf("Incremental sync finished: %d uploaded, %d downloaded, %d unchanged. Only new or changed files were transferred.", report.Uploaded, report.Downloaded, report.Unchanged), "info"
+	return "Warden Home sync complete", fmt.Sprintf("Incremental sync finished: %d uploaded, %d downloaded, %d unchanged, %d folders created. Files are compared by content hash.", report.Uploaded, report.Downloaded, report.Unchanged, report.FoldersCreated), "info"
 }
 
 func shouldShowHomeNotice(report homeSyncReport, previous homeNoticeState, now time.Time) bool {
@@ -34,7 +34,7 @@ func shouldShowHomeNotice(report homeSyncReport, previous homeNoticeState, now t
 	if report.Status != "completed" {
 		return now.Sub(previous.at) >= 15*time.Minute
 	}
-	return report.Uploaded+report.Downloaded > 0 && now.Sub(previous.at) >= time.Minute
+	return report.Uploaded+report.Downloaded+report.FoldersCreated > 0 && now.Sub(previous.at) >= time.Minute
 }
 
 func notifyHomeSyncResult(report homeSyncReport) {

@@ -114,12 +114,15 @@ type fileEntry struct {
 	Path    string `json:"path"`
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"mtime"`
+	SHA256  string `json:"sha256,omitempty"`
+	IsDir   bool   `json:"is_dir,omitempty"`
 }
 
 type metadata struct {
 	Size    int64  `json:"Size"`
 	ModTime int64  `json:"ModTime"`
 	Auth    string `json:"Auth,omitempty"`
+	SHA256  string `json:"SHA256,omitempty"`
 	Valid   bool   `json:"-"`
 	Exists  bool   `json:"-"`
 }
@@ -583,6 +586,10 @@ func decryptLegacyStream(dst io.Writer, src io.Reader) error {
 }
 
 func writeFile(rel string, src io.Reader, mtime, maxBytes int64) error {
+	return writeFileVerified(rel, src, mtime, maxBytes, "")
+}
+
+func writeFileVerified(rel string, src io.Reader, mtime, maxBytes int64, expectedSHA256 string) error {
 	data, meta, err := pathsFor(rel)
 	if err != nil {
 		return err
@@ -599,7 +606,8 @@ func writeFile(rel string, src io.Reader, mtime, maxBytes int64) error {
 	if maxBytes <= 0 || maxBytes > 5*1024*1024*1024 {
 		maxBytes = 5 * 1024 * 1024 * 1024
 	}
-	size, err := encryptStreamForPath(tmp, io.LimitReader(src, maxBytes+1), rel)
+	digest := sha256.New()
+	size, err := encryptStreamForPath(tmp, io.TeeReader(io.LimitReader(src, maxBytes+1), digest), rel)
 	closeErr := tmp.Close()
 	if err != nil {
 		return err
@@ -609,6 +617,10 @@ func writeFile(rel string, src io.Reader, mtime, maxBytes int64) error {
 	}
 	if size > maxBytes {
 		return errFileTooLarge
+	}
+	contentHash := hex.EncodeToString(digest.Sum(nil))
+	if expectedSHA256 != "" && !strings.EqualFold(expectedSHA256, contentHash) {
+		return errors.New("replicated content hash mismatch")
 	}
 	if err := os.Rename(name, data); err != nil {
 		// Windows cannot atomically replace an existing destination. The
@@ -623,12 +635,12 @@ func writeFile(rel string, src io.Reader, mtime, maxBytes int64) error {
 	if mtime == 0 {
 		mtime = time.Now().Unix()
 	}
-	m := metadata{Size: size, ModTime: mtime, Valid: true, Exists: true}
+	m := metadata{Size: size, ModTime: mtime, SHA256: contentHash, Valid: true, Exists: true}
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return err
 	}
-	tag := aead.Seal(nil, nonce, nil, metadataAAD(rel, size, mtime))
+	tag := aead.Seal(nil, nonce, nil, metadataHashAAD(rel, m))
 	m.Auth = base64.RawURLEncoding.EncodeToString(append(nonce, tag...))
 	raw, _ := json.Marshal(m)
 	return os.WriteFile(meta, raw, 0600)
@@ -636,6 +648,15 @@ func writeFile(rel string, src io.Reader, mtime, maxBytes int64) error {
 
 func metadataAAD(rel string, size, mtime int64) []byte {
 	return []byte(fmt.Sprintf("warden-home:metadata:v2:%s:%d:%d", filepath.ToSlash(rel), size, mtime))
+}
+
+// Bind the plaintext digest into authenticated metadata. Old v2 files remain
+// readable; their digest is calculated from authenticated plaintext on listing.
+func metadataHashAAD(rel string, m metadata) []byte {
+	if m.SHA256 == "" {
+		return metadataAAD(rel, m.Size, m.ModTime)
+	}
+	return []byte(fmt.Sprintf("warden-home:metadata:v3:%s:%d:%d:%s", filepath.ToSlash(rel), m.Size, m.ModTime, m.SHA256))
 }
 
 func prefixUsage(prefix string) int64 {
@@ -665,6 +686,10 @@ func prefixUsage(prefix string) int64 {
 }
 
 func storeAuthorizedFile(rel string, src io.Reader, mtime int64, g grant) (int, error) {
+	return storeAuthorizedFileVerified(rel, src, mtime, g, "")
+}
+
+func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant, expectedSHA256 string) (int, error) {
 	maxBytes := g.MaxFileBytes
 	if maxBytes <= 0 || maxBytes > 5*1024*1024*1024 {
 		maxBytes = 5 * 1024 * 1024 * 1024
@@ -695,7 +720,7 @@ func storeAuthorizedFile(rel string, src io.Reader, mtime int64, g grant) (int, 
 			return http.StatusInsufficientStorage, errFileTooLarge
 		}
 	}
-	if err := writeFile(rel, src, mtime, allowed); err != nil {
+	if err := writeFileVerified(rel, src, mtime, allowed, expectedSHA256); err != nil {
 		if errors.Is(err, errFileTooLarge) {
 			if quotaLimited {
 				return http.StatusInsufficientStorage, err
@@ -729,7 +754,7 @@ func loadMeta(path string) metadata {
 		return m
 	}
 	if m.Auth == "" {
-		m.Valid = string(header) == magic
+		m.Valid = string(header) == magic && m.SHA256 == ""
 		return m
 	}
 	rel, err := filepath.Rel(cfg.Root, strings.TrimSuffix(dataPath, ".whome"))
@@ -741,12 +766,16 @@ func loadMeta(path string) metadata {
 		return m
 	}
 	nonce, tag := auth[:aead.NonceSize()], auth[aead.NonceSize():]
-	_, err = aead.Open(nil, nonce, tag, metadataAAD(filepath.ToSlash(rel), m.Size, m.ModTime))
+	_, err = aead.Open(nil, nonce, tag, metadataHashAAD(filepath.ToSlash(rel), m))
 	m.Valid = err == nil && string(header) == magicV2
 	return m
 }
 
 func listStoredFiles(prefix string) ([]fileEntry, error) {
+	return listStoredEntries(prefix, false)
+}
+
+func listStoredEntries(prefix string, includeDirectories bool) ([]fileEntry, error) {
 	root, _, err := pathsFor(prefix)
 	if err != nil {
 		return nil, err
@@ -754,7 +783,29 @@ func listStoredFiles(prefix string) ([]fileEntry, error) {
 	root = strings.TrimSuffix(root, ".whome")
 	var entries []fileEntry
 	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info == nil || info.IsDir() || !strings.HasSuffix(path, ".whome") {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if info == nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("symlink storage paths are not permitted")
+		}
+		if info.IsDir() {
+			if includeDirectories && path != root {
+				rel, err := filepath.Rel(cfg.Root, path)
+				if err != nil {
+					return err
+				}
+				entries = append(entries, fileEntry{Path: filepath.ToSlash(rel), IsDir: true})
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".whome") {
 			return nil
 		}
 		rel, err := filepath.Rel(cfg.Root, strings.TrimSuffix(path, ".whome"))
@@ -765,7 +816,21 @@ func listStoredFiles(prefix string) ([]fileEntry, error) {
 		if !m.Valid {
 			return errors.New("stored file metadata authentication failed")
 		}
-		entries = append(entries, fileEntry{Path: filepath.ToSlash(rel), Size: m.Size, ModTime: m.ModTime})
+		digest := m.SHA256
+		if digest == "" {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			h := sha256.New()
+			err = decryptStreamForPath(h, f, filepath.ToSlash(rel))
+			f.Close()
+			if err != nil {
+				return err
+			}
+			digest = hex.EncodeToString(h.Sum(nil))
+		}
+		entries = append(entries, fileEntry{Path: filepath.ToSlash(rel), Size: m.Size, ModTime: m.ModTime, SHA256: digest})
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
@@ -781,7 +846,7 @@ func handleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	entries, err := listStoredFiles(prefix)
+	entries, err := listStoredEntries(prefix, r.URL.Query().Get("include_directories") == "1")
 	if err != nil {
 		http.Error(w, "list failed", http.StatusInternalServerError)
 		return
@@ -825,6 +890,9 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("X-Warden-Mtime", fmt.Sprint(m.ModTime))
+		if m.SHA256 != "" {
+			w.Header().Set("X-Warden-SHA256", m.SHA256)
+		}
 		w.Header().Set("Content-Length", fmt.Sprint(m.Size))
 		if err := decryptStreamForPath(w, f, rel); err != nil {
 			log.Printf("decrypt %s: %v", rel, err)
@@ -843,6 +911,9 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, writeErr := storeAuthorizedFile(rel, r.Body, mtime.Unix(), g)
+		if writeErr == nil {
+			w.Header().Set("X-Warden-SHA256", loadMeta(meta).SHA256)
+		}
 		release()
 		storageMu.Unlock()
 		if writeErr != nil {
@@ -1125,7 +1196,7 @@ func replicateFrom(p peer) {
 	if err != nil {
 		return
 	}
-	listURL := strings.TrimRight(base, "/") + "/v1/list?path=" + url.QueryEscape(p.Prefix)
+	listURL := strings.TrimRight(base, "/") + "/v1/list?include_directories=1&path=" + url.QueryEscape(p.Prefix)
 	req, _ := http.NewRequest(http.MethodGet, listURL, nil)
 	req.Header.Set("Authorization", "Bearer "+p.Grant)
 	resp, err := client.Do(req)
@@ -1146,11 +1217,29 @@ func replicateFrom(p peer) {
 	}
 	allOK := true
 	for _, entry := range entries {
+		if entry.IsDir {
+			if entry.Path != p.Prefix && !strings.HasPrefix(entry.Path, strings.TrimRight(p.Prefix, "/")+"/") {
+				allOK = false
+				continue
+			}
+			storageMu.Lock()
+			release, err := acquireSpaceLock(p.Prefix)
+			if err != nil {
+				allOK = false
+			} else {
+				if err := createStoredDirectory(entry.Path); err != nil {
+					allOK = false
+				}
+				release()
+			}
+			storageMu.Unlock()
+			continue
+		}
 		_, metaPath, err := pathsFor(entry.Path)
 		if err != nil {
 			continue
 		}
-		if local := loadMeta(metaPath); local.Valid && local.ModTime >= entry.ModTime {
+		if local := loadMeta(metaPath); local.Exists && local.Valid && local.Size == entry.Size && entry.SHA256 != "" && local.SHA256 == entry.SHA256 {
 			continue
 		}
 		u := strings.TrimRight(base, "/") + "/v1/file?path=" + url.QueryEscape(entry.Path)
@@ -1165,9 +1254,9 @@ func replicateFrom(p peer) {
 			storageMu.Lock()
 			release, lockErr := acquireSpaceLock(p.Prefix)
 			if lockErr == nil {
-				_, writeErr := storeAuthorizedFile(entry.Path, fileResp.Body, entry.ModTime, grant{
+				_, writeErr := storeAuthorizedFileVerified(entry.Path, fileResp.Body, entry.ModTime, grant{
 					Prefix: p.Prefix, MaxFileBytes: p.MaxFileBytes, QuotaBytes: p.QuotaBytes,
-				})
+				}, entry.SHA256)
 				if writeErr != nil {
 					allOK = false
 				}
@@ -1330,6 +1419,7 @@ func runConfiguredServer(path string, stop <-chan struct{}) error {
 		io.WriteString(w, `{"ok":true}`)
 	})
 	mux.HandleFunc("/v1/list", handleList)
+	mux.HandleFunc("/v1/directory", handleDirectory)
 	mux.HandleFunc("/v1/file", handleFile)
 	servingCertificate, err := watchServingCertificate(cfg.TLSCert, cfg.TLSKey)
 	if err != nil {

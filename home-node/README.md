@@ -4,6 +4,27 @@
 It runs on designated Windows or Linux file servers; ordinary endpoints keep
 using the normal Warden Agent.
 
+## Incremental sync and folders
+
+Agent 2.6.45 and Home Node 1.1.5 compare file contents using SHA-256, including
+edits that retain the same size and timestamp. Each scan reads local file
+contents, but only new or changed files are transferred, as whole files rather
+than changed blocks. Existing encrypted files remain readable; older metadata
+is hashed from authenticated plaintext until those files are rewritten.
+
+Nested folders and empty folders are preserved in both directions. Directory
+entries are opt-in so older agents continue to receive a file-only listing.
+Update the Home Node before the agent to enable folder sync. With an older node,
+content comparison can require downloading remote bytes to calculate a hash;
+unsupported folder creation is reported as incomplete, never as success.
+
+Downloads and replica writes check available hashes before replacing existing
+copies. Uploads check the new node's content-hash receipt. Equal-timestamp edits
+follow the configured conflict policy: the default retains/uploads local edits,
+server-wins restores the server copy, and keep-both preserves both versions.
+Folder counts appear in sync job results and completion notifications. This
+does not introduce endpoint-side deletion propagation or block-level transfer.
+
 ## Security model
 
 - File contents are encrypted end-to-end between endpoints and organization-owned nodes.

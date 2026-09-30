@@ -143,7 +143,7 @@ func TestHomeUnchangedFileIsCountedOnce(t *testing.T) {
 		if r.URL.Path != "/v1/list" {
 			t.Error("unchanged file transferred")
 		}
-		json.NewEncoder(w).Encode([]homeRemoteFile{{Path: "user/Documents/same.txt", Size: 4, ModTime: 1234567}})
+		json.NewEncoder(w).Encode([]homeRemoteFile{{Path: "user/Documents/same.txt", Size: 4, ModTime: 1234567, SHA256: homeTestDigest([]byte("same"))}})
 	}))
 	defer server.Close()
 	report, err := syncHomeMappingFiles(homeSpace{Name: "Home", Prefix: "user", MaxFileBytes: 1024}, homeNode{LocalURL: server.URL, Writable: true}, homeMapping{Target: "Documents"}, root, server.Client())

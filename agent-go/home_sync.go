@@ -55,8 +55,11 @@ type homeSpace struct {
 	Nodes          []homeNode    `json:"nodes"`
 }
 type homeRemoteFile struct {
-	Path          string `json:"path"`
-	Size, ModTime int64
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mtime"`
+	SHA256  string `json:"sha256,omitempty"`
+	IsDir   bool   `json:"is_dir,omitempty"`
 }
 
 var allowedHomeFolders = map[string]bool{"Desktop": true, "Documents": true, "Downloads": true, "Pictures": true, "Music": true, "Videos": true}
@@ -211,7 +214,7 @@ func homeRequest(client *http.Client, node homeNode, method, path string, body i
 }
 
 func listHomeFiles(client *http.Client, node homeNode, prefix string) ([]homeRemoteFile, error) {
-	req, _ := http.NewRequest(http.MethodGet, homeNodeURL(node)+"/v1/list?path="+url.QueryEscape(prefix), nil)
+	req, _ := http.NewRequest(http.MethodGet, homeNodeURL(node)+"/v1/list?include_directories=1&path="+url.QueryEscape(prefix), nil)
 	req.Header.Set("Authorization", "Bearer "+node.Grant)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -245,6 +248,7 @@ type homeSyncReport struct {
 	Status          string           `json:"status"`
 	Uploaded        int              `json:"uploaded"`
 	Downloaded      int              `json:"downloaded"`
+	FoldersCreated  int              `json:"folders_created"`
 	Unchanged       int              `json:"unchanged"`
 	Skipped         int              `json:"skipped"`
 	Failed          int              `json:"failed"`
@@ -258,6 +262,8 @@ const homeReportDetailLimit = 100
 
 func (report *homeSyncReport) record(space, path, action, status string, size int64, err error) {
 	switch status {
+	case "folder_created":
+		report.FoldersCreated++
 	case "uploaded":
 		report.Uploaded++
 		report.UploadedBytes += size
@@ -294,6 +300,7 @@ func (report *homeSyncReport) record(space, path, action, status string, size in
 func (report *homeSyncReport) merge(other homeSyncReport) {
 	report.Uploaded += other.Uploaded
 	report.Downloaded += other.Downloaded
+	report.FoldersCreated += other.FoldersCreated
 	report.Unchanged += other.Unchanged
 	report.Skipped += other.Skipped
 	report.Failed += other.Failed
@@ -368,8 +375,13 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 		return report, err
 	}
 	remoteByPath := map[string]homeRemoteFile{}
+	remoteDirs := map[string]bool{}
 	for _, f := range remote {
-		remoteByPath[f.Path] = f
+		if f.IsDir {
+			remoteDirs[f.Path] = true
+		} else {
+			remoteByPath[f.Path] = f
+		}
 	}
 	handled := map[string]bool{}
 	canUpload := space.AccessMode != "read" && space.SyncMode != "download"
@@ -391,6 +403,19 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 				report.record(space.Name, rel, "download", "failed", 0, errors.New("download path escaped the local folder"))
 				continue
 			}
+			if err := validateHomeLocalPath(localRoot, abs); err != nil {
+				report.record(space.Name, rel, "download", "failed", 0, err)
+				continue
+			}
+			if f.IsDir {
+				_, statErr := os.Stat(abs)
+				if err := os.MkdirAll(abs, 0700); err != nil {
+					report.record(space.Name, rel, "mkdir", "failed", 0, err)
+				} else if os.IsNotExist(statErr) {
+					report.record(space.Name, rel, "mkdir", "folder_created", 0, nil)
+				}
+				continue
+			}
 			info, statErr := os.Stat(abs)
 			if statErr != nil && !os.IsNotExist(statErr) {
 				report.record(space.Name, rel, "download", "failed", 0, statErr)
@@ -404,13 +429,22 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 			if space.AccessMode == "read" {
 				conflictPolicy = "server_wins"
 			}
-			if statErr == nil && info.ModTime().Unix() == f.ModTime && info.Size() == f.Size {
+			equal := false
+			if statErr == nil {
+				var compareErr error
+				equal, compareErr = homeContentMatches(client, node, f, abs, info)
+				if compareErr != nil {
+					report.record(space.Name, rel, "compare", "failed", 0, compareErr)
+					continue
+				}
+			}
+			if equal {
 				report.record(space.Name, rel, "compare", "unchanged", 0, nil)
 				handled[f.Path] = true
 				continue
 			}
-			if statErr == nil && conflictPolicy == "keep_both" && info.ModTime().Unix() != f.ModTime {
-				if info.ModTime().Unix() > f.ModTime {
+			if statErr == nil && conflictPolicy == "keep_both" {
+				if info.ModTime().Unix() >= f.ModTime {
 					abs = abs + ".server-conflict-" + time.Now().UTC().Format("20060102-150405")
 				} else {
 					if err := os.Rename(abs, abs+".local-conflict-"+time.Now().UTC().Format("20060102-150405")); err != nil {
@@ -418,7 +452,7 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 						continue
 					}
 				}
-			} else if statErr == nil && info.ModTime().Unix() > f.ModTime && conflictPolicy != "server_wins" {
+			} else if statErr == nil && info.ModTime().Unix() >= f.ModTime && conflictPolicy != "server_wins" {
 				if !canUpload {
 					report.record(space.Name, rel, "compare", "skipped", 0, errors.New("newer local file retained by conflict policy"))
 				}
@@ -451,7 +485,21 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 			report.record(space.Name, rel, "scan", "failed", 0, walkErr)
 			return nil
 		}
-		if info == nil || info.IsDir() {
+		if info == nil {
+			return nil
+		}
+		if info.IsDir() {
+			if rel == "." {
+				return nil
+			}
+			remotePath := remoteRoot + "/" + filepath.ToSlash(rel)
+			if !remoteDirs[remotePath] {
+				if err := createRemoteHomeDirectory(client, node, remotePath); err != nil {
+					report.record(space.Name, rel, "mkdir", "failed", 0, err)
+				} else {
+					report.record(space.Name, rel, "mkdir", "folder_created", 0, nil)
+				}
+			}
 			return nil
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
@@ -466,9 +514,20 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 		if handled[remotePath] {
 			return nil
 		}
-		if rf, ok := remoteByPath[remotePath]; ok && (rf.ModTime > info.ModTime().Unix() || (rf.ModTime == info.ModTime().Unix() && rf.Size == info.Size())) {
-			report.record(space.Name, rel, "compare", "unchanged", 0, nil)
-			return nil
+		if rf, ok := remoteByPath[remotePath]; ok {
+			equal, err := homeContentMatches(client, node, rf, path, info)
+			if err != nil {
+				report.record(space.Name, rel, "compare", "failed", 0, err)
+				return nil
+			}
+			if equal {
+				report.record(space.Name, rel, "compare", "unchanged", 0, nil)
+				return nil
+			}
+			if rf.ModTime > info.ModTime().Unix() {
+				report.record(space.Name, rel, "compare", "skipped", 0, errors.New("newer remote content retained by conflict policy"))
+				return nil
+			}
 		}
 		f, err := os.Open(path)
 		if err != nil {
@@ -476,12 +535,16 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 			return nil
 		}
 		counter := &homeByteCounter{}
-		resp, err := homeRequest(client, node, http.MethodPut, remotePath, io.TeeReader(f, counter), info.ModTime().Unix())
+		digest := sha256.New()
+		resp, err := homeRequest(client, node, http.MethodPut, remotePath, io.TeeReader(f, io.MultiWriter(counter, digest)), info.ModTime().Unix())
 		f.Close()
 		if err == nil {
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				err = fmt.Errorf("home upload HTTP %d", resp.StatusCode)
+			}
+			if receipt := resp.Header.Get("X-Warden-SHA256"); err == nil && receipt != "" && !strings.EqualFold(receipt, hex.EncodeToString(digest.Sum(nil))) {
+				err = errors.New("upload content hash acknowledgement mismatch")
 			}
 			resp.Body.Close()
 		}
@@ -525,7 +588,8 @@ func downloadHomeFile(client *http.Client, node homeNode, file homeRemoteFile, d
 		return 0, err
 	}
 	defer os.Remove(tmp.Name())
-	copied, err := io.Copy(tmp, io.LimitReader(resp.Body, maxBytes+1))
+	digest := sha256.New()
+	copied, err := io.Copy(io.MultiWriter(tmp, digest), io.LimitReader(resp.Body, maxBytes+1))
 	closeErr := tmp.Close()
 	if err != nil {
 		return 0, err
@@ -535,6 +599,13 @@ func downloadHomeFile(client *http.Client, node homeNode, file homeRemoteFile, d
 	}
 	if copied > maxBytes || copied != file.Size {
 		return 0, fmt.Errorf("incomplete download: expected %d bytes, received %d", file.Size, copied)
+	}
+	expected := file.SHA256
+	if expected == "" {
+		expected = resp.Header.Get("X-Warden-SHA256")
+	}
+	if expected != "" && !strings.EqualFold(expected, hex.EncodeToString(digest.Sum(nil))) {
+		return 0, errors.New("download content hash mismatch")
 	}
 	// Failed replacements leave the existing local copy intact.
 	if err := os.Rename(tmp.Name(), dst); err != nil {

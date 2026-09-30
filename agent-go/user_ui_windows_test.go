@@ -108,7 +108,7 @@ func TestHomeSyncTransfersOnlyNewOrChangedFiles(t *testing.T) {
 			puts++
 			data, _ := io.ReadAll(r.Body)
 			info, _ := os.Stat(path)
-			remote = []homeRemoteFile{{Path: "user/Documents/document.txt", Size: int64(len(data)), ModTime: info.ModTime().Unix()}}
+			remote = []homeRemoteFile{{Path: "user/Documents/document.txt", Size: int64(len(data)), ModTime: info.ModTime().Unix(), SHA256: homeTestDigest(data)}}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
