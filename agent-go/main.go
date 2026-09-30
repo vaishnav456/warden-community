@@ -40,6 +40,12 @@ func main() {
 			}
 			os.Exit(runWardenUserDialog(os.Args[2], os.Args[2], os.Args[3], "Sent securely by your organization through Warden.", os.Args[4], false))
 			return
+		case "--user-notification":
+			if len(os.Args) != 5 {
+				os.Exit(2)
+			}
+			os.Exit(runWardenWindow(os.Args[2], os.Args[2], os.Args[3], "Warden notification", os.Args[4], false, true))
+			return
 		case "--apply-user-wallpaper":
 			if len(os.Args) != 4 {
 				os.Exit(2)

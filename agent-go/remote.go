@@ -33,7 +33,6 @@ var (
 	user32DLL   = windows.NewLazySystemDLL("user32.dll")
 	gdi32DLL    = windows.NewLazySystemDLL("gdi32.dll")
 	kernel32DLL = windows.NewLazySystemDLL("kernel32.dll")
-	comctl32DLL = windows.NewLazySystemDLL("comctl32.dll")
 
 	// golang.org/x/sys/windows does not wrap the GlobalAlloc/GlobalLock
 	// family (they predate HeapAlloc and are rarely needed) — declared
@@ -45,7 +44,6 @@ var (
 
 	procGetDC                  = user32DLL.NewProc("GetDC")
 	procGetForegroundWindow    = user32DLL.NewProc("GetForegroundWindow")
-	procMessageBoxW            = user32DLL.NewProc("MessageBoxW")
 	procReleaseDC              = user32DLL.NewProc("ReleaseDC")
 	procGetSystemMetrics       = user32DLL.NewProc("GetSystemMetrics")
 	procSendInput              = user32DLL.NewProc("SendInput")
@@ -69,86 +67,8 @@ var (
 	procBitBlt                 = gdi32DLL.NewProc("BitBlt")
 	procGetDIBits              = gdi32DLL.NewProc("GetDIBits")
 	procGdiFlush               = gdi32DLL.NewProc("GdiFlush")
-	procTaskDialogIndirect     = comctl32DLL.NewProc("TaskDialogIndirect")
 )
 
-type taskDialogConfig struct {
-	Size, FlagsPadding                                                               uint32
-	Parent, Instance                                                                 uintptr
-	Flags, CommonButtons                                                             uint32
-	WindowTitle                                                                      *uint16
-	MainIcon                                                                         uintptr
-	MainInstruction, Content                                                         *uint16
-	ButtonCount                                                                      uint32
-	Buttons                                                                          uintptr
-	DefaultButton                                                                    int32
-	RadioButtonCount                                                                 uint32
-	RadioButtons                                                                     uintptr
-	DefaultRadioButton                                                               int32
-	VerificationText, ExpandedInformation, ExpandedControlText, CollapsedControlText *uint16
-	FooterIcon                                                                       uintptr
-	Footer                                                                           *uint16
-	Callback, CallbackData                                                           uintptr
-	Width                                                                            uint32
-}
-
-func runWardenUserDialog(title, instruction, content, footer, severity string, approval bool) int {
-	windowTitle, _ := windows.UTF16PtrFromString(title)
-	mainInstruction, _ := windows.UTF16PtrFromString(instruction)
-	contentText, _ := windows.UTF16PtrFromString(content)
-	footerText, _ := windows.UTF16PtrFromString(footer)
-	icon := ^uintptr(2) // TD_INFORMATION_ICON = MAKEINTRESOURCEW(-3)
-	if severity == "warning" {
-		icon = ^uintptr(0)
-	}
-	if severity == "critical" {
-		icon = ^uintptr(1)
-	}
-	buttons := uint32(0x0001) // TDCBF_OK_BUTTON
-	defaultButton := int32(1)
-	if approval {
-		buttons = 0x0002 | 0x0004 // TDCBF_YES_BUTTON | TDCBF_NO_BUTTON
-		defaultButton = 7         // IDNO: consent fails closed unless user selects Yes
-	}
-	config := taskDialogConfig{
-		Flags: 0x0008 | 0x01000000, CommonButtons: buttons,
-		WindowTitle: windowTitle, MainIcon: icon, MainInstruction: mainInstruction,
-		Content: contentText, DefaultButton: defaultButton, Footer: footerText,
-		Width: 360,
-	}
-	config.Size = uint32(unsafe.Sizeof(config))
-	var pressed int32
-	if err := procTaskDialogIndirect.Find(); err == nil {
-		hresult, _, _ := procTaskDialogIndirect.Call(
-			uintptr(unsafe.Pointer(&config)), uintptr(unsafe.Pointer(&pressed)), 0, 0,
-		)
-		if int32(hresult) >= 0 {
-			if approval && pressed == 6 {
-				return 0
-			}
-			if !approval && pressed == 1 {
-				return 0
-			}
-			return 2
-		}
-	}
-	// Compatibility fallback for unusual Windows images without TaskDialog.
-	text, _ := windows.UTF16PtrFromString(instruction + "\n\n" + content)
-	result, _, _ := procMessageBoxW.Call(0, uintptr(unsafe.Pointer(text)), uintptr(unsafe.Pointer(windowTitle)),
-		func() uintptr {
-			if approval {
-				return 0x00000004 | 0x00000030 | 0x00040000
-			}
-			return 0x00000000 | 0x00000040 | 0x00040000
-		}())
-	if approval && result == 6 {
-		return 0
-	}
-	if !approval && result == 1 {
-		return 0
-	}
-	return 2
-}
 
 // sendSecureAttentionSequence runs in the Warden LocalSystem service, which
 // is the security boundary Windows permits to generate a software SAS. A
@@ -214,7 +134,7 @@ func runRemoteConsentPrompt(helperName, reason, warningTitle, warningMessage str
 		warningTitle,
 		fmt.Sprintf("%s is requesting access", helperName),
 		fmt.Sprintf("%s\n\nReason\n%s\n\nRequested access\n• %s", warningMessage, reason, accessText),
-		"Choose Yes to allow this one session. Choose No to keep the computer private.",
+		"Allow only someone you trust. Deny, close or wait to keep this computer private. This request expires in 55 seconds.",
 		"warning", true,
 	)
 }
@@ -904,15 +824,8 @@ func randomSessionToken() string {
 	return hex.EncodeToString(buf)
 }
 
-// notifyUserOfRemoteAccess launches a short-lived, fire-and-forget message
-// box into the active console session informing the local user that a
-// Warden admin has started a remote-support session — transparency for the
-// person whose screen is about to be captured/controlled. Uses msg.exe
-// (built into every Windows install, no bundled binary needed) via the same
-// launchInteractiveHelper cross-session mechanism as the real capture
-// helper. Best-effort: any failure here is logged and swallowed, never
-// allowed to block or fail the actual remote-desktop session starting —
-// the notification is a courtesy, not a security control.
+// notifyUserOfRemoteAccess displays a non-activating Warden notification in
+// the active user session. This is transparency, not a substitute for consent.
 func notifyUserOfRemoteAccess(title, message string) {
 	exePath, exeErr := os.Executable()
 	if exeErr != nil {
@@ -925,16 +838,15 @@ func notifyUserOfRemoteAccess(title, message string) {
 	if message == "" {
 		message = "A Warden administrator can now see this screen."
 	}
-	helper, err := launchInteractiveHelper(exePath, []string{"--user-announcement", title, message, "warning"})
+	helper, err := launchInteractiveHelper(exePath, []string{"--user-notification", title, message, "warning"})
 	if err != nil {
 		logWarn("Could not notify user of remote access: %v", err)
 		return
 	}
-	// msg.exe displays the message (or times out) and exits on its own —
-	// just release our handles shortly after, no need to track completion.
 	go func() {
-		time.Sleep(25 * time.Second)
-		helper.terminate(2 * time.Second)
+		if _, finished := helper.wait(20 * time.Second); !finished {
+			helper.terminate(2 * time.Second)
+		}
 	}()
 }
 

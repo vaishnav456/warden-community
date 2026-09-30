@@ -471,17 +471,27 @@ func applyDeviceExperience(p map[string]interface{}) (int, string, error) {
 		if err != nil {
 			return 1, "", err
 		}
-		helper, err := launchInteractiveHelper(exePath, []string{"--user-announcement", title, announcement, severity})
+		mode := "--user-notification"
+		if requireAck {
+			mode = "--user-announcement"
+		}
+		helper, err := launchInteractiveHelper(exePath, []string{mode, title, announcement, severity})
 		if err != nil {
 			return 1, "", fmt.Errorf("display announcement: %w", err)
 		}
 		if requireAck {
-			if _, finished := helper.wait(5 * time.Minute); !finished {
+			if code, finished := helper.wait(5 * time.Minute); !finished {
 				helper.terminate(2 * time.Second)
 				return 1, "", fmt.Errorf("announcement acknowledgement timed out")
+			} else if code != 0 {
+				return 1, "", fmt.Errorf("announcement was not acknowledged")
 			}
 		} else {
-			go func() { time.Sleep(5 * time.Minute); helper.terminate(2 * time.Second) }()
+			go func() {
+				if _, finished := helper.wait(20 * time.Second); !finished {
+					helper.terminate(2 * time.Second)
+				}
+			}()
 		}
 		applied = append(applied, "user announcement")
 	}

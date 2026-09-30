@@ -566,6 +566,7 @@ func syncWardenHomeWithReport(username string, raw interface{}) (report homeSync
 		if finalErr != nil {
 			report.Status = "failed"
 		}
+		notifyHomeSyncResult(report)
 	}()
 	encoded, err := json.Marshal(raw)
 	if err != nil {
