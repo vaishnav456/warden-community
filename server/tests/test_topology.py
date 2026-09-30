@@ -153,10 +153,10 @@ class TopologyRouteTests(unittest.TestCase):
         self.assertEqual(payload["placements"][0]["x"], 12)
         self.assertEqual(payload["replay"]["id"], "s1")
 
-    def test_room_update_rejects_geometry_outside_floor(self):
+    def test_room_update_rejects_geometry_outside_safety_limit(self):
         room = {"id": "r1", "company_id": "c1", "floor_id": "f1", "x": 80, "y": 10, "width": 20, "height": 20}
         floor = {"id": "f1", "company_id": "c1", "branch_id": None, "layout_locked": False}
-        with self.app.test_request_context("/topology/rooms/r1", method="PATCH", json={"width": 25}):
+        with self.app.test_request_context("/topology/rooms/r1", method="PATCH", json={"width": 9000}):
             g.company = {"id": "c1"}
             g.admin = {"id": "a1", "role": "company_admin"}
             with mock.patch.object(db, "get_topology_room", return_value=room), \
@@ -166,6 +166,26 @@ class TopologyRouteTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(response.get_json()["error"], "room_outside_floor")
         update.assert_not_called()
+
+    def test_room_creation_preserves_expanded_coordinates(self):
+        floor = {"id": "f1", "company_id": "c1", "branch_id": None, "layout_locked": False}
+        for x, y in [(130, 160), (-40, -25)]:
+            with self.app.test_request_context("/topology/floors/f1/rooms", method="POST",
+                    json={"name": "Expanded room", "x": x, "y": y, "width": 150, "height": 30}):
+                g.company = {"id": "c1"}
+                g.admin = {"id": "a1", "role": "company_admin"}
+                with mock.patch.object(db, "get_topology_floor", return_value=floor), \
+                     mock.patch.object(db, "create_topology_room", return_value={"id": "r1"}) as create, \
+                     mock.patch.object(db, "audit"):
+                    response, status = _undecorated(topology.create_room)("f1")
+                self.assertEqual(status, 201)
+                values = create.call_args.args[2]
+                self.assertEqual((values["x"], values["y"], values["width"]), (x, y, 150))
+
+    def test_coordinates_reject_nonfinite_and_excessive_values(self):
+        for value in [float("nan"), float("inf"), -9001, 9001]:
+            with self.assertRaises(ValueError):
+                topology._number(value, -9000, 9000)
 
     def test_endpoint_placement_requires_matching_floor_branch(self):
         floor = {"id": "f1", "company_id": "c1", "branch_id": "b1", "layout_locked": False}

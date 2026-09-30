@@ -215,7 +215,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.topology-canvas', stylesheet)
         self.assertIn('.topology-page.is-focus-map', stylesheet)
         self.assertIn('topology-room-draft', page)
-        self.assertIn('class="topology-grid" x="-2000" y="-1200"', page)
+        self.assertIn('class="topology-grid" x="-90000" y="-54000"', page)
         self.assertNotIn('topology-floor-boundary', page)
         self.assertIn('Draw room', page)
         self.assertIn('Add asset', page)

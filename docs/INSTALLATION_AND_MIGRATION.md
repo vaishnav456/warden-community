@@ -143,6 +143,23 @@ Agent updates are independent. Existing agents continue on their current
 version until a signed update job or enabled automatic-update policy upgrades
 them.
 
+### Expandable topology and endpoint names (2026-09-30)
+
+Before deploying this update on an existing database, apply
+`migrations/2026-09-30-expandable-topology.sql` and
+`migrations/2026-09-30-endpoint-nickname.sql` with `psql -v ON_ERROR_STOP=1`.
+Fresh installations apply these through `db-init/14-topology-and-endpoint-names.sql`.
+Existing floor coordinates are preserved; rooms and devices can extend beyond
+the old floor in all directions. Pan or zoom out to add space; **Fit all** shows
+the whole layout. A safety limit of ±9,000 map units remains.
+
+Use **Endpoints → device → Edit names** to set a nickname. The visible name
+defaults to the hostname; clearing the nickname restores that default.
+Nicknames are tenant-encrypted and do not rename or restart the device.
+Windows hostname changes require Agent 2.6.43 or later. Restart is unchecked
+by default; selecting it follows the configured restart approval process.
+The operating-system hostname takes effect after the next restart.
+
 ## 6. Move to another server without re-enrolling agents
 
 Use the same public `SERVER_URL`. Restore the database, environment secrets,

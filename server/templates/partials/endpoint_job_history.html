@@ -10,7 +10,7 @@
   <span><i class="is-failed"></i><b>{{ job_counts.failed }}</b><small>Needs review</small></span>
 </div>
 <section class="endpoint-job-history" aria-labelledby="job-history-title">
-  <div class="endpoint-job-section-title"><div><h3 id="job-history-title">Recent history</h3><p>The latest 30 requests for {{ endpoint.hostname }}. Status refreshes automatically.</p></div><a href="/jobs?endpoint_id={{ endpoint.id }}" class="endpoint-job-refresh">Open all jobs</a></div>
+  <div class="endpoint-job-section-title"><div><h3 id="job-history-title">Recent history</h3><p>The latest 30 requests for {{ endpoint.display_name or endpoint.hostname }}. Status refreshes automatically.</p></div><a href="/jobs?endpoint_id={{ endpoint.id }}" class="endpoint-job-refresh">Open all jobs</a></div>
   {% for approval in pending_escalations | default([]) %}
   <article class="endpoint-job-record" data-status="pending">
     <div class="endpoint-job-state"><i></i></div>

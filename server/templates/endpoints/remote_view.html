@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Remote Access — {{ endpoint.hostname }}{% endblock %}
+{% block title %}Remote Access — {{ endpoint.display_name or endpoint.hostname }}{% endblock %}
 
 {% block extra_head %}
 <style nonce="{{ csp_nonce }}">
@@ -155,7 +155,7 @@
   <div id="toolbar">
     <div class="remote-brand">
         <span class="remote-brand-mark platform-mark-{{ endpoint.platform or 'windows' }}"><svg viewBox="0 0 24 24"><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if endpoint.platform == 'darwin' else (endpoint.platform or 'windows') }}"></use></svg></span>
-      <span class="remote-brand-copy"><strong>{{ endpoint.hostname }}{% if endpoint.platform in ['linux', 'darwin'] %} · ALPHA{% endif %}</strong><small>Secure remote session</small></span>
+      <span class="remote-brand-copy"><strong>{{ endpoint.display_name or endpoint.hostname }}{% if endpoint.platform in ['linux', 'darwin'] %} · ALPHA{% endif %}</strong><small>Secure remote session</small></span>
     </div>
     <span id="status">Connecting…</span>
     <span id="quality-stats">0 fps · — ms</span>

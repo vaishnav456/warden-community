@@ -1,7 +1,7 @@
 {% for ep in endpoints %}
 <a href="{{ url_for('endpoints.detail', endpoint_id=ep.id) }}" class="endpoint-card">
   <div class="flex items-center justify-between mb-2">
-    <span class="text-xs font-semibold text-ink-100 truncate font-mono-data">{{ ep.hostname }}</span>
+    <span class="text-xs font-semibold text-ink-100 truncate font-mono-data">{{ ep.display_name or ep.hostname }}</span>
     <span class="status-dot status-dot-{{ ep.status }} flex-shrink-0 ml-1.5"></span>
   </div>
   <div class="text-xs text-ink-500 mb-2 truncate">{{ ep.branch_name or '—' }}</div>

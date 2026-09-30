@@ -134,7 +134,7 @@ function topologyPage() {
         this.snapshots = data.snapshots || []; this.replay = data.replay || null;
         this.placedEndpointIds = data.placed_endpoint_ids || [];
         this.lastUpdatedLabel = 'Updated just now';
-        this.$nextTick(() => { this.attachCanvasInteractions(); this.renderCanvas(); });
+        this.$nextTick(() => { this.attachCanvasInteractions(); this.renderCanvas(); if (!wanted) this.fitAll(); });
       } catch (error) {
         if (!silent) window.wardenToast(error.message || 'Could not load topology', 'error');
         this.lastUpdatedLabel = 'Refresh failed';
@@ -151,7 +151,7 @@ function topologyPage() {
         this.snapshots = data.snapshots || []; this.replay = data.replay || null;
         this.placedEndpointIds = data.placed_endpoint_ids || []; this.selectedEndpointId = ''; this.selectedNodeId = '';
         this.lastUpdatedLabel = 'Updated just now';
-        this.$nextTick(() => { this.attachCanvasInteractions(); this.renderCanvas(); });
+        this.$nextTick(() => { this.attachCanvasInteractions(); this.renderCanvas(); this.fitAll(); });
       } catch (error) { window.wardenToast(error.message, 'error'); }
       finally { this.loading = false; }
     },
@@ -246,7 +246,26 @@ function topologyPage() {
       finally { this.loading = false; }
     },
     applyMapFilters() { this.renderCanvas(); },
-    fitAll() { this.resetCanvasView(); },
+    floorBounds() {
+      let left = 0, top = 0, right = 100, bottom = 100;
+      this.rooms.forEach(room => {
+        left = Math.min(left, Number(room.x)); top = Math.min(top, Number(room.y));
+        right = Math.max(right, Number(room.x) + Number(room.width));
+        bottom = Math.max(bottom, Number(room.y) + Number(room.height));
+      });
+      [...this.placements, ...this.nodes].forEach(point => {
+        left = Math.min(left, Number(point.x) - 7); top = Math.min(top, Number(point.y) - 7);
+        right = Math.max(right, Number(point.x) + 7); bottom = Math.max(bottom, Number(point.y) + 7);
+      });
+      return { left, top, width: right - left, height: bottom - top };
+    },
+    fitAll() {
+      const bounds = this.floorBounds();
+      this.canvasZoom = Math.min(1, 100 / (bounds.width + 10), 100 / (bounds.height + 10));
+      this.canvasPanX = (bounds.left + bounds.width / 2) * 10 - 500;
+      this.canvasPanY = (bounds.top + bounds.height / 2) * 6 - 300;
+      this.updateCanvasView();
+    },
     focusObject(key) {
       const [type, id] = String(key || '').split(':');
       if (!id) return;
@@ -372,6 +391,8 @@ function topologyPage() {
       const endpointsLayer = this.$refs.miniEndpointsLayer;
       const viewport = this.$refs.miniViewport;
       if (!roomsLayer || !endpointsLayer || !viewport) return;
+      const bounds = this.floorBounds();
+      this.$refs.minimap.setAttribute('viewBox', `${bounds.left - 5} ${bounds.top - 5} ${bounds.width + 10} ${bounds.height + 10}`);
       roomsLayer.replaceChildren();
       endpointsLayer.replaceChildren();
       this.rooms.forEach(room => roomsLayer.append(this.svgElement('rect', {
@@ -399,22 +420,21 @@ function topologyPage() {
       viewport.setAttribute('y', String(50 - 50 / this.canvasZoom + this.canvasPanY / 6));
     },
     zoomCanvas(delta) {
-      this.canvasZoom = Math.min(2, Math.max(0.5, Math.round((this.canvasZoom + delta) * 100) / 100));
+      this.canvasZoom = Math.min(2, Math.max(0.005, this.canvasZoom * (delta > 0 ? 1.1 : 1 / 1.1)));
       this.constrainCanvasPan();
       this.updateCanvasView();
     },
     zoomCanvasWheel(event) { this.zoomCanvas(event.deltaY < 0 ? 0.1 : -0.1); },
-    resetCanvasView() { this.canvasZoom = 1; this.canvasPanX = 0; this.canvasPanY = 0; this.updateCanvasView(); },
+    resetCanvasView() { this.fitAll(); },
     constrainCanvasPan() {
-      const maxX = 900 / this.canvasZoom; const maxY = 540 / this.canvasZoom;
-      this.canvasPanX = Math.max(-maxX, Math.min(maxX, this.canvasPanX));
-      this.canvasPanY = Math.max(-maxY, Math.min(maxY, this.canvasPanY));
+      this.canvasPanX = Math.max(-90000, Math.min(90000, this.canvasPanX));
+      this.canvasPanY = Math.max(-54000, Math.min(54000, this.canvasPanY));
     },
     canvasPoint(event) {
       const svg = this.$refs.canvas; const matrix = svg.getScreenCTM();
       if (!matrix) return null;
       const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
-      return { x: Math.max(0, Math.min(100, point.x / 10)), y: Math.max(0, Math.min(100, point.y / 6)) };
+      return { x: Math.max(-9000, Math.min(9000, point.x / 10)), y: Math.max(-9000, Math.min(9000, point.y / 6)) };
     },
     beginCanvasPointer(event) {
       const endpointTarget = event.target.closest('[data-endpoint-id]');
@@ -437,14 +457,13 @@ function topologyPage() {
       this.panPointerId = event.pointerId;
       this.panStartClientX = event.clientX; this.panStartClientY = event.clientY;
       this.panStartX = this.canvasPanX; this.panStartY = this.canvasPanY;
+      this.panStartScale = this.$refs.canvas.getScreenCTM()?.a || 1;
       if (this.$refs.canvas.setPointerCapture) this.$refs.canvas.setPointerCapture(event.pointerId);
     },
     moveCanvasPointer(event) {
       if (this.panPointerId !== null && event.pointerId === this.panPointerId) {
-        const svg = this.$refs.canvas; const rect = svg.getBoundingClientRect();
-        const viewWidth = 1000 / this.canvasZoom; const viewHeight = 600 / this.canvasZoom;
-        this.canvasPanX = this.panStartX - (event.clientX - this.panStartClientX) * viewWidth / Math.max(rect.width, 1);
-        this.canvasPanY = this.panStartY - (event.clientY - this.panStartClientY) * viewHeight / Math.max(rect.height, 1);
+        this.canvasPanX = this.panStartX - (event.clientX - this.panStartClientX) / this.panStartScale;
+        this.canvasPanY = this.panStartY - (event.clientY - this.panStartClientY) / this.panStartScale;
         this.constrainCanvasPan();
         this.updateCanvasView();
         return;
@@ -462,7 +481,7 @@ function topologyPage() {
       if (this.dragNodeId && event.pointerId === this.dragPointerId) {
         const point = this.canvasPoint(event); const node = this.nodes.find(item => item.id === this.dragNodeId);
         if (point && node) {
-          node.x = Math.max(4.7, Math.min(95.3, point.x)); node.y = Math.max(5.5, Math.min(94.5, point.y)); node.room_id = this.roomAt(node.x, node.y);
+          node.x = point.x; node.y = point.y; node.room_id = this.roomAt(node.x, node.y);
           const element = this.$refs.nodesLayer?.querySelector(`[data-node-id="${node.id}"]`);
           if (element) element.setAttribute('transform', this.nodeTransform(node));
           this.renderLinks();
@@ -513,10 +532,7 @@ function topologyPage() {
       this.updateRoomDraftElement();
     },
     svgPoint(event) {
-      const svg = this.$refs.canvas; const matrix = svg.getScreenCTM();
-      if (!matrix) return null;
-      const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
-      return { x: Math.max(6.8, Math.min(93.2, point.x / 10)), y: Math.max(6.4, Math.min(93.6, point.y / 6)) };
+      return this.canvasPoint(event);
     },
     updateEndpointDragPosition(event) {
       if (!this.dragEndpointId || event.pointerId !== this.dragPointerId) return;
@@ -1689,6 +1705,11 @@ function endpointDetail() {
     jobReason: '',
     showJobModal: false,
     showRemoveEndpointModal: false,
+    showNamingModal: false,
+    endpointNickname: '',
+    desiredHostname: '',
+    renameRestart: false,
+    savingNickname: false,
     removingEndpoint: false,
     startingSession: false,
     showRemoteModal: false,
@@ -1725,6 +1746,8 @@ function endpointDetail() {
     init() {
       this.tab = this.$el.dataset.tab || 'overview';
       this.endpointId = this.$el.dataset.endpointId || '';
+      this.endpointNickname = this.$el.dataset.nickname || '';
+      this.desiredHostname = this.$el.dataset.hostname || '';
       this.platform = this.$el.dataset.platform || 'windows';
       this.capabilities = JSON.parse(this.$el.dataset.capabilities || '[]');
       this.capabilityDetails = JSON.parse(this.$el.dataset.capabilityDetails || '{}');
@@ -1994,6 +2017,31 @@ function endpointDetail() {
       this.jobReason = 'Manual update from admin console';
       this.dispatchJob();
     },
+    openNamingModal() {
+      this.renameRestart = false;
+      this.showNamingModal = true;
+      this.$nextTick(() => document.getElementById('endpoint-nickname')?.focus());
+    },
+    async saveNickname() {
+      if (this.savingNickname) return;
+      this.savingNickname = true;
+      try {
+        await wardenFetchJSON(`/endpoints/${this.endpointId}/nickname`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+          body: JSON.stringify({ nickname: this.endpointNickname }),
+        });
+        location.reload();
+      } catch (error) { window.wardenToast(error.message, 'error'); }
+      finally { this.savingNickname = false; }
+    },
+    async renameHostname() {
+      this.jobType = 'CONFIGURE_DEVICE_IDENTITY';
+      this.jobPayload = { hostname: this.desiredHostname.trim(), restart: this.renameRestart };
+      this.jobWindowsUser = '';
+      this.jobReason = 'Administrator requested hostname change';
+      const result = await this.dispatchJob();
+      if (result) this.showNamingModal = false;
+    },
     async dispatchJob() {
       if (this.dispatchingJob) return;
       this.dispatchingJob = true;
@@ -2013,6 +2061,7 @@ function endpointDetail() {
         window.wardenToast(res.message || (awaitingApproval ? 'Request submitted and awaiting administrator approval' : 'Job dispatched successfully'), awaitingApproval ? 'info' : 'success');
         const liveJobs = document.getElementById('endpoint-job-live');
         if (liveJobs && window.htmx) window.htmx.trigger(liveJobs, 'refresh');
+        return res;
       } catch (error) {
         window.wardenToast(error.message || 'Failed to dispatch job', 'error');
       } finally {

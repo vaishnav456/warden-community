@@ -136,7 +136,7 @@
           <div x-show="deployTargetMode === 'endpoints'" class="space-y-2">
             <label class="form-label">Specific agents</label>
             <div class="rounded-xl border border-base-600 max-h-56 overflow-y-auto divide-y divide-base-700">
-              <template x-for="endpoint in deployEndpointOptions()" :key="endpoint.id"><label class="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-white/[0.02]"><input type="checkbox" :checked="deployEndpointIds.includes(endpoint.id)" @change="toggleDeployEndpoint(endpoint.id)"><span class="flex-1"><span class="block text-sm text-ink-100" x-text="endpoint.hostname"></span><span class="block text-xs text-ink-500" x-text="endpoint.status"></span></span></label></template>
+              <template x-for="endpoint in deployEndpointOptions()" :key="endpoint.id"><label class="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-white/[0.02]"><input type="checkbox" :checked="deployEndpointIds.includes(endpoint.id)" @change="toggleDeployEndpoint(endpoint.id)"><span class="flex-1"><span class="block text-sm text-ink-100" x-text="endpoint.display_name || endpoint.hostname"></span><span class="block text-xs text-ink-500" x-text="endpoint.status"></span></span></label></template>
               <p x-show="deployBranchId && deployEndpointOptions().length === 0" class="p-3 text-xs text-ink-500">No Windows agents are available in this branch.</p>
               <p x-show="!deployBranchId" class="p-3 text-xs text-ink-500">Choose a branch first.</p>
             </div>

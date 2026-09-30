@@ -53,7 +53,7 @@
             {% for ep in endpoints %}
             <tr>
               <td>
-                <a href="/endpoints/{{ ep.id }}" class="font-medium text-accent-400 hover:underline font-mono-data">{{ ep.hostname or ep.id[:8] }}</a>
+                <a href="/endpoints/{{ ep.id }}" class="font-medium text-accent-400 hover:underline font-mono-data">{{ ep.display_name or ep.hostname or ep.id[:8] }}</a>
                 {% if ep.branch_name %}<span class="ml-1.5 text-xs text-ink-700">{{ ep.branch_name }}</span>{% endif %}
               </td>
               <td>

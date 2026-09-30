@@ -405,6 +405,7 @@ def _queue_profile_device_identity(endpoint, body, capabilities, platform):
         "CONFIGURE_DEVICE_IDENTITY", {
             "hostname": desired_hostname or "",
             "domain_suffix": desired_domain,
+            "restart": True,
         },
     )
     if job:

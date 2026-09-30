@@ -1,7 +1,7 @@
 {% for j in jobs %}
 <tr>
   <td class="font-medium text-ink-100">{{ j.type.replace('_', ' ').title() }}</td>
-  <td class="text-ink-500 font-mono-data">{{ j._endpoint.hostname if j._endpoint else '—' }}</td>
+  <td class="text-ink-500 font-mono-data">{{ (j._endpoint.display_name or j._endpoint.hostname) if j._endpoint else '—' }}</td>
   <td><span class="badge badge-{{ j.status }}">{{ j.status }}</span></td>
   <td class="text-ink-500">{{ j.created_at | timeago }}</td>
   <td class="text-ink-500">{{ j.completed_at | timeago if j.completed_at else '—' }}</td>

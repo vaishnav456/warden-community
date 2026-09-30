@@ -152,7 +152,7 @@ def group_directory_accounts(rows):
         identity["accounts"].append({
             "id": row.get("id"),
             "endpoint_id": row.get("endpoint_id"),
-            "hostname": endpoint.get("hostname") or "Unknown endpoint",
+            "hostname": endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint",
             "endpoint_status": endpoint.get("status") or "unknown",
             "branch_id": endpoint.get("branch_id"),
             "username": username,
@@ -790,7 +790,7 @@ def create_local_user():
             affected_endpoints.add(endpoint_id)
             jobs.append({
                 "job_id": str(job["id"]), "endpoint_id": endpoint_id,
-                "hostname": endpoint.get("hostname") or "Unknown endpoint",
+                "hostname": endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint",
                 "operation": job_type, "status": endpoint.get("status") or "unknown",
             })
             return True
@@ -807,7 +807,7 @@ def create_local_user():
                 }):
                     one_time_credentials.append({
                         "endpoint_id": endpoint_id,
-                        "hostname": endpoint.get("hostname") or "Unknown endpoint",
+                        "hostname": endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint",
                         "username": username,
                         "password": password,
                     })
@@ -825,7 +825,7 @@ def create_local_user():
                 assigned_endpoints.add(endpoint_id)
                 one_time_credentials.append({
                     "endpoint_id": endpoint_id,
-                    "hostname": endpoint.get("hostname") or "Unknown endpoint",
+                    "hostname": endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint",
                     "username": username,
                     "password": password,
                 })
@@ -852,7 +852,7 @@ def create_local_user():
                 escalations.append({
                     "escalation_id": str(escalation["id"]),
                     "endpoint_id": endpoint_id,
-                    "hostname": endpoint.get("hostname") or "Unknown endpoint",
+                    "hostname": endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint",
                     "status": "pending_approval",
                 })
 

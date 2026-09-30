@@ -37,7 +37,7 @@
         <td>
           <span class="text-xs bg-accent-500/15 text-accent-400 px-2 py-0.5 rounded-full">{{ p.scope.replace('_', ' ') }}</span>
         </td>
-        <td class="text-ink-300">{{ p._endpoint.hostname if p._endpoint else '—' }}</td>
+        <td class="text-ink-300">{{ (p._endpoint.display_name or p._endpoint.hostname) if p._endpoint else '—' }}</td>
         <td class="text-ink-300">{{ p.windows_user or 'Any user' }}</td>
         <td class="text-ink-300">{{ p.valid_until | timeago if p.valid_until else 'Never' }}</td>
         <td class="text-ink-300">{{ p.use_count or 0 }}</td>

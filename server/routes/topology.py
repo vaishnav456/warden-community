@@ -1,5 +1,6 @@
 """Organization-scoped physical computer topology and floor-plan operations."""
 import ipaddress
+import math
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -13,6 +14,8 @@ _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _NODE_TYPES = {"switch", "firewall", "router", "server", "access_point", "printer", "asset"}
 _LINK_TYPES = {"ethernet", "fiber", "wifi", "vpn", "logical"}
 _ENDPOINT_OFFLINE_AFTER = timedelta(minutes=3)
+# Existing coordinates are retained; floors grow in any direction.
+_COORD_LIMIT = 9000
 
 
 def _branch_id():
@@ -36,7 +39,7 @@ def _number(value, minimum, maximum, default=None):
         if default is not None:
             return default
         raise ValueError("invalid_number")
-    if result < minimum or result > maximum:
+    if not math.isfinite(result) or result < minimum or result > maximum:
         raise ValueError("number_out_of_range")
     return round(result, 3)
 
@@ -432,9 +435,10 @@ def create_room(floor_id):
     try:
         values = {
             "name": name,
-            "x": _number(body.get("x", 5), 0, 97), "y": _number(body.get("y", 5), 0, 97),
-            "width": _number(body.get("width", 25), 3, 100),
-            "height": _number(body.get("height", 25), 3, 100),
+            "x": _number(body.get("x", 5), -_COORD_LIMIT, _COORD_LIMIT),
+            "y": _number(body.get("y", 5), -_COORD_LIMIT, _COORD_LIMIT),
+            "width": _number(body.get("width", 25), 3, _COORD_LIMIT),
+            "height": _number(body.get("height", 25), 3, _COORD_LIMIT),
             "color": str(body.get("color") or "#DCE9FF"),
             "capacity": int(body["capacity"]) if body.get("capacity") not in (None, "") else None,
         }
@@ -442,8 +446,8 @@ def create_room(floor_id):
         return jsonify({"error": "invalid_room_geometry"}), 400
     if not _COLOR.fullmatch(values["color"]) or (values["capacity"] is not None and values["capacity"] < 0):
         return jsonify({"error": "invalid_room_style"}), 400
-    values["x"] = min(values["x"], 100 - values["width"])
-    values["y"] = min(values["y"], 100 - values["height"])
+    if values["x"] + values["width"] > _COORD_LIMIT or values["y"] + values["height"] > _COORD_LIMIT:
+        return jsonify({"error": "room_outside_floor"}), 400
     room = db.create_topology_room(g.company["id"], floor_id, values)
     db.audit(g.company["id"], g.admin["id"], "topology_room_created", {
         "floor_id": floor_id, "room_id": room["id"], "name": name,
@@ -465,7 +469,7 @@ def update_room(room_id):
     body = request.get_json(silent=True) or {}
     values = {}
     try:
-        for key, bounds in {"x": (0, 97), "y": (0, 97), "width": (3, 100), "height": (3, 100)}.items():
+        for key, bounds in {"x": (-_COORD_LIMIT, _COORD_LIMIT), "y": (-_COORD_LIMIT, _COORD_LIMIT), "width": (3, _COORD_LIMIT), "height": (3, _COORD_LIMIT)}.items():
             if key in body:
                 values[key] = _number(body[key], *bounds)
         if "capacity" in body:
@@ -484,7 +488,7 @@ def update_room(room_id):
     proposed_y = values.get("y", float(room["y"]))
     proposed_width = values.get("width", float(room["width"]))
     proposed_height = values.get("height", float(room["height"]))
-    if proposed_x + proposed_width > 100 or proposed_y + proposed_height > 100:
+    if proposed_x + proposed_width > _COORD_LIMIT or proposed_y + proposed_height > _COORD_LIMIT:
         return jsonify({"error": "room_outside_floor"}), 400
     updated = db.update_topology_room(room_id, g.company["id"], values)
     return jsonify({"ok": True, "room": updated})
@@ -521,8 +525,8 @@ def place_endpoint(endpoint_id):
     if floor.get("branch_id") and str(endpoint.get("branch_id") or "") != str(floor["branch_id"]):
         return jsonify({"error": "endpoint_outside_floor_branch"}), 409
     try:
-        x = _number(body.get("x"), 0, 100)
-        y = _number(body.get("y"), 0, 100)
+        x = _number(body.get("x"), -_COORD_LIMIT, _COORD_LIMIT)
+        y = _number(body.get("y"), -_COORD_LIMIT, _COORD_LIMIT)
     except ValueError:
         return jsonify({"error": "invalid_position"}), 400
     room_id = str(body.get("room_id") or "") or None
@@ -571,8 +575,8 @@ def create_node(floor_id):
     if node_type not in _NODE_TYPES or not name:
         return jsonify({"error": "invalid_asset"}), 400
     try:
-        x = _number(body.get("x", 50), 2, 98)
-        y = _number(body.get("y", 50), 3, 97)
+        x = _number(body.get("x", 50), -_COORD_LIMIT, _COORD_LIMIT)
+        y = _number(body.get("y", 50), -_COORD_LIMIT, _COORD_LIMIT)
     except ValueError:
         return jsonify({"error": "invalid_position"}), 400
     ip_address = str(body.get("ip_address") or "").strip()[:255] or None
@@ -607,8 +611,8 @@ def update_node(node_id):
     body = request.get_json(silent=True) or {}
     values = {}
     try:
-        if "x" in body: values["x"] = _number(body["x"], 2, 98)
-        if "y" in body: values["y"] = _number(body["y"], 3, 97)
+        if "x" in body: values["x"] = _number(body["x"], -_COORD_LIMIT, _COORD_LIMIT)
+        if "y" in body: values["y"] = _number(body["y"], -_COORD_LIMIT, _COORD_LIMIT)
     except ValueError:
         return jsonify({"error": "invalid_position"}), 400
     if "name" in body: values["name"] = str(body.get("name") or "").strip()[:120]

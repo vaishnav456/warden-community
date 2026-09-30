@@ -229,7 +229,7 @@ _ENDPOINT_TEXT_FIELDS = {
     "hostname", "hardware_id", "installation_id", "vpn_ip",
     "last_seen_ip", "local_ip", "os_name", "os_version", "os_build",
     "os_edition", "arch", "cpu_model", "interactive_user", "notes",
-    "asset_tag", "assigned_to",
+    "asset_tag", "assigned_to", "display_name",
 }
 _ENDPOINT_JSON_FIELDS = {
     "device_identity": "device_identity_encrypted",
@@ -946,7 +946,7 @@ def get_endpoints(company_id, branch_id=None):
         path += f"&branch_id=eq.{_q(branch_id)}"
     company = get_company_by_id(company_id)
     rows = [_decrypt_endpoint(row, company) for row in _get(path)]
-    return sorted(rows, key=lambda row: str(row.get("hostname") or "").casefold())
+    return sorted(rows, key=lambda row: str(row.get("display_name") or row.get("hostname") or "").casefold())
 
 
 def get_asset_register(company_id, branch_id=None):
@@ -957,7 +957,7 @@ def get_asset_register(company_id, branch_id=None):
         path += f"&branch_id=eq.{_q(branch_id)}"
     company = get_company_by_id(company_id)
     rows = [_decrypt_endpoint(row, company) for row in _get(path)]
-    return sorted(rows, key=lambda row: str(row.get("hostname") or "").casefold())
+    return sorted(rows, key=lambda row: str(row.get("display_name") or row.get("hostname") or "").casefold())
 
 
 def get_endpoint(endpoint_id):
@@ -1250,6 +1250,12 @@ def update_endpoint_hostname(endpoint_id, hostname):
         f"endpoints?id=eq.{_q(endpoint_id)}",
         _encrypt_endpoint_fields(company, {"hostname": hostname}),
     )
+
+
+def update_endpoint_nickname(endpoint_id, nickname):
+    company = _endpoint_company(endpoint_id)
+    _patch(f"endpoints?id=eq.{_q(endpoint_id)}",
+           _encrypt_endpoint_fields(company, {"display_name": nickname or None}))
 
 
 def set_endpoint_offline(endpoint_id):
@@ -1832,7 +1838,7 @@ def get_company_windows_users(company_id, branch_id=None):
     rows = _get(
         "windows_users?select=id,endpoint_id,username,display_name,sid,"
         "principal_name,account_type,domain_name,is_admin,is_enabled,"
-        "first_seen,last_synced,profile_photo_mime,endpoints!inner(id,hostname,"
+        "first_seen,last_synced,profile_photo_mime,endpoints!inner(id,hostname,display_name,"
         f"branch_id,status,company_id,is_active)&present=eq.true&{endpoint_filter}"
         "&endpoints.is_active=eq.true"
         "&order=username.asc"
@@ -1906,7 +1912,7 @@ def get_warden_identities(company_id):
         "created_at,updated_at,password_changed_at,"
         "warden_identity_assignments(id,endpoint_id,status,password_version,"
         "last_job_id,last_error,assigned_at,updated_at,last_synced_at,"
-        "endpoints(id,hostname,status,branch_id,is_active))"
+        "endpoints(id,hostname,display_name,status,branch_id,is_active))"
         f"&company_id=eq.{_q(company_id)}&order=display_name.asc,username.asc"
     )
     company = get_company_by_id(company_id)
@@ -1967,7 +1973,7 @@ def get_warden_identity_login_events(company_id, limit=50):
     rows = _get(
         "warden_identity_login_events?select=id,identity_id,endpoint_id,username,"
         "outcome,reason,source_ip,offline_grant_hours,created_at,"
-        "endpoints(hostname)&company_id=eq."
+        "endpoints(hostname,display_name)&company_id=eq."
         f"{_q(company_id)}&order=created_at.desc&limit={max(1, min(int(limit), 200))}"
     )
     company = get_company_by_id(company_id)
@@ -2306,7 +2312,7 @@ def get_vulnerability_findings(company_id, limit=1000, status=None, endpoint_id=
     rows = _get(
         f"vulnerability_findings?company_id=eq.{_q(company_id)}"
         f"{status_filter}{endpoint_filter}"
-        "&select=*,endpoints(id,hostname),software_inventory(name,version,publisher),"
+        "&select=*,endpoints(id,hostname,display_name),software_inventory(name,version,publisher),"
         f"vulnerability_advisories(*)&order=first_seen.desc&limit={min(int(limit), 2000)}"
     )
     company = get_company_by_id(company_id)
@@ -2724,6 +2730,7 @@ def get_alerts(company_id, resolved=False, branch_id=None, limit=50, offset=0, s
         f"&is_resolved=eq.{str(resolved).lower()}"
         f"&order=created_at.desc&limit={limit}&offset={offset}"
     )
+    path += "&select=*,endpoints(id,hostname,display_name)"
     if branch_id:
         path += f"&branch_id=eq.{_q(branch_id)}"
     if snoozed and not resolved:
@@ -2735,7 +2742,7 @@ def get_alerts(company_id, resolved=False, branch_id=None, limit=50, offset=0, s
 
 
 def get_alert(alert_id):
-    rows = _get(f"alerts?id=eq.{_q(alert_id)}&limit=1")
+    rows = _get(f"alerts?id=eq.{_q(alert_id)}&select=*,endpoints(id,hostname,display_name)&limit=1")
     return _decrypt_alert(rows[0]) if rows else None
 
 
@@ -2760,6 +2767,16 @@ def _decrypt_alert(row, company=None):
     encrypted = result.pop("detail_encrypted", None)
     if encrypted:
         result["detail"] = _endpoint_decrypt(company, "alert.detail", encrypted)
+    if result.get("endpoints"):
+        endpoint = _decrypt_endpoint(result.pop("endpoints"), company)
+        result["_endpoint"] = endpoint
+        label = endpoint.get("display_name") or endpoint.get("hostname")
+        title = result.get("title") or ""
+        hostname = endpoint.get("hostname") or ""
+        if label and hostname and title.startswith(hostname + " "):
+            result["title"] = label + title[len(hostname):]
+        elif label and title.endswith(" is offline"):
+            result["title"] = label + " is offline"
     return result
 
 

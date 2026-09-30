@@ -98,7 +98,7 @@
       {% for endpoint in endpoints %}
       <label class="directory-endpoint-option" x-show="compatibleEndpoint({{ (endpoint.platform or 'windows') | tojson }})">
         <input type="checkbox" value="{{ endpoint.id }}" x-model="deployEndpointIds">
-        <span><strong>{{ endpoint.hostname }}</strong><small>{{ endpoint.platform or 'windows' }} · {{ endpoint.status }}</small></span>
+        <span><strong>{{ endpoint.display_name or endpoint.hostname }}</strong><small>{{ endpoint.platform or 'windows' }} · {{ endpoint.status }}</small></span>
       </label>
       {% else %}<p class="text-sm text-ink-500">No endpoints are available.</p>{% endfor %}
     </div>

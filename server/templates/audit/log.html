@@ -21,7 +21,7 @@
         <td class="text-ink-500 whitespace-nowrap font-mono-data">{{ e.created_at | timeago }}</td>
         <td class="text-ink-300">{{ e._actor.full_name if e._actor else (e.actor_id or 'system') }}</td>
         <td><span class="font-mono-data text-xs text-ink-100">{{ e.action }}</span></td>
-        <td class="text-ink-500 font-mono-data">{{ e._endpoint.hostname if e._endpoint else '—' }}</td>
+        <td class="text-ink-500 font-mono-data">{{ (e._endpoint.display_name or e._endpoint.hostname) if e._endpoint else '—' }}</td>
         <td class="max-w-md">
           {% if e.detail %}
           <div class="audit-detail-grid">

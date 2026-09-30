@@ -420,6 +420,25 @@ def reveal_recovery_key(endpoint_id, recovery_key_id):
     return response
 
 
+@bp.post("/endpoints/<endpoint_id>/nickname")
+@login_required
+@company_required
+@role_required("superadmin", "company_admin", "branch_admin")
+def update_nickname(endpoint_id):
+    endpoint = db.get_endpoint(endpoint_id)
+    if not endpoint or str(endpoint["company_id"]) != str(g.company["id"]):
+        abort(404)
+    require_branch_scope(endpoint.get("branch_id"))
+    nickname = (request.get_json(silent=True) or {}).get("nickname", "")
+    if not isinstance(nickname, str) or len(nickname.strip()) > 100 or any(ord(c) < 32 for c in nickname):
+        return jsonify({"error": "Nickname must be at most 100 characters without control characters."}), 400
+    nickname = nickname.strip()
+    db.update_endpoint_nickname(endpoint_id, nickname)
+    db.audit(g.company["id"], g.admin["id"], "endpoint_nickname_updated",
+             {"endpoint_id": endpoint_id}, endpoint_id=endpoint_id)
+    return jsonify({"ok": True, "display_name": nickname or endpoint["hostname"]})
+
+
 @bp.route("/endpoints/<endpoint_id>/notes", methods=["POST"])
 @login_required
 @company_required
@@ -629,6 +648,20 @@ def dispatch_job(endpoint_id):
             "message": f"{job_type} is not supported by this {endpoint.get('platform') or 'endpoint'} agent",
         }), 409
 
+    if job_type == "CONFIGURE_DEVICE_IDENTITY":
+        if not isinstance(payload, dict):
+            return jsonify({"error": "invalid_identity_payload"}), 400
+        hostname = payload.get("hostname")
+        restart = payload.get("restart", False)
+        if (not isinstance(hostname, str)
+                or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?", hostname)
+                or hostname.isdigit() or not isinstance(restart, bool)):
+            return jsonify({"error": "Use a hostname of 1–15 letters, numbers or hyphens (not all numbers)."}), 400
+        version = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(endpoint.get("agent_version") or ""))
+        if not version or tuple(map(int, version.groups())) < (2, 6, 43):
+            return jsonify({"error": "Update to Windows Agent 2.6.43 or later before renaming; older agents always restart."}), 409
+        payload = {"hostname": hostname.upper(), "restart": restart}
+
     if job_type in {"ENABLE_BITLOCKER", "ROTATE_BITLOCKER_RECOVERY"}:
         if str(endpoint.get("platform") or "windows").lower() != "windows":
             return jsonify({"error": "bitlocker_requires_windows"}), 409
@@ -779,13 +812,14 @@ def dispatch_job(endpoint_id):
         payload = {"fingerprints": normalized}
 
     # All privileged ops require escalation
-    if job_type in ESCALATION_REQUIRED_OPS:
+    identity_restart = job_type == "CONFIGURE_DEVICE_IDENTITY" and payload.get("restart") is True
+    if job_type in ESCALATION_REQUIRED_OPS or identity_restart:
         # An organization can explicitly opt out of the two-different-admins
         # requirement (see companies.require_dual_approval / settings.py's
         # set_dual_approval()) — e.g. a solo-admin organization that can never
         # produce a second distinct approver. Still gated by escalation
         # approval either way; this only changes single vs dual.
-        requires_dual = job_type in DUAL_APPROVAL_OPS and g.company.get("require_dual_approval", True)
+        requires_dual = (job_type in DUAL_APPROVAL_OPS or identity_restart) and g.company.get("require_dual_approval", True)
         # Check for auto-approve policy
         policy = db.find_matching_policy(
             g.company["id"], endpoint_id, windows_user, job_type, payload

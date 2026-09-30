@@ -794,7 +794,7 @@ def firewall_policies():
                 "version": str(software.get("version") or ""),
                 "endpoints": [],
             })
-            hostname = str(endpoint.get("hostname") or "Unknown endpoint")
+            hostname = str(endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint")
             if hostname not in entry["endpoints"]:
                 entry["endpoints"].append(hostname)
     installed_applications = sorted(
@@ -803,7 +803,7 @@ def firewall_policies():
     deployment_endpoints = [
         {
             "id": str(endpoint["id"]),
-            "hostname": endpoint.get("hostname") or "Unknown endpoint",
+            "hostname": endpoint.get("display_name") or endpoint.get("hostname") or "Unknown endpoint",
             "branch_id": str(endpoint.get("branch_id") or ""),
             "platform": str(endpoint.get("platform") or "windows").lower(),
             "status": endpoint.get("status") or "unknown",

@@ -1437,10 +1437,18 @@ func configureDeviceIdentity(p map[string]interface{}) (int, string, error) {
 		}
 	}
 
-	if out, err := exec.Command("shutdown.exe", "/r", "/t", "15", "/d", "p:4:1", "/c", "Warden device identity configured").CombinedOutput(); err != nil {
+	if !deviceIdentityRestartRequested(p) {
+		return 0, fmt.Sprintf("Managed identity applied (hostname=%s, dns_suffix=%s); no restart scheduled. The hostname takes effect after the next restart.", targetHostname, domainSuffix), nil
+	}
+	if out, err := exec.Command("shutdown.exe", "/r", "/t", "30", "/d", "p:4:1", "/c", "Warden device identity configured").CombinedOutput(); err != nil {
 		return 1, string(out), fmt.Errorf("schedule device identity restart: %w", err)
 	}
 	return 0, fmt.Sprintf("Managed identity applied (hostname=%s, dns_suffix=%s); restart scheduled", targetHostname, domainSuffix), nil
+}
+
+func deviceIdentityRestartRequested(p map[string]interface{}) bool {
+	restart, _ := p["restart"].(bool)
+	return restart
 }
 
 func currentManagedDNSSuffix() string {

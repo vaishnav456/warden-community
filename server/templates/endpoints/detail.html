@@ -11,6 +11,7 @@
 
 {% block content %}
 <div x-data="endpointDetail" data-endpoint-id="{{ endpoint.id }}" data-tab="{{ tab }}"
+     data-nickname="{{ endpoint.display_name or '' }}" data-hostname="{{ endpoint.hostname }}"
      data-platform="{{ endpoint_platform }}" data-capabilities='{{ endpoint_capabilities | list | tojson }}'
      data-capability-details='{{ capability_details | tojson }}'
      data-company-name='{{ (company.name if company else "Your organization") | tojson }}'
@@ -21,6 +22,31 @@
      data-firewall-applications='{{ endpoint_firewall_applications | tojson }}'
      {% endif %}>
 
+{% if current_user.role in ['superadmin', 'company_admin', 'branch_admin'] %}
+<div class="modal-backdrop endpoint-naming-backdrop" x-show="showNamingModal" x-cloak @click.self="showNamingModal=false" @keydown.escape.window="showNamingModal=false">
+  <div class="endpoint-naming-panel" role="dialog" aria-modal="true" aria-label="Edit endpoint names">
+    <h3 class="text-lg font-semibold">Endpoint names</h3>
+    <p class="text-sm text-ink-500 mt-2">The visible endpoint name defaults to the hostname. Set a nickname to show a friendly name throughout Warden.</p>
+    <form @submit.prevent="saveNickname()" class="mt-4">
+      <label class="form-label" for="endpoint-nickname">Nickname (optional)</label>
+      <input id="endpoint-nickname" class="form-input" x-model="endpointNickname" maxlength="100" placeholder="{{ endpoint.hostname }}">
+      <p class="text-xs text-ink-500 mt-2">Leave blank to use the hostname. This does not rename or restart the device.</p>
+      <button type="submit" class="btn btn-primary mt-3" :disabled="savingNickname">Save visible name</button>
+    </form>
+    {% if 'CONFIGURE_DEVICE_IDENTITY' in endpoint_capabilities %}
+    <form @submit.prevent="renameHostname()" class="mt-6">
+      <label class="form-label" for="endpoint-hostname">Windows hostname</label>
+      <input id="endpoint-hostname" class="form-input" x-model="desiredHostname" maxlength="15" pattern="[A-Za-z0-9][A-Za-z0-9-]{0,14}" required>
+      <label class="flex gap-2 items-center mt-3"><input type="checkbox" x-model="renameRestart"><span>Restart after changing hostname</span></label>
+      <p class="text-xs text-ink-500 mt-2">Default: no restart. Windows activates the new hostname on the next restart. Requires Agent 2.6.43+. Selecting restart requires approval.</p>
+      <button type="submit" class="btn btn-secondary mt-3" :disabled="dispatchingJob">Request hostname change</button>
+    </form>
+    {% endif %}
+    <div class="modal-actions"><button type="button" class="btn btn-secondary" @click="showNamingModal=false">Close</button></div>
+  </div>
+</div>
+{% endif %}
+
 {# Endpoint command header #}
 <section class="endpoint-command-header mb-5">
   <div class="endpoint-identity-mark platform-mark-{{ endpoint_platform }}">
@@ -29,6 +55,9 @@
   <div class="endpoint-command-identity">
     <div class="flex items-center gap-3 flex-wrap">
       <h1>{{ endpoint.display_name or endpoint.hostname }}</h1>
+      {% if current_user.role in ['superadmin', 'company_admin', 'branch_admin'] %}
+      <button type="button" class="btn btn-secondary btn-sm" @click="openNamingModal()">Edit names</button>
+      {% endif %}
       <span class="badge {{ 'badge-online' if endpoint.status == 'online' else 'badge-offline' }}"
             id="endpoint-status-badge"
             hx-get="/partials/endpoint-status/{{ endpoint.id }}"
@@ -40,6 +69,7 @@
       </span>
     </div>
     <div class="endpoint-command-meta">
+      <span>Hostname: {{ endpoint.hostname }}</span>
       <span>{{ endpoint.os_name or endpoint_platform | title }}</span>
       <span class="badge badge-neutral">{{ 'macOS' if endpoint_platform == 'darwin' else endpoint_platform | title }}</span>
       {% if endpoint_platform in ['linux', 'darwin'] %}<span class="badge badge-alpha">Alpha</span>{% endif %}
@@ -681,7 +711,7 @@
       <template x-if="endpointFirewallEditorOpen"><div>
         <div class="slide-overlay" @click="closeEndpointFirewallEditor()"></div>
         <section class="slide-panel firewall-policy-panel slide-in-right" aria-label="Custom endpoint firewall editor">
-          <header class="slide-panel-header"><div><h3 class="text-sm font-semibold">Custom endpoint firewall policy</h3><p class="text-xs text-ink-500 mt-1">Applies directly to {{ endpoint.hostname }} without creating a reusable template.</p></div><button class="btn btn-icon" @click="closeEndpointFirewallEditor()" aria-label="Close">×</button></header>
+          <header class="slide-panel-header"><div><h3 class="text-sm font-semibold">Custom endpoint firewall policy</h3><p class="text-xs text-ink-500 mt-1">Applies directly to {{ endpoint.display_name or endpoint.hostname }} without creating a reusable template.</p></div><button class="btn btn-icon" @click="closeEndpointFirewallEditor()" aria-label="Close">×</button></header>
           <div class="slide-panel-body space-y-5">
             <div class="rounded-xl border border-accent-500/20 bg-accent-500/5 p-3"><p class="text-xs font-medium text-ink-100">Safe ownership boundary</p><p class="text-xs text-ink-500 mt-1">Warden enables Windows Firewall on all profiles and replaces only rules whose names start with “Warden Managed:”. Existing Windows, domain, and third-party rules remain intact.</p></div>
             <div class="flex items-center justify-between gap-3"><div><h4 class="text-sm font-semibold text-ink-100">Rules</h4><p class="text-xs text-ink-500 mt-1">Outbound block rules must identify an application to protect the agent connection.</p></div><button type="button" class="btn btn-secondary btn-sm" @click="addEndpointFirewallRule()">+ Add rule</button></div>

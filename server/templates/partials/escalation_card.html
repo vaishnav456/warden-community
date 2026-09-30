@@ -15,7 +15,7 @@
         </span>
       </div>
       <div class="text-sm text-ink-500">
-        <span class="font-medium text-ink-300">{{ req._endpoint.hostname if req._endpoint else req.endpoint_id }}</span>
+        <span class="font-medium text-ink-300">{{ (req._endpoint.display_name or req._endpoint.hostname) if req._endpoint else req.endpoint_id }}</span>
         <span class="text-ink-700 mx-1">·</span>
         <span>User: {{ req.windows_user }}</span>
         <span class="text-ink-700 mx-1">·</span>
