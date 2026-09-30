@@ -10,7 +10,6 @@ import ipaddress
 import json
 import math
 import re
-import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify, g, send_file, abort, current_app
@@ -22,6 +21,11 @@ from middleware.security import check_rate_limit, get_client_ip
 from services.signing import sign_job
 from services.agent_updates import AgentBuildUnavailable, as_download, build_for_endpoint
 from services.experience_assets import is_available
+from services.home_sync import (
+    endpoint_storage_principal as _endpoint_storage_principal,
+    queue_periodic_home_sync,
+    resolve_home_access_context,
+)
 
 bp = Blueprint("agent_api", __name__)
 _IDENTITY_LOGIN_RE = re.compile(
@@ -226,78 +230,9 @@ def _valid_webrtc_offer(value):
             and "a=ice-ufrag:" in value and "a=setup:actpass" in value)
 
 
-def _short_windows_username(value):
-    """Return the local account part reported by the interactive session."""
-    value = str(value or "").strip().replace("/", "\\")
-    return value.rsplit("\\", 1)[-1] if value else ""
-
-
-def _endpoint_storage_principal(endpoint, username, assignments):
-    """Build a stable, device-bound principal for direct endpoint shares.
-
-    Endpoint assignments intentionally do not require a Directory identity.
-    They are restricted to the account currently owning the interactive
-    console and to assignments explicitly scoped to this endpoint. A local
-    process therefore cannot request broader storage by choosing a username.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,20}", str(username or "")):
-        return None, []
-    interactive = _short_windows_username(endpoint.get("interactive_user"))
-    if not interactive or interactive.casefold() != username.casefold():
-        return None, []
-    endpoint_id = str(endpoint.get("id") or "")
-    direct = [
-        item for item in assignments
-        if item.get("enabled", True)
-        and item.get("scope_type") == "endpoint"
-        and str(item.get("scope_value") or "") == endpoint_id
-    ]
-    if not direct:
-        return None, []
-    try:
-        principal_id = str(uuid.uuid5(uuid.UUID(endpoint_id), username.casefold()))
-    except (ValueError, AttributeError):
-        return None, []
-    return {"id": principal_id, "username": username}, direct
-
-
 def _home_access_context(username):
     """Resolve either a managed identity or a direct endpoint share grant."""
-    identity = db.get_warden_identity_for_login(
-        g.endpoint["company_id"], g.endpoint["id"], username,
-    )
-    identity_assignments = (identity or {}).get("warden_identity_assignments") or []
-    if (identity and identity.get("is_enabled", True)
-            and any(item.get("status") == "active" for item in identity_assignments)):
-        return identity, db.get_home_assignments(g.endpoint["company_id"]), True
-    if identity:
-        # A known but pending/disabled endpoint identity must fail closed; it
-        # cannot bypass Directory state through the direct-device path.
-        return None, [], True
-    assignments = db.get_home_assignments(g.endpoint["company_id"])
-    principal, direct = _endpoint_storage_principal(g.endpoint, username, assignments)
-    return principal, direct, False
-
-
-def _queue_home_sync_on_interactive_sign_in(endpoint, previous_user, current_user):
-    """Materialize direct endpoint shares when a console user appears."""
-    username = _short_windows_username(current_user)
-    previous = _short_windows_username(previous_user)
-    if (not re.fullmatch(r"[A-Za-z0-9._-]{1,20}", username)
-            or username.casefold() == previous.casefold()):
-        return None
-    assignments = db.get_home_assignments(endpoint["company_id"])
-    if not any(
-        item.get("enabled", True)
-        and item.get("scope_type") == "endpoint"
-        and str(item.get("scope_value") or "") == str(endpoint["id"])
-        for item in assignments
-    ):
-        return None
-    return db.create_system_job_once(
-        endpoint["company_id"], endpoint.get("branch_id"), endpoint["id"],
-        "SYNC_WARDEN_HOME", {"username": username, "refresh": True},
-    )
+    return resolve_home_access_context(g.endpoint, username)
 
 
 @bp.post("/api/agent/home-p2p/offer")
@@ -588,9 +523,16 @@ def heartbeat():
     )
 
     if valid_interactive_user and interactive_user:
-        _queue_home_sync_on_interactive_sign_in(
-            endpoint, endpoint.get("interactive_user"), interactive_user,
-        )
+        try:
+            queue_periodic_home_sync(
+                endpoint, interactive_user,
+                capabilities=(body.get("capabilities") or []) if "capabilities" in body else None,
+                platform=reported_platform,
+            )
+        except Exception:
+            # Home scheduling must not prevent metrics and other commands from
+            # being delivered when storage metadata or the tenant vault fails.
+            current_app.logger.exception("Home sync scheduling failed for endpoint %s", endpoint["id"])
 
     # Agent 2.1.25+ collects configured machine policy at startup and keeps
     # attaching it until a heartbeat succeeds. Older agents omit this field

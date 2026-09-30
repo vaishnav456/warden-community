@@ -76,7 +76,7 @@ HOME_P2P_STUN_URLS = [
         "stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302",
     ).split(",") if value.strip()
 ]
-HOME_NODE_VERSION = _os.environ.get("HOME_NODE_VERSION", "1.1.3").strip()
+HOME_NODE_VERSION = _os.environ.get("HOME_NODE_VERSION", "1.1.4").strip()
 
 # ── Organization encryption ──────────────────────────────────────────────────
 # See services/tenant_crypto.py. The environment-variable and module names are

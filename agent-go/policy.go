@@ -1011,7 +1011,7 @@ func ensureControlPlaneFirewallRule() error {
 		"advfirewall", "firewall", "add", "rule", "name=" + p2pName,
 		"dir=in", "action=allow", "enable=yes", "edge=yes",
 		"program=" + executable, "protocol=UDP",
-		fmt.Sprintf("localport=%d", agentP2PUDPMin), "profile=any",
+		fmt.Sprintf("localport=%d-%d", agentP2PUDPMin, agentP2PUDPMax), "profile=any",
 	}
 	if out, err := exec.Command("netsh", p2pArgs...).CombinedOutput(); err != nil {
 		return fmt.Errorf("create Warden direct P2P firewall rule: %w (%s)", err, strings.TrimSpace(string(out)))

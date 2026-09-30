@@ -348,15 +348,6 @@ function topologyPage() {
       if (this.panPointerId !== null) return 'is-panning';
       return 'is-pan-ready';
     },
-    roomMiniStyle(room) {
-      return `left:${room.x}%;top:${room.y}%;width:${room.width}%;height:${room.height}%`;
-    },
-    endpointMiniStyle(endpoint) {
-      return `left:${endpoint.placement.x}%;top:${endpoint.placement.y}%`;
-    },
-    viewportMiniStyle() {
-      return `width:${100 / this.canvasZoom}%;height:${100 / this.canvasZoom}%;left:${50 - 50 / this.canvasZoom + this.canvasPanX / 10}%;top:${50 - 50 / this.canvasZoom + this.canvasPanY / 6}%`;
-    },
     attachCanvasInteractions() {
       const canvas = this.$refs.canvas;
       if (!canvas || canvas.dataset.interactionsAttached === '1') return;
@@ -374,6 +365,38 @@ function topologyPage() {
     canvasZoomLabel() { return `${Math.round(this.canvasZoom * 100)}%`; },
     updateCanvasView() {
       if (this.$refs.canvas) this.$refs.canvas.setAttribute('viewBox', this.canvasViewBox());
+      this.renderMinimap();
+    },
+    renderMinimap() {
+      const roomsLayer = this.$refs.miniRoomsLayer;
+      const endpointsLayer = this.$refs.miniEndpointsLayer;
+      const viewport = this.$refs.miniViewport;
+      if (!roomsLayer || !endpointsLayer || !viewport) return;
+      roomsLayer.replaceChildren();
+      endpointsLayer.replaceChildren();
+      this.rooms.forEach(room => roomsLayer.append(this.svgElement('rect', {
+        class: 'mini-room', x: room.x, y: room.y,
+        width: room.width, height: room.height,
+      })));
+      this.visibleFloorEndpoints.forEach(endpoint => {
+        const point = this.svgElement('circle', {
+          class: endpoint.status === 'online' ? 'online' : 'offline',
+          cx: endpoint.placement.x, cy: endpoint.placement.y, r: 2.2,
+          role: 'button', tabindex: 0,
+          'aria-label': endpoint.display_name || endpoint.hostname,
+        });
+        point.addEventListener('click', () => this.focusObject(`endpoint:${endpoint.id}`));
+        point.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault(); this.focusObject(`endpoint:${endpoint.id}`);
+          }
+        });
+        endpointsLayer.append(point);
+      });
+      viewport.setAttribute('width', String(100 / this.canvasZoom));
+      viewport.setAttribute('height', String(100 / this.canvasZoom));
+      viewport.setAttribute('x', String(50 - 50 / this.canvasZoom + this.canvasPanX / 10));
+      viewport.setAttribute('y', String(50 - 50 / this.canvasZoom + this.canvasPanY / 6));
     },
     zoomCanvas(delta) {
       this.canvasZoom = Math.min(2, Math.max(0.5, Math.round((this.canvasZoom + delta) * 100) / 100));
@@ -702,6 +725,7 @@ function topologyPage() {
       });
       this.renderLinks(); this.updateRoomDraftElement();
       this.renderRoomOptions();
+      this.renderMinimap();
     },
     renderLinks() {
       const layer = this.$refs.linksLayer;

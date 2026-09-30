@@ -6,7 +6,7 @@ using the normal Warden Agent.
 
 ## Security model
 
-- File contents move directly between endpoints and organization-owned nodes.
+- File contents are encrypted end-to-end between endpoints and organization-owned nodes.
 - Every request requires a short-lived Ed25519 grant scoped to one organization,
   node, space, folder prefix and permission set.
 - Warden automatically issues short-lived server/client certificates to the
@@ -16,14 +16,15 @@ using the normal Warden Agent.
 - Files are encrypted at rest with AES-256-GCM in independently authenticated
   chunks. The encryption key and node bootstrap key are never stored in the
   Warden database in plaintext.
-- Warden's control plane only introduces peers and signs access grants. File
-  bytes move endpoint-to-node or node-to-node and never relay through Warden.
+- Warden introduces peers and signs access grants. File traffic prefers direct
+  endpoint-to-node or node-to-node connections. Its HTTPS relay can forward the
+  encrypted stream when direct ICE connectivity is unavailable.
 - P2P VPN mode embeds WebRTC/ICE in both executables. Both peers make outbound
   connections; rendezvous offers/answers expire after two minutes and are
   purged by the control plane. The
   established direct data channel carries the existing mTLS HTTPS connection.
-  STUN discovers addresses but cannot decrypt or relay files. There is no TURN
-  fallback: if a direct route is impossible, synchronization fails closed.
+  STUN discovers addresses but cannot decrypt or relay files. The HTTPS relay
+  fallback preserves the same inner mTLS authentication and signed grants.
 - A replica pulls only from the currently authorized writer for the same
   organization space. There is no cross-organization discovery or unrestricted mesh.
 - Independent-disk failover waits out the previous 15-minute grant lifetime
@@ -60,15 +61,15 @@ private key locally and obtains its certificate and CA bundle from Warden.
   organization/node identity instead.
 - Private nodes serving roaming endpoints can use **P2P VPN** without a public
   DNS record. Both Windows executables automatically allow only their own
-  direct-transport sockets: UDP `55000` on the Home Node and UDP `55100` on
-  endpoints. Both sides keep that socket alive for every session, use
-  ICE/STUN hole punching, and automatically request a PCP, NAT-PMP, or UPnP
-  mapping when the router supports one. No manual port-forward rule is
-  required. Outbound UDP to STUN and outbound HTTPS to Warden must remain
-  allowed. When both networks use restrictive symmetric NAT or CGNAT and
-  neither gateway exposes automatic mapping, a relay-free route does not
-  exist; Warden reports that condition instead of sending file bytes through
-  its control plane.
+  direct-transport sockets: UDP `55000–55099` on the Home Node and UDP
+  `55100–55199` on endpoints. The first port is shared by local host
+  candidates; ICE/STUN candidates use the remaining ports in that executable's
+  firewall allowance. Both sides use ICE/STUN hole punching and request an
+  opportunistic PCP, NAT-PMP, or UPnP mapping for the shared port when supported.
+  No manual port-forward rule is required. Outbound UDP to STUN and outbound
+  HTTPS to Warden must remain allowed. When no direct path is available,
+  the existing HTTPS WebSocket relay carries the same end-to-end encrypted
+  TLS/mTLS stream. Warden's relay cannot decrypt file contents or grants.
 
 ## Availability and scaling
 

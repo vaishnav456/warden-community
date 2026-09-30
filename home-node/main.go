@@ -1098,32 +1098,9 @@ func tlsClientForPeer(p peer) (*http.Client, error) {
 	}
 	transport := &http.Transport{TLSClientConfig: t}
 	if p.ConnectionMode == "p2p" {
-		tunnel, err := dialNodeP2P(p)
-		if err != nil {
-			return nil, err
-		}
-		var dialMu sync.Mutex
-		used := false
-		transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-			dialMu.Lock()
-			defer dialMu.Unlock()
-			if used {
-				return nil, errors.New("P2P tunnel does not permit a second transport connection")
-			}
-			used = true
-			host, _, splitErr := net.SplitHostPort(address)
-			if splitErr != nil {
-				host = address
-			}
-			candidate := t.Clone()
-			candidate.ServerName = host
-			conn := tls.Client(tunnel, candidate)
-			if err := conn.HandshakeContext(ctx); err != nil {
-				_ = tunnel.Close()
-				return nil, err
-			}
-			return conn, nil
-		}
+		transport = newHomeP2PTLSTransport(t, func() (net.Conn, error) {
+			return dialNodeP2P(p)
+		})
 	}
 	return &http.Client{Timeout: 5 * time.Minute, Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("redirect refused") }}, nil
 }

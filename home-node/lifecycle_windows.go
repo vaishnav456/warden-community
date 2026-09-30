@@ -232,7 +232,7 @@ func ensureHomeP2PFirewallRule(executable string) error {
 		"advfirewall", "firewall", "add", "rule", "name=" + homeP2PFirewallName,
 		"dir=in", "action=allow", "enable=yes", "edge=yes",
 		"program=" + executable, "protocol=UDP",
-		fmt.Sprintf("localport=%d", homeP2PUDPMin), "profile=any",
+		fmt.Sprintf("localport=%d-%d", homeP2PUDPMin, homeP2PUDPMax), "profile=any",
 	}
 	if out, err := exec.Command("netsh", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("create Warden Home direct P2P firewall rule: %w (%s)", err, strings.TrimSpace(string(out)))

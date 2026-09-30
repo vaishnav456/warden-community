@@ -1,14 +1,12 @@
 import pathlib
 import sys
 import unittest
-from unittest import mock
 
 
 SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from routes import agent_api
 from routes.agent_api import _endpoint_storage_principal
 
 
@@ -60,32 +58,6 @@ class EndpointHomeAccessTests(unittest.TestCase):
         )
         self.assertIsNone(principal)
         self.assertEqual(assignments, [])
-
-    def test_console_sign_in_queues_direct_endpoint_share(self):
-        endpoint = {**self.endpoint, "company_id": "company-a", "branch_id": "branch-a"}
-        with mock.patch.object(
-            agent_api.db, "get_home_assignments", return_value=[self.direct],
-        ), mock.patch.object(
-            agent_api.db, "create_system_job_once", return_value={"id": "job-a"},
-        ) as create:
-            job = agent_api._queue_home_sync_on_interactive_sign_in(
-                endpoint, "", r"DESKTOP-OPH9VC5\vaishnav",
-            )
-        self.assertEqual(job["id"], "job-a")
-        create.assert_called_once_with(
-            "company-a", "branch-a", ENDPOINT_ID, "SYNC_WARDEN_HOME",
-            {"username": "vaishnav", "refresh": True},
-        )
-
-    def test_unchanged_console_user_does_not_queue_duplicate(self):
-        endpoint = {**self.endpoint, "company_id": "company-a"}
-        with mock.patch.object(agent_api.db, "get_home_assignments") as assignments:
-            job = agent_api._queue_home_sync_on_interactive_sign_in(
-                endpoint, r"DESKTOP-OPH9VC5\vaishnav", "vaishnav",
-            )
-        self.assertIsNone(job)
-        assignments.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

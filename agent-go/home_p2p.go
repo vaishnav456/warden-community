@@ -1,12 +1,13 @@
 package main
 
-// Direct-only WebRTC transport for Warden Home. Warden exchanges short-lived
-// SDP metadata, but the resulting data channel runs endpoint-to-node. The
-// existing HTTPS+mTLS stream is carried inside it, so grants and certificate
-// identity checks remain unchanged.
+// WebRTC transport for Warden Home, with an encrypted HTTPS relay fallback.
+// Direct data channels run endpoint-to-node. Both transports carry the same
+// inner HTTPS+mTLS stream, preserving grants and certificate identity checks.
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -48,16 +49,57 @@ func (c *homeP2PConn) Close() error {
 	_ = c.pc.Close()
 	return err
 }
-func (c *homeP2PConn) LocalAddr() net.Addr              { return homeP2PAddr("endpoint") }
-func (c *homeP2PConn) RemoteAddr() net.Addr             { return homeP2PAddr("home-node") }
-func (c *homeP2PConn) SetDeadline(time.Time) error      { return nil }
-func (c *homeP2PConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *homeP2PConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *homeP2PConn) LocalAddr() net.Addr  { return homeP2PAddr("endpoint") }
+func (c *homeP2PConn) RemoteAddr() net.Addr { return homeP2PAddr("home-node") }
+func (c *homeP2PConn) SetDeadline(t time.Time) error {
+	return errors.Join(c.SetReadDeadline(t), c.SetWriteDeadline(t))
+}
+func (c *homeP2PConn) SetReadDeadline(t time.Time) error {
+	if conn, ok := c.ReadWriteCloser.(interface{ SetReadDeadline(time.Time) error }); ok {
+		return conn.SetReadDeadline(t)
+	}
+	return nil
+}
+func (c *homeP2PConn) SetWriteDeadline(t time.Time) error {
+	if conn, ok := c.ReadWriteCloser.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		return conn.SetWriteDeadline(t)
+	}
+	return nil
+}
+
+// Each HTTP connection gets a fresh tunnel, including retries after an idle
+// close. TLS still validates the requested node hostname and its certificate.
+func newHomeP2PTLSTransport(config *tls.Config, dial func() (net.Conn, error)) *http.Transport {
+	transport := &http.Transport{TLSClientConfig: config}
+	transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		tunnel, err := dial()
+		if err != nil {
+			return nil, err
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			host = address
+		}
+		candidate := config.Clone()
+		candidate.ServerName = host
+		conn := tls.Client(tunnel, candidate)
+		if err := conn.HandshakeContext(ctx); err != nil {
+			_ = tunnel.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
+	return transport
+}
 
 type homeP2PAddr string
 
 const (
 	agentP2PUDPMin uint16 = 55100
+	agentP2PUDPMax uint16 = 55199
 )
 
 func (a homeP2PAddr) Network() string { return "warden-home-p2p" }
@@ -113,10 +155,12 @@ func (c *homeRelayConn) Write(p []byte) (int, error) {
 	return n, closeErr
 }
 
-func (c *homeRelayConn) Close() error                       { return c.ws.Close() }
-func (c *homeRelayConn) LocalAddr() net.Addr                { return homeP2PAddr("endpoint-relay") }
-func (c *homeRelayConn) RemoteAddr() net.Addr               { return homeP2PAddr("home-node-relay") }
-func (c *homeRelayConn) SetDeadline(t time.Time) error      { return nil }
+func (c *homeRelayConn) Close() error         { return c.ws.Close() }
+func (c *homeRelayConn) LocalAddr() net.Addr  { return homeP2PAddr("endpoint-relay") }
+func (c *homeRelayConn) RemoteAddr() net.Addr { return homeP2PAddr("home-node-relay") }
+func (c *homeRelayConn) SetDeadline(t time.Time) error {
+	return errors.Join(c.SetReadDeadline(t), c.SetWriteDeadline(t))
+}
 func (c *homeRelayConn) SetReadDeadline(t time.Time) error  { return c.ws.SetReadDeadline(t) }
 func (c *homeRelayConn) SetWriteDeadline(t time.Time) error { return c.ws.SetWriteDeadline(t) }
 

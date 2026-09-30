@@ -514,101 +514,11 @@ func grabJPEG(quality int) ([]byte, int, int, error) {
 }
 
 func grabJPEGRegion(quality int, region monitorRect) ([]byte, int, int, error) {
-	hDC, _, _ := procGetDC.Call(0)
-	if hDC == 0 {
-		return nil, 0, 0, fmt.Errorf("GetDC failed")
+	buf, err := captureGDIRegion(region, systemGDICaptureCall, systemGDIBitmapRead)
+	if err != nil {
+		return nil, 0, 0, err
 	}
-	defer procReleaseDC.Call(0, hDC)
-
 	w, h := region.width(), region.height()
-
-	hMemDC, _, _ := procCreateCompatibleDC.Call(hDC)
-	if hMemDC == 0 {
-		return nil, 0, 0, fmt.Errorf("CreateCompatibleDC failed")
-	}
-	defer procDeleteDC.Call(hMemDC)
-
-	hBMP, _, _ := procCreateCompatibleBitmap.Call(hDC, uintptr(w), uintptr(h))
-	if hBMP == 0 {
-		return nil, 0, 0, fmt.Errorf("CreateCompatibleBitmap failed")
-	}
-	defer procDeleteObject.Call(hBMP)
-
-	procSelectObject.Call(hMemDC, hBMP)
-	usedCaptureBlt := true
-	copied, _, copyErr := procBitBlt.Call(
-		hMemDC, 0, 0, uintptr(w), uintptr(h),
-		hDC, uintptr(region.Left), uintptr(region.Top), srccopy|captureBlt,
-	)
-	if copied == 0 {
-		// Several GPU/virtual-display drivers reject CAPTUREBLT entirely.
-		// Fall back to standard SRCCOPY instead of leaving the viewer with no
-		// frames (its dark-blue canvas background). CAPTUREBLT is an
-		// enhancement for layered windows, not a requirement for basic capture.
-		usedCaptureBlt = false
-		copied, _, copyErr = procBitBlt.Call(
-			hMemDC, 0, 0, uintptr(w), uintptr(h),
-			hDC, uintptr(region.Left), uintptr(region.Top), srccopy,
-		)
-		if copied == 0 {
-			return nil, 0, 0, fmt.Errorf("BitBlt failed with and without CAPTUREBLT: %v", copyErr)
-		}
-	}
-	// GdiFlush ensures the BitBlt has actually completed before GetDIBits
-	// reads the bitmap's pixel data — GDI batches drawing calls, and reading
-	// out from the batch queue too early can capture a partially-drawn
-	// frame (visible as flicker/tearing in the remote viewer).
-	procGdiFlush.Call()
-
-	bi := bitmapInfoHeader{
-		biSize:     40,
-		biWidth:    int32(w),
-		biHeight:   -int32(h), // top-down
-		biPlanes:   1,
-		biBitCount: 32,
-	}
-	buf := make([]byte, w*h*4)
-	lines, _, dibErr := procGetDIBits.Call(
-		hMemDC, hBMP, 0, uintptr(h),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&bi)),
-		0, // DIB_RGB_COLORS
-	)
-	// GetDIBits returning 0 does NOT reliably mean failure: it's a long-known
-	// Win32 quirk (every real-world GDI screen-capture codebase works around
-	// it) that some driver/format combinations return 0 "scanlines copied"
-	// while GetLastError() still reports ERROR_SUCCESS and the buffer was
-	// filled correctly regardless. Confirmed live here: this treated every
-	// single frame as failed with "GetDIBits failed: The operation completed
-	// successfully" — discarding real, valid frames 100% of the time on both
-	// the default and Winlogon desktops. Only bail when the syscall actually
-	// reported a real (non-zero) error; the bufAppearsBlack retry below is
-	// the safety net for the rarer case where 0 really did mean no data.
-	if lines == 0 && dibErr != syscall.Errno(0) {
-		return nil, 0, 0, fmt.Errorf("GetDIBits failed: %v", dibErr)
-	}
-
-	if usedCaptureBlt && bufAppearsBlack(buf, w, h) {
-		// Unlike drivers that reject CAPTUREBLT outright (handled above), some
-		// virtual-display adapters — notably VirtualBox's software adapter
-		// without Guest Additions — report BitBlt success with CAPTUREBLT but
-		// silently no-op the layered-window composite, returning an all-black
-		// buffer instead of a real frame. Re-copy with plain SRCCOPY, which
-		// these drivers render correctly, before giving up on this frame.
-		if copied, _, _ := procBitBlt.Call(
-			hMemDC, 0, 0, uintptr(w), uintptr(h),
-			hDC, uintptr(region.Left), uintptr(region.Top), srccopy,
-		); copied != 0 {
-			procGdiFlush.Call()
-			procGetDIBits.Call(
-				hMemDC, hBMP, 0, uintptr(h),
-				uintptr(unsafe.Pointer(&buf[0])),
-				uintptr(unsafe.Pointer(&bi)),
-				0, // DIB_RGB_COLORS
-			)
-		}
-	}
-
 	frame, err := encodeBGRAJPEG(buf, w, h, quality)
 	if err != nil {
 		return nil, 0, 0, err

@@ -8,6 +8,12 @@ Hosted trials are separate from this self-hosted project. See [Hosted trial term
 
 > **Project status: alpha.** This repository is suitable for development and controlled pilots. Review the security model, test recovery, and use signed production artifacts before managing important endpoints.
 
+## The problem Warden solves
+
+Small businesses often face an awkward choice: pay for enterprise MDM suites priced and designed for larger IT teams, or manage devices with disconnected tools and manual effort. Keeping computers secure and consistent across Windows, Linux, and macOS can mean juggling separate systems for inventory, accounts, policy, and updates. Remote desktop and support can be another pain point: access may require a separate product, extra setup, or troubleshooting across different tools, making it difficult for a small team to help staff quickly.
+
+Warden aims to give small organizations one self-hosted place to enroll and manage supported devices, apply policy, run administrative jobs, and provide remote support. It makes effective policy visible and presents controls supported by each endpoint, reducing the need to stitch together separate management tools. The community edition is designed for one organization; feature coverage varies by platform, and several integrations remain alpha.
+
 ## What makes Warden different
 
 - A built-in directory can provision endpoint accounts and sign-in identities without Active Directory or Microsoft Entra.

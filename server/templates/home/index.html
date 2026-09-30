@@ -2,7 +2,31 @@
 {% block title %}Warden Home{% endblock %}
 {% block breadcrumb %}<span class="text-ink-700">Warden Home</span>{% endblock %}
 {% block content %}
-<div class="fleet-page-header"><div><h1>Warden Home</h1><p>Secure folders transferred directly between managed endpoints and organization-owned Windows or Linux storage nodes.</p></div><span class="badge badge-online">Peer-to-peer · control plane connects peers</span></div>
+<div class="fleet-page-header"><div><h1>Warden Home</h1><p>Secure folders use direct peer-to-peer transfer when possible, with an end-to-end encrypted HTTPS relay when restrictive NAT blocks the direct path.</p></div><span class="badge badge-online">Direct first · encrypted relay fallback</span></div>
+<section id="home-transfers" class="card p-5 mb-5">
+ <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-semibold text-ink-100">Transfer activity</h2><p class="text-sm text-ink-500 mt-1">Check the result for each endpoint here after a sync. Uploads count only after the storage node accepts them; downloads count after all expected bytes are saved. Failed or skipped files make the run incomplete.</p></div><a class="btn btn-secondary btn-sm" href="/storage#home-transfers">Refresh results</a></div>
+ <div class="grid md:grid-cols-2 gap-3 mt-4">
+  <div class="rounded-2xl border border-base-600 p-4"><div class="text-xs text-ink-500">Latest run</div>{% if transfers %}<strong class="text-ink-100">{{ transfers[0].label }}</strong><p class="text-xs text-ink-500 mt-1">{{ transfers[0].endpoint_name }} · {{ (transfers[0].completed_at or transfers[0].started_at or transfers[0].created_at)|timeago }}</p>{% else %}<p class="text-sm text-ink-500">No sync has been requested yet.</p>{% endif %}</div>
+  <div class="rounded-2xl border border-base-600 p-4"><div class="text-xs text-ink-500">Last completed run</div>{% if last_completed %}<strong class="text-ink-100">{{ last_completed.label }}</strong><p class="text-xs text-ink-500 mt-1">{{ last_completed.endpoint_name }} · {{ (last_completed.completed_at or last_completed.created_at)|timeago }}</p>{% if not last_completed.report %}<p class="text-xs text-ink-500 mt-1">This older agent did not report file counts. Completion alone does not confirm any file transferred.</p>{% endif %}{% else %}<p class="text-sm text-ink-500">No completed run reported.</p>{% endif %}</div>
+ </div>
+ {% if g.admin.role in ['superadmin', 'company_admin'] and spaces %}
+ <div class="mt-4 flex flex-wrap gap-2">{% for space in spaces %}<form method="post" action="/storage/spaces/{{ space.id }}/sync"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-secondary btn-sm" type="submit">Sync {{ space.name }} now</button></form>{% endfor %}</div>
+ <p class="text-xs text-ink-500 mt-2">Sync checks all assigned folders for each matching signed-in user. Offline endpoints run queued work after reconnecting.</p>
+ {% endif %}
+ <div class="mt-4 space-y-3">{% for transfer in transfers %}
+  <article class="rounded-2xl border border-base-600 p-4">
+   <div class="flex flex-wrap items-center justify-between gap-2"><div><strong class="text-ink-100">{{ transfer.endpoint_name }}</strong>{% if transfer.report and transfer.report.username %}<span class="text-xs text-ink-500"> · {{ transfer.report.username }}</span>{% endif %} <span class="badge {{ transfer.tone }}">{{ transfer.label }}</span></div><a class="text-xs text-accent-400" href="/jobs/{{ transfer.id }}">Open job</a></div>
+   <p class="text-xs text-ink-500 mt-1">Queued {{ transfer.created_at|timeago }}{% if transfer.started_at %} · Started {{ transfer.started_at|timeago }}{% endif %}{% if transfer.completed_at %} · Finished {{ transfer.completed_at|timeago }}{% endif %}</p>
+   {% if transfer.report %}
+   <p class="text-sm text-ink-300 mt-2">{{ transfer.report.uploaded }} uploaded ({{ transfer.report.uploaded_bytes }} bytes) · {{ transfer.report.downloaded }} downloaded ({{ transfer.report.downloaded_bytes }} bytes) · {{ transfer.report.unchanged }} unchanged · {{ transfer.report.skipped }} skipped · {{ transfer.report.failed }} failed</p>
+   {% if transfer.report.files %}<details class="mt-3"><summary class="cursor-pointer text-sm text-ink-100">File results</summary><div class="w-table-wrap mt-2"><table class="w-table"><thead><tr><th>Space / file</th><th>Result</th><th>Details</th></tr></thead><tbody>{% for file in transfer.report.files %}<tr><td><div>{{ file.space }}</div><div class="text-xs text-ink-500 break-all">{{ file.path }}</div></td><td>{{ file.status|replace('_', ' ')|title }}</td><td class="text-xs break-all">{{ file.error or ((file.bytes or 0)|string + ' bytes' if file.status in ['uploaded', 'downloaded'] else file.action) }}</td></tr>{% endfor %}</tbody></table></div>{% if transfer.report.omitted_details %}<p class="text-xs text-ink-500 mt-2">{{ transfer.report.omitted_details }} additional file details omitted; totals include every file.</p>{% endif %}</details>{% endif %}
+   {% elif transfer.status == 'completed' %}<p class="text-xs text-ink-500 mt-2">File results unavailable from this older agent. Run a new sync after its update to see transferred files and failures.</p>
+   {% elif transfer.status in ['pending', 'approved'] %}<p class="text-xs text-ink-500 mt-2">Waiting for the endpoint to pick up the job.</p>
+   {% elif transfer.status == 'running' %}<p class="text-xs text-ink-500 mt-2">The endpoint is checking folders or transferring files. Refresh for the final result.</p>{% endif %}
+   {% if transfer.error_msg %}<p class="text-sm text-status-critical mt-2 break-all">{{ transfer.error_msg }}</p>{% endif %}
+  </article>
+ {% else %}<p class="text-sm text-ink-500">Assign a space and use Sync now to request a transfer report.</p>{% endfor %}</div>
+</section>
 <div class="card p-5 mb-5">
  <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-semibold text-ink-100">What you need</h2><p class="text-sm text-ink-500 mt-1">The normal Warden Agent stays on employee endpoints. Install the separate Warden Home Node on a Windows or Linux computer that will store the files. Create a node below; Warden then generates its configured ZIP or TAR.GZ with all required keys included.</p></div><span class="badge">Package available after node creation</span></div>
  <div class="grid md:grid-cols-3 gap-3 mt-4">

@@ -92,6 +92,15 @@ func comCall(this unsafe.Pointer, idx int, args ...uintptr) (int32, error) {
 	return hr, nil
 }
 
+// D3D11 methods such as CopyResource and Unmap return void, not HRESULT.
+// Their return register is unspecified and must never trigger a fallback.
+func comCallVoid(this unsafe.Pointer, idx int, args ...uintptr) {
+	vtbl := *(*uintptr)(this)
+	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(idx)*unsafe.Sizeof(uintptr(0))))
+	full := append([]uintptr{uintptr(this)}, args...)
+	syscall.SyscallN(fn, full...)
+}
+
 func comQueryInterface(this unsafe.Pointer, iid *windows.GUID) (unsafe.Pointer, error) {
 	var out unsafe.Pointer
 	if _, err := comCall(this, 0, uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&out))); err != nil {
@@ -161,6 +170,11 @@ type dxgiOutduplFrameInfo struct {
 	PointerPosition           dxgiOutduplPointerPosition
 	TotalMetadataBufferSize   uint32
 	PointerShapeBufferSize    uint32
+}
+
+type dxgiMoveRect struct {
+	SourcePoint     struct{ X, Y int32 }
+	DestinationRect dxgiRect
 }
 
 // ── Capturer ──────────────────────────────────────────────────────────────────
@@ -295,12 +309,15 @@ func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err e
 
 	// Must be read while this frame is still acquired (before ReleaseFrame).
 	dirty, dirtyErr := c.getDirtyRects(256)
-	if dirtyErr != nil {
+	moves, moveErr := c.getMoveRects(256)
+	if dirtyErr != nil || moveErr != nil {
 		// Non-fatal: fall back to treating the whole frame as dirty rather
 		// than failing the capture outright (e.g. a very fragmented change
 		// pattern exceeding the 256-rect buffer — full-frame is the right
 		// answer for that case anyway, not worth a bigger buffer/retry).
 		dirty = nil
+	} else {
+		dirty = captureUpdateRects(dirty, moves)
 	}
 
 	tex, qErr := comQueryInterface(resource, &iidID3D11Texture2D)
@@ -309,15 +326,13 @@ func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err e
 	}
 	defer comRelease(tex)
 
-	if _, cErr := comCall(c.context, 47, uintptr(c.staging), uintptr(tex)); cErr != nil { // ID3D11DeviceContext::CopyResource
-		return nil, 0, 0, nil, fmt.Errorf("CopyResource: %w", cErr)
-	}
+	comCallVoid(c.context, 47, uintptr(c.staging), uintptr(tex)) // ID3D11DeviceContext::CopyResource
 
 	var mapped d3d11MappedSubresource
 	if _, mErr := comCall(c.context, 14, uintptr(c.staging), 0, d3d11MapRead, 0, uintptr(unsafe.Pointer(&mapped))); mErr != nil { // ID3D11DeviceContext::Map
 		return nil, 0, 0, nil, fmt.Errorf("Map: %w", mErr)
 	}
-	defer comCall(c.context, 15, uintptr(c.staging), 0) // Unmap
+	defer comCallVoid(c.context, 15, uintptr(c.staging), 0) // Unmap
 
 	rowBytes := c.width * 4
 	out := make([]byte, rowBytes*c.height)
@@ -328,8 +343,25 @@ func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err e
 	return out, c.width, c.height, dirty, nil
 }
 
-// getDirtyRects returns the regions that changed in the currently-acquired
+// getMoveRects returns regions relocated in the currently-acquired
 // frame. Must be called between AcquireNextFrame and ReleaseFrame.
+func (c *dxgiCapturer) getMoveRects(maxRects int) ([]dxgiMoveRect, error) {
+	buf := make([]dxgiMoveRect, maxRects)
+	var required uint32
+	_, err := comCall(c.dupl, 10, // IDXGIOutputDuplication::GetFrameMoveRects
+		uintptr(maxRects)*unsafe.Sizeof(dxgiMoveRect{}),
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&required)))
+	if err != nil {
+		return nil, err
+	}
+	count := int(required) / int(unsafe.Sizeof(dxgiMoveRect{}))
+	if count > maxRects {
+		return nil, fmt.Errorf("move rectangle metadata exceeds buffer")
+	}
+	return buf[:count], nil
+}
+
+// getDirtyRects returns the regions changed in the currently-acquired frame.
 func (c *dxgiCapturer) getDirtyRects(maxRects int) ([]dxgiRect, error) {
 	rectSize := int(unsafe.Sizeof(dxgiRect{}))
 	buf := make([]dxgiRect, maxRects)

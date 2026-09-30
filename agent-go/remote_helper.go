@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -204,10 +205,12 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// Desktop attachment and GDI batching are OS-thread state.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		var lastCaptureErrLog time.Time
 		var captureFailedSince time.Time
-		var lastFrameSentAt time.Time
-		var lastFullFrameAt time.Time
+		var captureState remoteCaptureState
 		var dxgi *dxgiCapturer
 		helperDesktop, _ := currentDesktopName()
 		// Desktop Duplication is documented by Microsoft to not work on the
@@ -237,7 +240,6 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 			}
 		}()
 
-		var dxgiSentFirstFrame bool
 		lastSelectedMonitor := -1
 
 		for {
@@ -272,7 +274,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 				// The browser canvas now represents a different monitor. A DXGI
 				// dirty rectangle is meaningful only on top of a full frame from
 				// that same output, so force a new baseline when switching back.
-				dxgiSentFirstFrame = false
+				captureState.reset()
 				lastSelectedMonitor = selectedIndex
 			}
 			// EnumDisplayMonitors and DXGI EnumOutputs do not promise the same
@@ -288,17 +290,23 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 
 			if dxgiMatchesSelection {
 				buf, w, h, dirty, dErr := dxgi.grabBGRA()
+				if dErr == errNoNewFrame && len(captureState.pixels) > 0 {
+					ew, eh := targetSize(captureState.width, captureState.height)
+					if !captureState.shouldReplay(time.Now(), ew, eh) {
+						time.Sleep(30 * time.Millisecond)
+						continue
+					}
+					// Replay the latest complete DXGI snapshot, including every
+					// intervening delta. GDI can see a different/incomplete image
+					// and must not replace a healthy DXGI baseline during idle.
+					buf, w, h = captureState.pixels, captureState.width, captureState.height
+					dirty, dErr = nil, nil
+				}
 				switch dErr {
 				case errNoNewFrame:
-					// AcquireNextFrame only signals on an actual screen
-					// change — it never hands back an initial frame just
-					// because we asked. Left unhandled, a static/idle
-					// desktop (nothing moving, nothing to diff against)
-					// would loop here forever and never send a single
-					// frame. Bootstrap with one GDI capture if we haven't
-					// sent anything recently; otherwise there's nothing new
-					// to show and the browser already has the last frame.
-					if time.Since(lastFrameSentAt) < 2*time.Second {
+					// Only bootstrap with GDI before DXGI has supplied a frame.
+					// Once sent, keep that bootstrap image until DXGI is ready.
+					if !captureState.needsBootstrap() {
 						time.Sleep(30 * time.Millisecond)
 						continue
 					}
@@ -309,11 +317,12 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 						_ = writeMsg('L', []byte(fmt.Sprintf("DXGI capture lost, could not reinit, using GDI: %v", dErr)))
 						dxgi = nil
 					}
-					dxgiSentFirstFrame = false
+					captureState.reset()
 					time.Sleep(30 * time.Millisecond)
 					continue
 				case nil:
 					useGDI = false
+					captureState.remember(buf, w, h)
 					ew, eh := targetSize(w, h)
 					ux, uy, uw, uh, haveDirty := unionDirtyRects(dirty, w, h)
 					// Always send a full frame the first time this DXGI
@@ -326,8 +335,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 					// deliberately drops queued deltas under decode pressure.
 					// Without this, one missing partial update corrupts that
 					// region indefinitely on a continuously changing desktop.
-					sendFull := !dxgiSentFirstFrame || !haveDirty ||
-						uw*uh >= w*h*6/10 || time.Since(lastFullFrameAt) >= 2*time.Second
+					sendFull := captureState.needsFull(time.Now(), haveDirty, uw*uh, w*h, ew, eh)
 					if sendFull {
 						encBuf := downscaleBGRA(buf, w, h, ew, eh)
 						frame, encErr := encodeBGRAJPEG(encBuf, ew, eh, 60)
@@ -340,8 +348,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 							requestStop()
 							return
 						}
-						dxgiSentFirstFrame = true
-						lastFullFrameAt = time.Now()
+						captureState.sentFull(time.Now(), ew, eh)
 						sent = true
 					} else {
 						if uw <= 0 || uh <= 0 {
@@ -388,6 +395,10 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 			}
 
 			if useGDI {
+				// A consumed DXGI frame may have failed before transmission.
+				// Even if GDI also fails, the next delta cannot assume the
+				// browser received those changes; require a fresh full image.
+				captureState.invalidateBaseline()
 				frame, _, _, gdiErr := grabJPEGRegion(60, region)
 				if gdiErr != nil {
 					// Previously swallowed entirely: a persistent capture
@@ -429,12 +440,12 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 					requestStop()
 					return
 				}
-				lastFullFrameAt = time.Now()
+				captureState.sentGDI(time.Now())
 				sent = true
 			}
 
-			if sent {
-				lastFrameSentAt = time.Now()
+			if sent && !useGDI {
+				captureState.sentPartial(time.Now())
 			}
 			if useGDI {
 				// Only needed for the GDI polling path, which would otherwise

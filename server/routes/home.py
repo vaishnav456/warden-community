@@ -24,6 +24,7 @@ from middleware.security import check_rate_limit
 from services.signing import get_server_pubkey_b64, sign_canonical_payload
 from services.home_grants import replication_config_for
 from services.home_grants import home_config_for
+from services.home_sync import resolve_home_access_context, short_windows_username
 
 
 bp = Blueprint("home", __name__)
@@ -146,14 +147,60 @@ def _storage_root(platform, value):
     abort(404)
 
 
+def _home_transfer_view(job, endpoints):
+    """Distinguish a file receipt from older agents' generic completed text."""
+    item = dict(job)
+    item["endpoint_name"] = endpoints.get(str(job.get("endpoint_id")), {}).get("hostname") or "Removed endpoint"
+    report = None
+    try:
+        candidate = json.loads(job.get("log_output") or "")
+        counters = ("uploaded", "downloaded", "unchanged", "skipped", "failed", "uploaded_bytes", "downloaded_bytes")
+        if (isinstance(candidate, dict) and candidate.get("kind") == "warden_home_sync"
+                and candidate.get("version") == 1
+                and all(type(candidate.get(key)) is int and candidate[key] >= 0 for key in counters)):
+            report = {key: candidate[key] for key in counters}
+            report["files"] = [entry for entry in candidate.get("files", [])[:100] if isinstance(entry, dict)] if isinstance(candidate.get("files"), list) else []
+            report["omitted_details"] = candidate.get("omitted_details", 0)
+            report["username"] = candidate.get("username") or ""
+            report["status"] = candidate.get("status")
+    except (TypeError, ValueError):
+        pass
+    item["report"] = report
+    status = job.get("status")
+    item["tone"] = "badge-pending"
+    if status == "completed":
+        if not report:
+            item["label"] = "Completed · unverified"
+        elif report["failed"] or report["skipped"] or report["status"] != "completed":
+            item["label"] = "Incomplete"
+            item["tone"] = "badge-offline"
+        else:
+            item["label"] = "Succeeded" if report["uploaded"] + report["downloaded"] else ("Up to date" if report["unchanged"] else "No files found")
+            item["tone"] = "badge-online"
+    elif status == "failed":
+        item["label"] = "Failed"
+        item["tone"] = "badge-offline"
+    else:
+        item["label"] = {"running": "Transferring", "pending": "Queued", "approved": "Queued", "cancelled": "Cancelled"}.get(status, str(status or "Unknown").title())
+    return item
+
+
 def _render_home(bootstrap_token=None):
+    endpoints = db.get_endpoints(g.company["id"])
+    endpoint_lookup = {str(endpoint["id"]): endpoint for endpoint in endpoints}
+    branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
+    if g.admin.get("role") == "branch_admin" and not branch_id:
+        abort(403)
+    transfers = [_home_transfer_view(job, endpoint_lookup) for job in db.get_home_sync_jobs(g.company["id"], branch_id=branch_id)]
+    completed = db.get_home_sync_jobs(g.company["id"], status="completed", branch_id=branch_id, limit=1)
+    last_completed = _home_transfer_view(completed[0], endpoint_lookup) if completed else None
     response = make_response(render_template(
         "home/index.html", nodes=db.get_home_nodes(g.company["id"]),
         spaces=db.get_home_spaces(g.company["id"]),
         assignments=db.get_home_assignments(g.company["id"]),
         branches=db.get_branches(g.company["id"]),
         identities=db.get_warden_identities(g.company["id"]),
-        endpoints=db.get_endpoints(g.company["id"]),
+        endpoints=endpoints, transfers=transfers, last_completed=last_completed,
         server_public_key=get_server_pubkey_b64(), bootstrap_token=bootstrap_token,
         active_page="home",
     ))
@@ -657,57 +704,46 @@ def delete_assignment(assignment_id):
     return _render_home()
 
 
-def _queue_assigned_home_syncs(space_id):
-    endpoints = {str(item["id"]): item for item in db.get_endpoints(g.company["id"])}
-    spaces = db.get_home_spaces(g.company["id"])
-    assignments = db.get_home_assignments(g.company["id"])
-    queued = 0
-    queued_users = set()
-    for identity in db.get_warden_identities(g.company["id"]):
-        for identity_assignment in identity.get("warden_identity_assignments") or []:
-            if identity_assignment.get("status") != "active":
-                continue
-            endpoint = endpoints.get(str(identity_assignment.get("endpoint_id")))
-            if not endpoint or not endpoint.get("is_active", True):
-                continue
-            home = home_config_for(endpoint, identity, spaces, assignments)
-            if not any(str(item.get("id")) == str(space_id) for item in home):
-                continue
-            job = db.create_job(
-                g.company["id"], endpoint.get("branch_id"), endpoint["id"],
-                "SYNC_WARDEN_HOME", {"username": identity["username"], "refresh": True},
-                g.admin["id"],
-            )
-            if job:
-                queued += 1
-                queued_users.add((str(endpoint["id"]), identity["username"].casefold()))
+@bp.post("/storage/spaces/<space_id>/sync")
+@login_required
+@company_required
+@role_required("superadmin", "company_admin")
+def sync_space(space_id):
+    space = db.get_home_space(space_id)
+    if not space or str(space.get("company_id")) != str(g.company["id"]):
+        abort(404)
+    queued = _queue_assigned_home_syncs(space_id)
+    db.audit(g.company["id"], g.admin["id"], "home_sync_requested", {"space_id": space_id, "queued": queued})
+    if queued:
+        flash(f"Queued {queued} endpoint sync(s). Results appear in Transfer activity.", "success")
+    else:
+        flash("No new sync was queued. Sign in to an assigned Windows endpoint, or check Transfer activity for an already queued or running sync.", "info")
+    return redirect(url_for("home.index", _anchor="home-transfers"), code=303)
 
-    # A share granted directly to a device is independent of Directory. Send
-    # it to the account currently owning that device's interactive session.
-    # The agent API repeats this check before issuing a short-lived grant.
-    for assignment in assignments:
-        if (str(assignment.get("space_id")) != str(space_id)
-                or assignment.get("scope_type") != "endpoint"
-                or not assignment.get("enabled", True)):
+
+def _queue_assigned_home_syncs(space_id):
+    spaces = db.get_home_spaces(g.company["id"])
+    queued = 0
+    for endpoint in db.get_endpoints(g.company["id"]):
+        if not endpoint.get("is_active", True) or str(endpoint.get("platform") or "").lower() != "windows":
             continue
-        endpoint = endpoints.get(str(assignment.get("scope_value") or ""))
-        if not endpoint or not endpoint.get("is_active", True):
-            continue
-        interactive = str(endpoint.get("interactive_user") or "").strip().replace("/", "\\")
-        username = interactive.rsplit("\\", 1)[-1] if interactive else ""
+        username = short_windows_username(endpoint.get("interactive_user"))
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,20}", username):
             continue
-        key = (str(endpoint["id"]), username.casefold())
-        if key in queued_users:
+        if db.has_inflight_job(endpoint["id"], "SYNC_WARDEN_HOME"):
             continue
-        job = db.create_job(
+        principal, assignments, _ = resolve_home_access_context(endpoint, username)
+        if not principal:
+            continue
+        home = home_config_for(endpoint, principal, spaces, assignments)
+        if not any(str(item.get("id")) == str(space_id) for item in home):
+            continue
+        job = db.create_system_job_once(
             g.company["id"], endpoint.get("branch_id"), endpoint["id"],
-            "SYNC_WARDEN_HOME", {"username": username, "refresh": True},
-            g.admin["id"],
+            "SYNC_WARDEN_HOME", {"username": principal["username"], "refresh": True},
         )
         if job:
             queued += 1
-            queued_users.add(key)
     return queued
 
 

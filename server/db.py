@@ -217,7 +217,9 @@ def decrypt_field(company, ciphertext_b64, purpose="generic"):
     try:
         return decrypt_value(company["id"], company.get("encryption_mode", "managed"),
                              company.get("wrapped_dek"), ciphertext_b64, purpose)
-    except (binascii.Error, InvalidTag, UnicodeDecodeError, json.JSONDecodeError):
+    except (binascii.Error, InvalidTag, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        # Short legacy messages can decode as base64 but cannot contain an
+        # AES-GCM nonce. Versioned ciphertext must still fail closed.
         if ciphertext_b64.startswith("v2:"):
             raise
         return ciphertext_b64
@@ -1523,6 +1525,22 @@ def get_jobs(company_id, endpoint_id=None, status=None, branch_id=None, limit=50
     return [_decrypt_job(j, company) for j in rows]
 
 
+def get_home_sync_jobs(company_id, status=None, branch_id=None, limit=20):
+    """Read tenant-scoped Home results without exposing expiring job grants."""
+    path = (
+        f"jobs?company_id=eq.{_q(company_id)}&type=eq.SYNC_WARDEN_HOME"
+        "&select=id,endpoint_id,company_id,branch_id,status,created_at,started_at,"
+        "completed_at,exit_code,log_output,error_msg"
+        f"&order=created_at.desc&limit={min(100, max(1, int(limit)))}"
+    )
+    if status:
+        path += f"&status=eq.{_q(status)}"
+    if branch_id:
+        path += f"&branch_id=eq.{_q(branch_id)}"
+    company = get_company_by_id(company_id)
+    return [_decrypt_job(row, company) for row in _get(path)]
+
+
 def get_job(job_id, decrypt=True):
     rows = _get(f"jobs?id=eq.{_q(job_id)}&limit=1")
     if not rows:
@@ -1541,6 +1559,21 @@ def has_inflight_job(endpoint_id, job_type):
         f"&status=in.(pending,approved,running)&limit=1"
     )
     return bool(rows)
+
+
+def get_endpoint_home_sync_jobs(company_id, endpoint_id):
+    """Read sync timing without decrypting payloads or retaining Home grants."""
+    path = (
+        f"jobs?company_id=eq.{_q(company_id)}&endpoint_id=eq.{_q(endpoint_id)}"
+        "&type=eq.SYNC_WARDEN_HOME&select=id,status,created_at,completed_at"
+    )
+    active = _get(path + "&status=in.(pending,approved,running)&limit=1")
+    if active:
+        return active
+    return _get(
+        path + "&status=in.(completed,failed,cancelled)"
+        "&order=completed_at.desc.nullslast,created_at.desc&limit=4"
+    )
 
 
 def has_recent_job(endpoint_id, job_type, minutes=15):
@@ -2715,6 +2748,15 @@ def _decrypt_alert(row, company=None):
         result[field] = _endpoint_decrypt(
             company, f"alert.{field}", result.get(field),
         )
+    # Alert titles created before endpoint records were consistently
+    # decrypted may contain the encrypted hostname as their first word.
+    # Recover that embedded hostname so existing alerts remain readable.
+    title = result.get("title")
+    if isinstance(title, str) and title.startswith("v2:") and result.get("endpoint_id"):
+        encrypted_hostname, separator, remainder = title.partition(" ")
+        hostname = _endpoint_decrypt(company, "hostname", encrypted_hostname)
+        if hostname != encrypted_hostname:
+            result["title"] = f"{hostname}{separator}{remainder}"
     encrypted = result.pop("detail_encrypted", None)
     if encrypted:
         result["detail"] = _endpoint_decrypt(company, "alert.detail", encrypted)
@@ -3504,11 +3546,13 @@ def get_open_alert(endpoint_id, alert_type):
 
 
 def get_endpoints_for_alert_check(company_id):
-    return _get(
+    rows = _get(
         f"endpoints?company_id=eq.{_q(str(company_id))}"
         f"&is_active=eq.true"
         f"&select=id,company_id,branch_id,hostname,status,cpu_pct,ram_used_pct,disk_free_gb,last_seen,vpn_ip"
     ) or []
+    company = get_company_by_id(company_id)
+    return [_decrypt_endpoint(row, company) for row in rows]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

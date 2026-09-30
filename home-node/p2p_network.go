@@ -32,14 +32,28 @@ func sharedHomeP2PAPI() (*webrtc.API, error) {
 			return
 		}
 		mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: conn})
-		setting := webrtc.SettingEngine{}
-		setting.DetachDataChannels()
-		setting.SetICEUDPMux(mux)
-		setting.SetICETimeouts(15*time.Second, 30*time.Second, 10*time.Second)
+		setting, err := homeP2PSettings(mux)
+		if err != nil {
+			_ = mux.Close()
+			homeP2PAPIErr = err
+			return
+		}
 		homeP2PAPI = webrtc.NewAPI(webrtc.WithSettingEngine(setting))
 		go maintainP2PNATMapping(int(homeP2PUDPMin), "Warden Home")
 	})
 	return homeP2PAPI, homeP2PAPIErr
+}
+
+func homeP2PSettings(mux ice.UDPMux) (webrtc.SettingEngine, error) {
+	setting := webrtc.SettingEngine{}
+	setting.DetachDataChannels()
+	setting.EnableDataChannelBlockWrite(true)
+	setting.SetICEUDPMux(mux)
+	// Pion's WebRTC API multiplexes host candidates only. STUN candidates
+	// use separate sockets, which must stay inside our firewall allowance.
+	err := setting.SetEphemeralUDPPortRange(homeP2PUDPMin+1, homeP2PUDPMax)
+	setting.SetICETimeouts(15*time.Second, 30*time.Second, 10*time.Second)
+	return setting, err
 }
 
 func maintainP2PNATMapping(port int, description string) {

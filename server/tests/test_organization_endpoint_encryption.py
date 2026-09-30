@@ -127,8 +127,15 @@ class EndpointPrivateDataTests(unittest.TestCase):
             db.decrypt_field(self.company, legacy_payload, "job.payload"),
             legacy_payload,
         )
-        with self.assertRaises(Exception):
-            db.decrypt_field(self.company, "v2:not-valid", "job.error-message")
+        for plaintext in ("", "test", "timeout"):
+            with self.subTest(plaintext=plaintext):
+                self.assertEqual(
+                    db.decrypt_field(self.company, plaintext, "job.error-message"),
+                    plaintext,
+                )
+        for ciphertext in ("v2:not-valid", "v2:", "v2:dGVzdA=="):
+            with self.subTest(ciphertext=ciphertext), self.assertRaises(Exception):
+                db.decrypt_field(self.company, ciphertext, "job.error-message")
 
 
 if __name__ == "__main__":

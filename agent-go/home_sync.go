@@ -6,7 +6,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -22,7 +21,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -104,32 +102,9 @@ func homeHTTPClient(node homeNode, username string) (*http.Client, error) {
 	}
 	transport := &http.Transport{TLSClientConfig: tlsCfg}
 	if node.ConnectionMode == "p2p" {
-		tunnel, err := dialHomeP2P(username, node)
-		if err != nil {
-			return nil, err
-		}
-		var dialMu sync.Mutex
-		used := false
-		transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-			dialMu.Lock()
-			defer dialMu.Unlock()
-			if used {
-				return nil, errors.New("P2P tunnel does not permit a second transport connection")
-			}
-			used = true
-			host, _, splitErr := net.SplitHostPort(address)
-			if splitErr != nil {
-				host = address
-			}
-			candidate := tlsCfg.Clone()
-			candidate.ServerName = host
-			conn := tls.Client(tunnel, candidate)
-			if err := conn.HandshakeContext(ctx); err != nil {
-				_ = tunnel.Close()
-				return nil, err
-			}
-			return conn, nil
-		}
+		transport = newHomeP2PTLSTransport(tlsCfg, func() (net.Conn, error) {
+			return dialHomeP2P(username, node)
+		})
 	}
 	return &http.Client{Timeout: 10 * time.Minute, CheckRedirect: rejectRedirect, Transport: transport}, nil
 }
@@ -251,124 +226,324 @@ func listHomeFiles(client *http.Client, node homeNode, prefix string) ([]homeRem
 	return files, err
 }
 
-func syncHomeMapping(space homeSpace, node homeNode, m homeMapping, username string) error {
+// Reports contain metadata only; grants and file contents never enter job logs.
+type homeFileResult struct {
+	Space  string `json:"space"`
+	Path   string `json:"path"`
+	Action string `json:"action"`
+	Status string `json:"status"`
+	Bytes  int64  `json:"bytes,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type homeSyncReport struct {
+	Kind            string           `json:"kind"`
+	Version         int              `json:"version"`
+	Username        string           `json:"username"`
+	StartedAt       string           `json:"started_at"`
+	CompletedAt     string           `json:"completed_at"`
+	Status          string           `json:"status"`
+	Uploaded        int              `json:"uploaded"`
+	Downloaded      int              `json:"downloaded"`
+	Unchanged       int              `json:"unchanged"`
+	Skipped         int              `json:"skipped"`
+	Failed          int              `json:"failed"`
+	UploadedBytes   int64            `json:"uploaded_bytes"`
+	DownloadedBytes int64            `json:"downloaded_bytes"`
+	Files           []homeFileResult `json:"files"`
+	OmittedDetails  int              `json:"omitted_details"`
+}
+
+const homeReportDetailLimit = 100
+
+func (report *homeSyncReport) record(space, path, action, status string, size int64, err error) {
+	switch status {
+	case "uploaded":
+		report.Uploaded++
+		report.UploadedBytes += size
+	case "downloaded":
+		report.Downloaded++
+		report.DownloadedBytes += size
+	case "unchanged":
+		report.Unchanged++
+	case "skipped":
+		report.Skipped++
+	case "failed":
+		report.Failed++
+	}
+	detail := homeFileResult{Space: boundedHomeReportText(space, 256), Path: boundedHomeReportText(path, 1024), Action: action, Status: status, Bytes: size}
+	if err != nil {
+		detail.Error = boundedHomeReportText(err.Error(), 2048)
+	}
+	// Keep the error list useful even when many successful files precede it.
+	if len(report.Files) < homeReportDetailLimit {
+		report.Files = append(report.Files, detail)
+	} else {
+		report.OmittedDetails++
+		if err != nil {
+			for i := len(report.Files) - 1; i >= 0; i-- {
+				if report.Files[i].Error == "" {
+					report.Files[i] = detail
+					break
+				}
+			}
+		}
+	}
+}
+
+func (report *homeSyncReport) merge(other homeSyncReport) {
+	report.Uploaded += other.Uploaded
+	report.Downloaded += other.Downloaded
+	report.Unchanged += other.Unchanged
+	report.Skipped += other.Skipped
+	report.Failed += other.Failed
+	report.UploadedBytes += other.UploadedBytes
+	report.DownloadedBytes += other.DownloadedBytes
+	report.OmittedDetails += other.OmittedDetails
+	for _, detail := range other.Files {
+		if len(report.Files) < homeReportDetailLimit {
+			report.Files = append(report.Files, detail)
+		} else {
+			report.OmittedDetails++
+			if detail.Error != "" {
+				for i := len(report.Files) - 1; i >= 0; i-- {
+					if report.Files[i].Error == "" {
+						report.Files[i] = detail
+						break
+					}
+				}
+			}
+		}
+	}
+}
+
+func boundedHomeReportText(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit]) + "…"
+	}
+	return value
+}
+
+func (report *homeSyncReport) transferError() error {
+	if report.Failed == 0 && report.Skipped == 0 {
+		return nil
+	}
+	for _, file := range report.Files {
+		if file.Error != "" {
+			return fmt.Errorf("%d failed, %d skipped; %s: %s", report.Failed, report.Skipped, file.Path, file.Error)
+		}
+	}
+	return fmt.Errorf("%d failed, %d skipped", report.Failed, report.Skipped)
+}
+
+func syncHomeMapping(space homeSpace, node homeNode, m homeMapping, username string) (homeSyncReport, error) {
+	var report homeSyncReport
 	localRoot, err := localHomeRoot(username, space, m.Source)
 	if err != nil {
-		return err
+		return report, err
 	}
 	if err := os.MkdirAll(localRoot, 0700); err != nil {
-		return fmt.Errorf("create local Warden Home folder: %w", err)
+		return report, fmt.Errorf("create local Warden Home folder: %w", err)
 	}
-	target, err := cleanHomePart(m.Target)
-	if err != nil {
-		return err
-	}
-	remoteRoot := strings.Trim(space.Prefix, "/") + "/" + target
 	client, err := homeHTTPClient(node, username)
 	if err != nil {
-		return err
+		return report, err
 	}
 	defer client.CloseIdleConnections()
+	return syncHomeMappingFiles(space, node, m, localRoot, client)
+}
+
+// This boundary also lets transfer failures be exercised against a real HTTP
+// server and temporary folder without a signed-in Windows profile.
+func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRoot string, client *http.Client) (homeSyncReport, error) {
+	var report homeSyncReport
+	target, err := cleanHomePart(m.Target)
+	if err != nil {
+		return report, err
+	}
+	remoteRoot := strings.Trim(space.Prefix, "/") + "/" + target
 	remote, err := listHomeFiles(client, node, remoteRoot)
 	if err != nil {
-		return err
+		return report, err
 	}
 	remoteByPath := map[string]homeRemoteFile{}
 	for _, f := range remote {
 		remoteByPath[f.Path] = f
 	}
+	handled := map[string]bool{}
+	canUpload := space.AccessMode != "read" && space.SyncMode != "download"
 	if space.SyncMode != "upload" {
 		for _, f := range remote {
-			rel := strings.TrimPrefix(strings.TrimPrefix(f.Path, remoteRoot), "/")
+			if !strings.HasPrefix(f.Path, remoteRoot+"/") {
+				report.record(space.Name, f.Path, "download", "failed", 0, errors.New("node returned a file outside the assigned folder"))
+				continue
+			}
+			rel := strings.TrimPrefix(f.Path, remoteRoot+"/")
 			clean, err := cleanHomePart(rel)
 			if err != nil {
+				report.record(space.Name, rel, "download", "failed", 0, err)
 				continue
 			}
 			dst := filepath.Join(localRoot, filepath.FromSlash(clean))
 			abs, _ := filepath.Abs(dst)
 			if !strings.HasPrefix(strings.ToLower(abs), strings.ToLower(localRoot+string(os.PathSeparator))) {
+				report.record(space.Name, rel, "download", "failed", 0, errors.New("download path escaped the local folder"))
 				continue
 			}
 			info, statErr := os.Stat(abs)
+			if statErr != nil && !os.IsNotExist(statErr) {
+				report.record(space.Name, rel, "download", "failed", 0, statErr)
+				continue
+			}
+			if f.Size < 0 || f.Size > space.MaxFileBytes {
+				report.record(space.Name, rel, "download", "skipped", 0, errors.New("file exceeds the configured size limit"))
+				continue
+			}
 			conflictPolicy := space.ConflictPolicy
 			if space.AccessMode == "read" {
 				conflictPolicy = "server_wins"
+			}
+			if statErr == nil && info.ModTime().Unix() == f.ModTime && info.Size() == f.Size {
+				report.record(space.Name, rel, "compare", "unchanged", 0, nil)
+				handled[f.Path] = true
+				continue
 			}
 			if statErr == nil && conflictPolicy == "keep_both" && info.ModTime().Unix() != f.ModTime {
 				if info.ModTime().Unix() > f.ModTime {
 					abs = abs + ".server-conflict-" + time.Now().UTC().Format("20060102-150405")
 				} else {
-					_ = os.Rename(abs, abs+".local-conflict-"+time.Now().UTC().Format("20060102-150405"))
-				}
-			} else if statErr == nil && info.ModTime().Unix() >= f.ModTime && conflictPolicy != "server_wins" {
-				continue
-			}
-			resp, err := homeRequest(client, node, http.MethodGet, f.Path, nil, 0)
-			if err != nil {
-				continue
-			}
-			if resp.StatusCode == 200 {
-				_ = os.MkdirAll(filepath.Dir(abs), 0700)
-				tmp, createErr := os.CreateTemp(filepath.Dir(abs), ".warden-home-")
-				if createErr == nil {
-					copied, copyErr := io.CopyN(tmp, resp.Body, space.MaxFileBytes+1)
-					_ = tmp.Close()
-					if (copyErr == nil || copyErr == io.EOF) && copied <= space.MaxFileBytes {
-						if renameErr := os.Rename(tmp.Name(), abs); renameErr != nil {
-							_ = os.Remove(abs)
-							_ = os.Rename(tmp.Name(), abs)
-						}
-						_ = os.Chtimes(abs, time.Now(), time.Unix(f.ModTime, 0))
-					} else {
-						_ = os.Remove(tmp.Name())
+					if err := os.Rename(abs, abs+".local-conflict-"+time.Now().UTC().Format("20060102-150405")); err != nil {
+						report.record(space.Name, rel, "download", "failed", 0, err)
+						continue
 					}
 				}
+			} else if statErr == nil && info.ModTime().Unix() > f.ModTime && conflictPolicy != "server_wins" {
+				if !canUpload {
+					report.record(space.Name, rel, "compare", "skipped", 0, errors.New("newer local file retained by conflict policy"))
+				}
+				continue
+			}
+			copied, err := downloadHomeFile(client, node, f, abs, space.MaxFileBytes)
+			if err != nil {
+				report.record(space.Name, rel, "download", "failed", 0, err)
+				continue
+			}
+			report.record(space.Name, rel, "download", "downloaded", copied, nil)
+			if abs == dst {
+				handled[f.Path] = true
+			}
+		}
+	}
+	if !canUpload {
+		return report, report.transferError()
+	}
+	if !node.Writable {
+		return report, errors.New("selected replica is read-only; trying primary")
+	}
+	walkErr := filepath.Walk(localRoot, func(path string, info os.FileInfo, walkErr error) error {
+		rel, err := filepath.Rel(localRoot, path)
+		if err != nil {
+			report.record(space.Name, m.Source, "scan", "failed", 0, err)
+			return nil
+		}
+		if walkErr != nil {
+			report.record(space.Name, rel, "scan", "failed", 0, walkErr)
+			return nil
+		}
+		if info == nil || info.IsDir() {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			report.record(space.Name, rel, "upload", "skipped", 0, errors.New("only regular files can be synchronized"))
+			return nil
+		}
+		if info.Size() > space.MaxFileBytes {
+			report.record(space.Name, rel, "upload", "skipped", 0, errors.New("file exceeds the configured size limit"))
+			return nil
+		}
+		remotePath := remoteRoot + "/" + filepath.ToSlash(rel)
+		if handled[remotePath] {
+			return nil
+		}
+		if rf, ok := remoteByPath[remotePath]; ok && (rf.ModTime > info.ModTime().Unix() || (rf.ModTime == info.ModTime().Unix() && rf.Size == info.Size())) {
+			report.record(space.Name, rel, "compare", "unchanged", 0, nil)
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			report.record(space.Name, rel, "upload", "failed", 0, err)
+			return nil
+		}
+		counter := &homeByteCounter{}
+		resp, err := homeRequest(client, node, http.MethodPut, remotePath, io.TeeReader(f, counter), info.ModTime().Unix())
+		f.Close()
+		if err == nil {
+			io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				err = fmt.Errorf("home upload HTTP %d", resp.StatusCode)
 			}
 			resp.Body.Close()
 		}
-	}
-	if space.AccessMode == "read" || space.SyncMode == "download" {
-		return nil
-	}
-	if !node.Writable {
-		return errors.New("selected replica is read-only; trying primary")
-	}
-	if space.SyncMode != "download" {
-		var uploadErr error
-		_ = filepath.Walk(localRoot, func(path string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil || info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Size() > space.MaxFileBytes {
-				return nil
-			}
-			rel, err := filepath.Rel(localRoot, path)
-			if err != nil {
-				return nil
-			}
-			remotePath := remoteRoot + "/" + filepath.ToSlash(rel)
-			if rf, ok := remoteByPath[remotePath]; ok && rf.ModTime >= info.ModTime().Unix() {
-				return nil
-			}
-			f, err := os.Open(path)
-			if err != nil {
-				return nil
-			}
-			resp, err := homeRequest(client, node, http.MethodPut, remotePath, f, info.ModTime().Unix())
-			f.Close()
-			if err == nil {
-				io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-				if resp.StatusCode >= 300 {
-					uploadErr = fmt.Errorf("home upload HTTP %d", resp.StatusCode)
-				}
-				resp.Body.Close()
-			} else {
-				uploadErr = err
-			}
-			return nil
-		})
-		if uploadErr != nil {
-			return uploadErr
+		if err == nil && counter.n != info.Size() {
+			err = errors.New("file changed during upload; retry the sync")
 		}
+		if err != nil {
+			report.record(space.Name, rel, "upload", "failed", 0, err)
+		} else {
+			report.record(space.Name, rel, "upload", "uploaded", counter.n, nil)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		report.record(space.Name, m.Source, "scan", "failed", 0, walkErr)
 	}
-	return nil
+	return report, report.transferError()
+}
+
+type homeByteCounter struct{ n int64 }
+
+func (counter *homeByteCounter) Write(p []byte) (int, error) {
+	counter.n += int64(len(p))
+	return len(p), nil
+}
+
+func downloadHomeFile(client *http.Client, node homeNode, file homeRemoteFile, dst string, maxBytes int64) (int64, error) {
+	resp, err := homeRequest(client, node, http.MethodGet, file.Path, nil, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("home download HTTP %d", resp.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+		return 0, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".warden-home-")
+	if err != nil {
+		return 0, err
+	}
+	defer os.Remove(tmp.Name())
+	copied, err := io.Copy(tmp, io.LimitReader(resp.Body, maxBytes+1))
+	closeErr := tmp.Close()
+	if err != nil {
+		return 0, err
+	}
+	if closeErr != nil {
+		return 0, closeErr
+	}
+	if copied > maxBytes || copied != file.Size {
+		return 0, fmt.Errorf("incomplete download: expected %d bytes, received %d", file.Size, copied)
+	}
+	// Failed replacements leave the existing local copy intact.
+	if err := os.Rename(tmp.Name(), dst); err != nil {
+		return 0, err
+	}
+	if err := os.Chtimes(dst, time.Now(), time.Unix(file.ModTime, 0)); err != nil {
+		return 0, err
+	}
+	return copied, nil
 }
 
 func syncWardenHome(username string, raw interface{}) {
@@ -379,16 +554,29 @@ func syncWardenHome(username string, raw interface{}) {
 }
 
 func syncWardenHomeNow(username string, raw interface{}) error {
+	_, err := syncWardenHomeWithReport(username, raw)
+	return err
+}
+
+func syncWardenHomeWithReport(username string, raw interface{}) (report homeSyncReport, finalErr error) {
+	report = homeSyncReport{Kind: "warden_home_sync", Version: 1, Username: username, StartedAt: time.Now().UTC().Format(time.RFC3339), Files: []homeFileResult{}}
+	defer func() {
+		report.CompletedAt = time.Now().UTC().Format(time.RFC3339)
+		report.Status = "completed"
+		if finalErr != nil {
+			report.Status = "failed"
+		}
+	}()
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return err
+		return report, err
 	}
 	var spaces []homeSpace
 	if err := json.Unmarshal(encoded, &spaces); err != nil {
-		return err
+		return report, err
 	}
 	if len(spaces) == 0 {
-		return errors.New("no Warden Home spaces are assigned")
+		return report, errors.New("no Warden Home spaces are assigned")
 	}
 	var failures []string
 	hasSharedSpace := false
@@ -401,34 +589,49 @@ func syncWardenHomeNow(username string, raw interface{}) error {
 		}
 		for _, mapping := range space.Mappings {
 			last := errors.New("no home node address is configured")
+			var mappingReport homeSyncReport
 			for _, node := range space.Nodes {
 				for _, candidate := range homeNodeCandidates(node) {
-					if err := syncHomeMapping(space, candidate, mapping, username); err == nil {
+					var err error
+					mappingReport, err = syncHomeMapping(space, candidate, mapping, username)
+					if err == nil {
 						last = nil
 						break
 					} else {
 						last = err
 					}
+					if mappingReport.Failed+mappingReport.Skipped > 0 {
+						break
+					}
 				}
-				if last == nil {
+				if last == nil || mappingReport.Failed+mappingReport.Skipped > 0 {
 					break
 				}
 			}
+			report.merge(mappingReport)
 			if last != nil {
+				if mappingReport.Failed+mappingReport.Skipped == 0 {
+					report.record(space.Name, mapping.Target, "connect", "failed", 0, last)
+				}
 				logWarn("Warden Home sync for %s failed: %v", space.Name, last)
 				failures = append(failures, space.Name+": "+last.Error())
 			}
 		}
+		if len(space.Mappings) == 0 {
+			report.record(space.Name, "", "configure", "failed", 0, errors.New("no folders are configured"))
+			failures = append(failures, space.Name+": no folders are configured")
+		}
 	}
 	if hasSharedSpace {
 		if err := exposeWardenSharesDrive(username); err != nil {
+			report.record("Warden Shares", "", "map_drive", "failed", 0, err)
 			failures = append(failures, "Warden Shares drive: "+err.Error())
 		}
 	}
 	if len(failures) > 0 {
-		return errors.New(strings.Join(failures, "; "))
+		return report, errors.New(strings.Join(failures, "; "))
 	}
-	return nil
+	return report, nil
 }
 
 // Prefer W: for a recognizable Warden drive, then search every safe user
@@ -527,10 +730,15 @@ func syncWardenHomeJob(p map[string]interface{}) (int, string, error) {
 	if !ok {
 		return 1, "", errors.New("missing signed Warden Home configuration")
 	}
-	if err := syncWardenHomeNow(username, home); err != nil {
+	report, syncErr := syncWardenHomeWithReport(username, home)
+	output, err := json.Marshal(report)
+	if err != nil {
 		return 1, "", err
 	}
-	return 0, "Warden Home synchronization completed", nil
+	if syncErr != nil {
+		return 1, string(output), syncErr
+	}
+	return 0, string(output), nil
 }
 
 // Keep bytes imported in old Go toolchains where io.Discard optimization may
