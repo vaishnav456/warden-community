@@ -2,12 +2,18 @@
 Warden — Dashboard routes
 Main company dashboard: overview, stats, recent activity.
 """
-from flask import Blueprint, render_template, g, request, jsonify, abort
+from flask import Blueprint, render_template, g, request, jsonify, abort, redirect, url_for
 
 import db
 from middleware.auth import login_required, company_required
 
 bp = Blueprint("dashboard", __name__)
+
+
+@bp.route("/")
+def entry():
+    """Community opens the local application, never a marketing page."""
+    return redirect(url_for("dashboard.index" if g.get("admin") else "auth.login"))
 
 
 @bp.route("/dashboard")
