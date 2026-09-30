@@ -114,6 +114,7 @@ class HomeTransferStatusTests(unittest.TestCase):
         rendered = environment.get_template("home/index.html").render(
             transfers=[item], last_completed=None, spaces=[], nodes=[], assignments=[],
             endpoints=[], branches=[], identities=[], g={"admin": {"role": "company_admin"}}, csrf_token=lambda: "csrf",
+            home_section="activity", url_for=lambda *args, **kwargs: "/static/css/home.css",
         )
         self.assertIn("Transfer activity", rendered)
         self.assertIn("1 uploaded (5 bytes)", rendered)

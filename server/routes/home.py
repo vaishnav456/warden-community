@@ -187,7 +187,10 @@ def _home_transfer_view(job, endpoints):
     return item
 
 
-def _render_home(bootstrap_token=None):
+def _render_home(bootstrap_token=None, section=None):
+    section = section or request.args.get("section", "overview")
+    if section not in {"overview", "nodes", "spaces", "access", "activity", "setup"}:
+        section = "overview"
     endpoints = db.get_endpoints(g.company["id"])
     endpoint_lookup = {str(endpoint["id"]): endpoint for endpoint in endpoints}
     branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
@@ -204,7 +207,7 @@ def _render_home(bootstrap_token=None):
         identities=db.get_warden_identities(g.company["id"]),
         endpoints=endpoints, transfers=transfers, last_completed=last_completed,
         server_public_key=get_server_pubkey_b64(), bootstrap_token=bootstrap_token,
-        active_page="home",
+        active_page="home", home_section=section,
     ))
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -635,7 +638,7 @@ def create_space():
     ])
     db.audit(g.company["id"], g.admin["id"], "home_space_created", {"space_id": space["id"], "nodes": selected_ids, "mode": availability_mode})
     flash("Storage space created. Assign it to users or devices next.", "success")
-    return _render_home()
+    return _render_home(section="access")
 
 
 @bp.post("/storage/assignments")
@@ -687,7 +690,7 @@ def create_assignment():
     queued = _queue_assigned_home_syncs(space_id)
     db.audit(g.company["id"], g.admin["id"], "home_assignment_created", {"space_id": space_id, "scope_type": scope_type})
     flash(f"Warden Home assignment saved; queued {queued} active endpoint sync(s).", "success")
-    return _render_home()
+    return _render_home(section="access")
 
 
 @bp.post("/storage/assignments/<assignment_id>/delete")
@@ -703,7 +706,7 @@ def delete_assignment(assignment_id):
     db.audit(g.company["id"], g.admin["id"], "home_assignment_deleted",
              {"assignment_id": assignment_id, "space_id": assignment.get("space_id")})
     flash("Storage access removed. Existing grants expire within 15 minutes; cached local copies are retained.", "success")
-    return _render_home()
+    return _render_home(section="access")
 
 
 @bp.post("/storage/spaces/<space_id>/sync")
@@ -720,7 +723,7 @@ def sync_space(space_id):
         flash(f"Queued {queued} endpoint sync(s). Results appear in Transfer activity.", "success")
     else:
         flash("No new sync was queued. Sign in to an assigned Windows endpoint, or check Transfer activity for an already queued or running sync.", "info")
-    return redirect(url_for("home.index", _anchor="home-transfers"), code=303)
+    return redirect(url_for("home.index", section="activity", _anchor="home-transfers"), code=303)
 
 
 def _queue_assigned_home_syncs(space_id):
