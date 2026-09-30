@@ -1,0 +1,12 @@
+/* Shared by the public site and Warden Clear application. */
+:root {
+  color-scheme: light;
+  --base-950:#fff; --base-900:#f5f7fb; --base-850:#fff; --base-800:#f8fafc;
+  --base-750:#f1f4f8; --base-700:#e8ecf2; --base-600:#d9dee7; --base-500:#b9c1ce;
+  --base-400:#98a2b3; --ink-100:#101828; --ink-300:#344054; --ink-500:#667085; --ink-700:#98a2b3;
+  --accent-400:#3395ff; --accent-500:#0a7aff; --accent-600:#0668db;
+  --online:#12a66a; --offline:#87909f; --warning:#e58a00; --critical:#df3c48;
+  --surface-border:rgba(16,24,40,.09); --focus-ring:rgba(10,122,255,.2);
+  --shadow-soft:0 1px 2px rgba(16,24,40,.04),0 10px 30px rgba(31,48,78,.07);
+  --shadow-float:0 20px 60px rgba(31,48,78,.14);
+}
