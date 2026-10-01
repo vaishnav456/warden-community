@@ -51,6 +51,7 @@ function alertResolveWidget() {
 function topologyPage() {
   return {
     canEdit: false, loading: true, saving: false, floors: [], floor: null,
+    branchId: '',
     rooms: [], placements: [], endpoints: [], placedEndpointIds: [], nodes: [], links: [], discoveredLinks: [],
     alerts: {}, history: [], discovery: {}, snapshots: [], replay: null, selectedEndpointId: '', selectedNodeId: '', selectedLinkId: '',
     search: '', mapSearch: '', statusFilter: 'all', platformFilter: 'all', viewMode: 'physical',
@@ -68,10 +69,25 @@ function topologyPage() {
     refreshTimer: null,
     init() {
       this.canEdit = this.$el.dataset.canEdit === '1';
+      this.branchId = this.$el.dataset.branchId || '';
+      this.floorForm.branch_id = this.branchId;
       this.refresh();
       this.refreshTimer = setInterval(() => { if (!this.dragEndpointId && !this.replay) this.refresh(true); }, 15000);
     },
     destroy() { if (this.refreshTimer) clearInterval(this.refreshTimer); },
+    changeBranch(value) {
+      window.location.assign('/topology?branch_id=' + encodeURIComponent(value || ''));
+    },
+    openFloorModal() {
+      this.floorForm.branch_id = this.branchId;
+      this.showFloorModal = true;
+    },
+    stateQuery(floorId = '', snapshotId = '') {
+      const params = new URLSearchParams({branch_id: this.branchId});
+      if (floorId) params.set('floor_id', floorId);
+      if (snapshotId) params.set('snapshot_id', snapshotId);
+      return '?' + params.toString();
+    },
     get floorEndpoints() {
       if (!this.floor) return [];
       return this.placements.map(placement => {
@@ -122,7 +138,7 @@ function topologyPage() {
       if (!silent) this.loading = true;
       try {
         const wanted = this.floor ? this.floor.id : '';
-        const query = wanted ? `?floor_id=${encodeURIComponent(wanted)}` : '';
+        const query = this.stateQuery(wanted);
         const data = await wardenFetchJSON(`/topology/state${query}`);
         this.floors = data.floors || [];
         this.floor = data.floor || null;
@@ -143,7 +159,7 @@ function topologyPage() {
     async selectFloor(id) {
       this.loading = true;
       try {
-        const data = await wardenFetchJSON(`/topology/state?floor_id=${encodeURIComponent(id)}`);
+        const data = await wardenFetchJSON('/topology/state' + this.stateQuery(id));
         this.floors = data.floors || []; this.floor = data.floor; this.rooms = data.rooms || [];
         this.placements = data.placements || []; this.endpoints = data.endpoints || [];
         this.nodes = data.nodes || []; this.links = data.links || []; this.discoveredLinks = data.discovered_links || [];
@@ -162,7 +178,10 @@ function topologyPage() {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
           body: JSON.stringify(this.floorForm),
         });
-        this.showFloorModal = false; this.floorForm.name = ''; await this.selectFloor(result.floor.id);
+        this.showFloorModal = false; this.floorForm.name = '';
+        this.branchId = result.floor.branch_id || '';
+        window.history.replaceState(null, '', '/topology?branch_id=' + encodeURIComponent(this.branchId));
+        await this.selectFloor(result.floor.id);
         window.wardenToast('Floor created', 'success');
       } catch (error) { window.wardenToast(error.message, 'error'); }
       finally { this.saving = false; }
@@ -236,7 +255,7 @@ function topologyPage() {
       if (!id) { this.replay = null; await this.refresh(); return; }
       this.loading = true;
       try {
-        const data = await wardenFetchJSON(`/topology/state?floor_id=${encodeURIComponent(this.floor.id)}&snapshot_id=${encodeURIComponent(id)}`);
+        const data = await wardenFetchJSON('/topology/state' + this.stateQuery(this.floor.id, id));
         this.rooms = data.rooms || []; this.placements = data.placements || []; this.endpoints = data.endpoints || [];
         this.nodes = data.nodes || []; this.links = data.links || []; this.discoveredLinks = data.discovered_links || [];
         this.alerts = data.alert_summary || {}; this.history = data.history || []; this.snapshots = data.snapshots || [];

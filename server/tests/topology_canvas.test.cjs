@@ -5,6 +5,7 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '../static/j
 const start = source.indexOf('function topologyPage()');
 const end = source.indexOf('\nfunction ', start + 1);
 const context = vm.createContext({
+  URLSearchParams,
   DOMPoint: class {
     constructor(x, y) { this.x = x; this.y = y; }
     matrixTransform() { return this; }
@@ -12,6 +13,13 @@ const context = vm.createContext({
 });
 vm.runInContext(source.slice(start, end), context);
 const page = context.topologyPage();
+page.branchId = 'branch-one';
+assert.equal(page.stateQuery('floor-one', 'snapshot-one'), '?branch_id=branch-one&floor_id=floor-one&snapshot_id=snapshot-one');
+page.openFloorModal();
+assert.equal(page.floorForm.branch_id, 'branch-one');
+assert.equal(page.showFloorModal, true);
+page.branchId = '';
+assert.equal(page.stateQuery(), '?branch_id=');
 page.$refs = { canvas: { getScreenCTM: () => ({ inverse: () => ({}) }) } };
 // Device placement and room drawing share the same coordinates, including
 // positions to the left/top and beyond the former right/bottom edge.

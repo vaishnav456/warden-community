@@ -20,8 +20,30 @@ _COORD_LIMIT = 9000
 
 def _branch_id():
     if g.admin.get("role") == "branch_admin":
-        return str(g.admin.get("branch_id") or "")
+        branch_id = g.admin.get("branch_id")
+        if not branch_id:
+            abort(403)
+        return str(branch_id)
+    if g.admin.get("role") == "technician" and g.admin.get("branch_id"):
+        return str(g.admin["branch_id"])
     return None
+
+
+def _selected_branch_id():
+    """Default to the assigned branch; only organization-wide users may switch."""
+    assigned = _branch_id()
+    requested = request.args.get("branch_id")
+    if assigned:
+        if requested not in (None, "", assigned):
+            abort(403)
+        return assigned
+    selected = str(requested if requested is not None else g.admin.get("branch_id") or "").strip()
+    if not selected:
+        return None
+    branch = db.get_branch(selected)
+    if not branch or str(branch.get("company_id")) != str(g.company["id"]):
+        abort(404)
+    return selected
 
 
 def _floor(floor_id):
@@ -29,6 +51,9 @@ def _floor(floor_id):
     if not floor or str(floor.get("company_id")) != str(g.company["id"]):
         abort(404)
     require_branch_scope(floor.get("branch_id"))
+    assigned = _branch_id()
+    if assigned and str(floor.get("branch_id") or "") != assigned:
+        abort(403)
     return floor
 
 
@@ -123,7 +148,7 @@ def _endpoint_payload(endpoint):
     return payload
 
 
-def _topology_context(company_id, endpoints, nodes, links, placements):
+def _topology_context(company_id, endpoints, nodes, links, placements, floor_id=None, branch_id=None):
     """Build read-only operational context from existing organization telemetry."""
     placed_ids = {str(item.get("endpoint_id")) for item in placements}
     placed_endpoints = [item for item in endpoints if str(item.get("id")) in placed_ids]
@@ -147,6 +172,8 @@ def _topology_context(company_id, endpoints, nodes, links, placements):
         flows = db.get_network_flows(company_id, limit=500)
     except Exception:
         flows = []
+    endpoint_ids = {str(item["id"]) for item in endpoints}
+    flows = [item for item in flows if str(item.get("endpoint_id") or "") in endpoint_ids]
     def add_discovered(source, target_type, target, metadata):
         source_id, target_id = str(source["id"]), str(target["id"])
         pair = frozenset((("endpoint", source_id), (target_type, target_id)))
@@ -239,13 +266,13 @@ def _topology_context(company_id, endpoints, nodes, links, placements):
         item.pop("pair", None)
 
     try:
-        alerts = db.get_alerts(company_id, resolved=False, limit=200)
+        alerts = db.get_alerts(company_id, resolved=False, branch_id=branch_id, limit=200)
     except Exception:
         alerts = []
     alert_summary = {}
     for alert in alerts:
         endpoint_id = str(alert.get("endpoint_id") or "")
-        if not endpoint_id:
+        if endpoint_id not in placed_ids:
             continue
         entry = alert_summary.setdefault(endpoint_id, {"count": 0, "severity": "info", "titles": []})
         entry["count"] += 1
@@ -262,7 +289,9 @@ def _topology_context(company_id, endpoints, nodes, links, placements):
     history = [{
         "id": item.get("id"), "action": item.get("action"), "detail": item.get("detail") or {},
         "endpoint_id": item.get("endpoint_id"), "created_at": item.get("created_at"),
-    } for item in audit_rows if str(item.get("action") or "").startswith("topology_")][:30]
+    } for item in audit_rows if str(item.get("action") or "").startswith("topology_")
+       and (str((item.get("detail") or {}).get("floor_id") or "") == str(floor_id)
+            or str(item.get("endpoint_id") or "") in placed_ids)][:30]
     return discovered, alert_summary, history, len(flows)
 
 
@@ -270,20 +299,24 @@ def _topology_context(company_id, endpoints, nodes, links, placements):
 @login_required
 @company_required
 def index():
-    branch_id = _branch_id()
+    branch_id = _selected_branch_id()
     floors = db.get_topology_floors(g.company["id"], branch_id=branch_id)
     branches = db.get_branches(g.company["id"])
-    if branch_id:
+    if _branch_id():
         branches = [item for item in branches if str(item.get("id")) == branch_id]
-    return render_template("topology/index.html", floors=floors, branches=branches, active_page="topology")
+    return render_template("topology/index.html", floors=floors, branches=branches,
+                           selected_branch_id=branch_id or "", branch_locked=bool(_branch_id()),
+                           active_page="topology")
 
 
 @bp.get("/topology/state")
 @login_required
 @company_required
 def state():
-    branch_id = _branch_id()
+    branch_id = _selected_branch_id()
     floors = db.get_topology_floors(g.company["id"], branch_id=branch_id)
+    if branch_id:
+        floors = [item for item in floors if str(item.get("branch_id") or "") == branch_id]
     allowed = {str(item["id"]): item for item in floors}
     floor_id = str(request.args.get("floor_id") or "")
     if floor_id and floor_id not in allowed:
@@ -302,7 +335,27 @@ def state():
             snapshot = db.get_topology_snapshot(snapshot_id, g.company["id"], floor["id"])
             if not snapshot:
                 abort(404)
-            replay = snapshot.get("state") or {}
+            replay = dict(snapshot.get("state") or {})
+            replay_branch = branch_id or floor.get("branch_id")
+            if replay_branch:
+                replay["endpoints"] = [item for item in replay.get("endpoints", [])
+                                       if str(item.get("branch_id") or "") == str(replay_branch)]
+                visible_ids = {str(item["id"]) for item in replay["endpoints"]}
+                replay["placements"] = [item for item in replay.get("placements", [])
+                                        if str(item.get("endpoint_id")) in visible_ids]
+                replay["placed_endpoint_ids"] = [item for item in replay.get("placed_endpoint_ids", [])
+                                                if str(item) in visible_ids]
+                replay["alert_summary"] = {key: value for key, value in replay.get("alert_summary", {}).items()
+                                           if str(key) in visible_ids}
+                for key in ("links", "discovered_links"):
+                    replay[key] = [item for item in replay.get(key, []) if all(
+                        item.get(kind + "_type") != "endpoint"
+                        or str(item.get(kind + "_id")) in visible_ids
+                        for kind in ("source", "target")
+                    )]
+                replay["history"] = [item for item in replay.get("history", []) if
+                    str((item.get("detail") or {}).get("floor_id") or "") == str(floor["id"])
+                    or str(item.get("endpoint_id") or "") in visible_ids]
             replay.update({
                 "floors": floors, "floor": floor, "snapshots": snapshots,
                 "replay": {"id": snapshot["id"], "captured_at": snapshot["captured_at"],
@@ -310,16 +363,24 @@ def state():
                 "server_time": datetime.now(timezone.utc).isoformat(),
             })
             return jsonify(replay)
-    endpoints = db.get_endpoints(g.company["id"], branch_id=branch_id)
-    if floor and floor.get("branch_id") and not branch_id:
-        endpoints = [item for item in endpoints if str(item.get("branch_id") or "") == str(floor["branch_id"])]
+    endpoint_branch = branch_id or (floor.get("branch_id") if floor else None)
+    endpoints = db.get_endpoints(g.company["id"], branch_id=endpoint_branch)
+    if endpoint_branch:
+        endpoints = [item for item in endpoints if str(item.get("branch_id") or "") == str(endpoint_branch)]
+    endpoint_ids = {str(item["id"]) for item in endpoints}
     all_placements = db.get_topology_placements(g.company["id"])
+    all_placements = [item for item in all_placements if str(item.get("endpoint_id")) in endpoint_ids]
     placements = [item for item in all_placements if floor and str(item["floor_id"]) == str(floor["id"])]
     rooms = db.get_topology_rooms(g.company["id"], floor["id"]) if floor else []
     nodes = db.get_topology_nodes(g.company["id"], floor["id"]) if floor else []
     links = db.get_topology_links(g.company["id"], floor["id"]) if floor else []
+    links = [item for item in links if all(
+        item.get(kind + "_type") != "endpoint" or str(item.get(kind + "_id")) in endpoint_ids
+        for kind in ("source", "target")
+    )]
     discovered_links, alert_summary, history, observation_count = _topology_context(
         g.company["id"], endpoints, nodes, links, placements,
+        floor_id=floor["id"] if floor else None, branch_id=endpoint_branch,
     )
     payload = {
         "floors": floors, "floor": floor, "rooms": rooms, "placements": placements,
@@ -356,7 +417,10 @@ def create_floor():
     name = str(body.get("name") or "").strip()[:120]
     building = str(body.get("building") or "Office").strip()[:120]
     requested_branch = str(body.get("branch_id") or "").strip() or None
-    branch_id = _branch_id() or requested_branch
+    assigned_branch = _branch_id()
+    if assigned_branch and requested_branch and requested_branch != assigned_branch:
+        abort(403)
+    branch_id = assigned_branch or requested_branch
     if not name or not building:
         return jsonify({"error": "name_and_building_required"}), 400
     if branch_id:
