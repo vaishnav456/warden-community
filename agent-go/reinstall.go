@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"golang.org/x/sys/windows"
 )
 
 const reinstallRoot = `C:\ProgramData\WardenReinstall`
@@ -133,9 +136,24 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	}
 	// A queued task is not a running updater. Give Windows startup pressure
 	// time to recover, retry the SAME IgnoreNew task, and require helper proof.
+	directAttempted := false
 	err = waitForReinstallLaunch(
 		func() (bool, error) { return reinstallHelperStarted(statusPath) },
-		func() error { _, err := runReinstallTaskCommand("/Run", "/TN", taskName); return err },
+		func() error {
+			if !directAttempted {
+				directAttempted = true
+				if err := verifyExecutionArtifact(helperPath, helperHash, requireSignature); err != nil {
+					return err
+				}
+				// The service is already SYSTEM. Launch the verified helper without
+				// waiting for a stalled Task Scheduler queue; retain its boot task.
+				if err := startDetachedReinstallHelper(helperPath, strings.Fields(helperArgs)); err == nil {
+					return nil
+				}
+			}
+			_, err := runReinstallTaskCommand("/Run", "/TN", taskName)
+			return err
+		},
 		time.Now, time.Sleep, reinstallLaunchTimeout,
 	)
 	if err != nil {
@@ -223,6 +241,19 @@ func runReinstallHelper(jobID, expectedSHA256, expectedHelperSHA256 string, requ
 	logPath := filepath.Join(handoffDir, "reinstall.log")
 	statusPath := filepath.Join(dataDir, "reinstall-status-"+strings.ToLower(jobID)+".log")
 	taskName := "Warden-Reinstall-" + strings.ToLower(jobID)
+	// Direct launch and reboot recovery must never replace the service twice.
+	// Windows releases this exclusive handle automatically after power loss.
+	lock, err := acquireReinstallLock(handoffDir)
+	if errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		return 0 // The authorized owner is already handling this job.
+	}
+	if err != nil {
+		return 8
+	}
+	defer windows.CloseHandle(lock)
+	// Revoke authorization before releasing the lock, fencing delayed launches
+	// even if deleting a queued boot task fails after success or rollback.
+	defer func() { _ = cancelReinstallHandoff(handoffDir) }()
 	deleteTask := func() {
 		_, _ = runReinstallTaskCommand("/Delete", "/TN", taskName, "/F")
 	}

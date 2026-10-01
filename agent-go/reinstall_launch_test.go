@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func simulateLaunch(t *testing.T, delay, timeout time.Duration, launchError error) (int, error) {
@@ -185,5 +187,66 @@ func TestReinstallChangedInstalledFileCannotBecomeBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
 		t.Fatal("unexpected backup created")
+	}
+}
+
+func TestReinstallExclusiveHelperLockAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+	owner, err := acquireReinstallLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := acquireReinstallLock(dir)
+	if err == nil {
+		windows.CloseHandle(duplicate)
+		windows.CloseHandle(owner)
+		t.Fatal("two helpers acquired the same handoff")
+	}
+	if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		windows.CloseHandle(owner)
+		t.Fatalf("unexpected lock error: %v", err)
+	}
+	windows.CloseHandle(owner)
+	resumed, err := acquireReinstallLock(dir)
+	if err != nil {
+		t.Fatalf("released lock prevented reboot recovery: %v", err)
+	}
+	windows.CloseHandle(resumed)
+}
+
+func TestReinstallHelperLockFailsClosedOnMissingDirectory(t *testing.T) {
+	if h, err := acquireReinstallLock(filepath.Join(t.TempDir(), "missing")); err == nil {
+		windows.CloseHandle(h)
+		t.Fatal("missing protected handoff directory accepted")
+	}
+}
+
+func TestDetachedReinstallLaunchRunsWithoutTaskScheduler(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "detached-start.txt")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARDEN_DETACHED_PROBE_PATH", path)
+	if err := startDetachedReinstallHelper(exe, []string{"-test.run=^TestDetachedReinstallProbeChild$"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && string(data) == "started" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("detached helper did not execute")
+}
+
+func TestDetachedReinstallProbeChild(t *testing.T) {
+	path := os.Getenv("WARDEN_DETACHED_PROBE_PATH")
+	if path == "" {
+		t.Skip("only runs inside the isolated detached-process probe")
+	}
+	if err := os.WriteFile(path, []byte("started"), 0600); err != nil {
+		t.Fatal(err)
 	}
 }

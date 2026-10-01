@@ -3,15 +3,19 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 const reinstallLaunchTimeout = 90 * time.Second
 const reinstallRetryInterval = 30 * time.Second
 
-// Retry the same IgnoreNew scheduled task, not new helpers or unchecked binaries.
+// Retry a bounded launcher; callers use one direct launch plus the same boot task.
 // Clock injection keeps delayed-launch and timeout regressions deterministic.
 func waitForReinstallLaunch(probe func() (bool, error), launch func() error,
 	now func() time.Time, sleep func(time.Duration), timeout time.Duration) error {
@@ -51,6 +55,27 @@ func reinstallHelperStarted(statusPath string) (bool, error) {
 	}
 	// A shell marker alone is not proof that the verified helper ran.
 	return strings.Contains(string(data), "Verified reinstall helper started"), nil
+}
+
+func startDetachedReinstallHelper(path string, args []string) error {
+	cmd := exec.Command(path, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow: true,
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func acquireReinstallLock(handoffDir string) (windows.Handle, error) {
+	path, err := windows.UTF16PtrFromString(filepath.Join(handoffDir, "helper.lock"))
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	return windows.CreateFile(path, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil,
+		windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
 }
 
 func reinstallHandoffAllowed(handoffDir string) bool {
