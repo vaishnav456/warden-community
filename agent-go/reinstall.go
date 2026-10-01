@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -117,14 +118,15 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	taskXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Author>Warden</Author></RegistrationInfo>
-  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
-  <Principals><Principal id="System"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT45S</Delay></BootTrigger></Triggers>
+  <Principals><Principal id="System"><UserId>S-1-5-18</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>true</StartWhenAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <Enabled>true</Enabled><Hidden>true</Hidden><WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT15M</ExecutionTimeLimit><Priority>4</Priority>
@@ -134,37 +136,45 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	if err := os.WriteFile(taskXMLPath, encodeUTF16LE(taskXML), 0600); err != nil {
 		return 1, "", fmt.Errorf("write reinstall task definition: %w", err)
 	}
-	createOut, err := exec.Command(
-		"schtasks.exe", "/Create", "/TN", taskName,
+	if err := os.WriteFile(filepath.Join(handoffDir, "authorized"), []byte("prepared"), 0600); err != nil {
+		return 1, "", fmt.Errorf("authorize verified update handoff: %w", err)
+	}
+	createOut, err := runReinstallTaskCommand(
+		"/Create", "/TN", taskName,
 		"/XML", taskXMLPath, "/F",
-	).CombinedOutput()
+	)
 	if err != nil {
-		return 1, string(createOut), fmt.Errorf("create persistent reinstall handoff task: %w", err)
+		fenceErr := cancelReinstallHandoff(handoffDir)
+		_, deleteErr := runReinstallTaskCommand("/Delete", "/TN", taskName, "/F")
+		return 1, string(createOut), fmt.Errorf("create persistent reinstall handoff task: %w (cancellation=%v; task cleanup=%v)", err, fenceErr, deleteErr)
 	}
-	runOut, err := exec.Command("schtasks.exe", "/Run", "/TN", taskName).CombinedOutput()
+	// A queued task is not a running updater. Give Windows startup pressure
+	// time to recover, retry the SAME IgnoreNew task, and require helper proof.
+	err = waitForReinstallLaunch(
+		func() (bool, error) { return reinstallHelperStarted(statusPath) },
+		func() error { _, err := runReinstallTaskCommand("/Run", "/TN", taskName); return err },
+		time.Now, time.Sleep, reinstallLaunchTimeout,
+	)
 	if err != nil {
-		return 1, string(runOut), fmt.Errorf("start persistent reinstall handoff task: %w", err)
-	}
-	// `/Run` only confirms that Task Scheduler accepted the request; it can
-	// still fail to launch the action. Do not report success until the runner
-	// itself creates its SYSTEM-only marker.
-	runnerStarted := false
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		if _, statErr := os.Stat(statusPath); statErr == nil {
-			runnerStarted = true
-			break
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if !runnerStarted {
-		queryOut, _ := exec.Command(
-			"schtasks.exe", "/Query", "/TN", taskName, "/V", "/FO", "LIST",
-		).CombinedOutput()
-		_ = exec.Command("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
-		return 1, string(queryOut), fmt.Errorf("reinstall handoff task was accepted but its runner did not start")
+		// Fence a late launch BEFORE deleting the persistent boot task. The
+		// helper checks this again before stopping/replacing the service.
+		fenceErr := cancelReinstallHandoff(handoffDir)
+		queryOut, _ := runReinstallTaskCommand("/Query", "/TN", taskName, "/V", "/FO", "LIST")
+		_, deleteErr := runReinstallTaskCommand("/Delete", "/TN", taskName, "/F")
+		return 1, string(queryOut), fmt.Errorf("update launch failed: %w (cancellation=%v; task cleanup=%v)", err, fenceErr, deleteErr)
 	}
 
 	return 0, fmt.Sprintf("Verified agent %s update handoff started; service restart scheduled", version), nil
+}
+
+func runReinstallTaskCommand(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "schtasks.exe", args...).CombinedOutput()
+	if ctx.Err() != nil {
+		return output, ctx.Err()
+	}
+	return output, err
 }
 
 // Task Scheduler's /XML importer requires a native Unicode file for this
@@ -208,7 +218,7 @@ func runReinstallHelper(jobID, expectedSHA256, expectedHelperSHA256 string, requ
 	statusPath := filepath.Join(dataDir, "reinstall-status-"+strings.ToLower(jobID)+".log")
 	taskName := "Warden-Reinstall-" + strings.ToLower(jobID)
 	deleteTask := func() {
-		_ = exec.Command("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
+		_, _ = runReinstallTaskCommand("/Delete", "/TN", taskName, "/F")
 	}
 	writeLog := func(message string) {
 		line := []byte(time.Now().UTC().Format(time.RFC3339) + " " + message + "\r\n")
@@ -219,18 +229,28 @@ func runReinstallHelper(jobID, expectedSHA256, expectedHelperSHA256 string, requ
 			}
 		}
 	}
-	writeLog("Reinstall helper started")
 	currentExe, err := os.Executable()
 	if err != nil || verifyExecutionArtifact(currentExe, expectedHelperSHA256, requireSignature) != nil {
 		writeLog("Reinstall helper integrity verification failed closed")
 		deleteTask()
 		return 6
 	}
+	if !reinstallHandoffAllowed(handoffDir) {
+		writeLog("Update handoff was cancelled; installed service unchanged")
+		deleteTask()
+		return 7
+	}
+	writeLog("Verified reinstall helper started")
 
 	// Give the service time to report the accepted job before interrupting its
 	// heartbeat loop. The persistent task survives a reboot if Windows goes
 	// down during this handoff.
 	time.Sleep(8 * time.Second)
+	if !reinstallHandoffAllowed(handoffDir) {
+		writeLog("Update handoff cancelled before service changes")
+		deleteTask()
+		return 7
+	}
 	if err := unlockService(); err != nil {
 		writeLog("Could not unlock service for update: " + err.Error())
 		deleteTask()
@@ -274,7 +294,7 @@ func runReinstallHelper(jobID, expectedSHA256, expectedHelperSHA256 string, requ
 			_ = os.Remove(providerAssetPath)
 		}
 	}
-	if err := copyFile(installedExePath, backupPath); err != nil {
+	if err := preserveReinstallBackup(installedExePath, backupPath, expectedHelperSHA256); err != nil {
 		writeLog("Could not create rollback copy: " + err.Error())
 		_ = startService()
 		applyTamperProtection()
