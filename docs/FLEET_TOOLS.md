@@ -4,9 +4,9 @@ Implemented in the main application and Community. Community remains a single-or
 
 ## Safe release order
 
-These are local, unpublished changes. Back up the database and Home recovery keys before release. Apply the existing package-storage and reliability migrations first, then `migrations/2026-10-01-fleet-tools.sql`. Fresh databases use the corresponding `db-init` scripts. Deploy the server before new agents/Home Nodes. Existing agents remain compatible, but do not provide the new support shortcut, traffic enforcement or transport receipts. Pilot the Windows support UI and one Home Node before broad agent rollout; local tests cannot establish live-device behavior.
+Server schema and application screens can be deployed independently of agent and Home releases. Back up the database and Home recovery keys before release. Apply the existing package-storage and reliability migrations first, then `migrations/2026-10-01-fleet-tools.sql`. Fresh databases use the corresponding `db-init` scripts. Deploy the server before new agents/Home Nodes. Existing agents remain compatible, but do not provide the new support shortcut, traffic enforcement or transport receipts. Pilot the Windows support UI and one Home Node before broad agent rollout; local tests cannot establish live-device behavior.
 
-All automatic application rules begin disabled unless an administrator explicitly enables them during approval. Creating a policy preset does not deploy it. Backups and package caching are opt-in. This implementation does not push releases or queue actions on connected devices.
+All automatic application rules begin disabled unless an administrator explicitly enables them during approval. Creating a policy preset does not deploy it. Backups and package caching are opt-in. Installing the server schema and screens does not itself enable patch rules or publish new agent/Home binaries. Existing authorized schedules and update settings remain in effect.
 
 ## Application patches and policies
 
