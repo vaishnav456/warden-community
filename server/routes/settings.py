@@ -1465,12 +1465,53 @@ def set_auto_update():
     return jsonify({"ok": True})
 
 
+@bp.route("/settings/security/vault", methods=["GET", "POST"])
+@login_required
+@company_required
+def vault():
+    """Recovery page: deliberately never loads encrypted endpoint records."""
+    from services.tenant_crypto import is_unlocked, unlock_byok
+    from services.vault_access import can_unlock_vault
+    if g.company.get("encryption_mode") != "byok":
+        return redirect(url_for("settings.security"))
+    if is_unlocked(g.company["id"]) and request.method == "GET":
+        return redirect(url_for("dashboard.index"))
+    error = None
+    status = 200
+    allowed = can_unlock_vault()
+    if request.method == "POST":
+        if not allowed:
+            abort(403)
+        from middleware.security import check_rate_limit
+        if not check_rate_limit(f"vault-unlock:{g.company['id']}:{g.admin['id']}", 10, fail_closed=True):
+            error, status = "Too many attempts. Please try again later.", 429
+        else:
+            try:
+                unlock_byok(g.company["id"], request.form.get("passphrase", ""),
+                            g.company.get("wrapped_dek"), g.company.get("byok_salt"))
+            except ValueError:
+                error, status = "Incorrect vault passphrase.", 401
+            else:
+                db.audit(g.company["id"], g.admin["id"], "tenant_vault_unlocked")
+                response = redirect(url_for("dashboard.index"), code=303)
+                response.headers["Cache-Control"] = "no-store"
+                return response
+    from flask import make_response
+    response = make_response(render_template("settings/vault_locked.html",
+                                             can_unlock=allowed, error=error), status)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.route("/settings/security/vault/unlock", methods=["POST"])
 @login_required
 @company_required
 @role_required("company_admin")
 def unlock_vault():
     from services.tenant_crypto import unlock_byok
+    from middleware.security import check_rate_limit
+    if not check_rate_limit(f"vault-unlock:{g.company['id']}:{g.admin['id']}", 10, fail_closed=True):
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
     if g.company.get("encryption_mode") != "byok":
         return jsonify({"error": "This organization isn't in BYOK mode"}), 400
     passphrase = request.form.get("passphrase", "")

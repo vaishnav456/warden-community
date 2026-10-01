@@ -36,7 +36,7 @@
       <div class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 text-sm text-ink-300 space-y-3">
         <p>BYOK mode — only you know the vault passphrase; the server never
            stores it. Unlock after every server restart so agents can keep
-           encrypting new data.</p>
+           encrypting new data. Protected console pages will show a dedicated unlock screen while locked.</p>
         <form @submit.prevent="post($el, '{{ url_for('settings.unlock_vault') }}')" class="flex items-end gap-3">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div>

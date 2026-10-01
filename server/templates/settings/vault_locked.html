@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unlock organization vault — Warden</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}?v={{ asset_v }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/vault.css') }}?v={{ asset_v }}">
+</head>
+<body><main class="vault-shell">
+  <img src="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}" width="48" height="48" alt="Warden">
+  <p class="vault-kicker">WARDEN · BRING YOUR OWN KEY</p>
+  <h1>Your organization vault is locked</h1>
+  <p>Your encrypted data is still protected. A server restart or a manual lock clears the unlocked key from server memory.</p>
+  {% if error %}<p class="vault-error" role="alert">{{ error }}</p>{% endif %}
+  {% if can_unlock %}
+  <p>Enter your existing vault passphrase to resume protected operations. Warden does not save this passphrase; unlocking makes the key available to this running server process, not just this browser session.</p>
+  <form method="post" action="{{ url_for('settings.vault') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="vault-passphrase">Vault passphrase</label>
+    <input type="password" id="vault-passphrase" name="passphrase" required autocomplete="off">
+    <button type="submit">Unlock vault</button>
+  </form>
+  {% else %}
+  <p>Ask your organization administrator to unlock the vault. Your account cannot unlock it.</p>
+  {% endif %}
+  <p class="vault-note">Protected reads and writes cannot proceed while locked. Unlocking does not automatically repeat a failed action. If the passphrase is lost, Warden cannot recover the encrypted data.</p>
+  <form method="post" action="{{ url_for('auth.logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="vault-signout">Sign out</button>
+  </form>
+</main></body></html>

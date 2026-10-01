@@ -178,6 +178,15 @@ def company_required(f):
     def decorated(*args, **kwargs):
         if g.company is None:
             abort(403)
+        from services.tenant_crypto import is_unlocked
+        if (g.company.get("encryption_mode") == "byok"
+                and not is_unlocked(g.company["id"])
+                and request.endpoint not in {
+                    "settings.vault", "settings.unlock_vault", "settings.lock_vault",
+                    "settings.rewrap_encryption_key",
+                }):
+            from services.vault_access import locked_vault_response
+            return locked_vault_response()
         return f(*args, **kwargs)
     return decorated
 

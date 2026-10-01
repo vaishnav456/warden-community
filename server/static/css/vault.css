@@ -1,0 +1,18 @@
+@import url('./design-tokens.css');
+* {box-sizing:border-box}
+body {margin:0;background:var(--base-900);color:var(--ink-100);font-family:Inter,system-ui,sans-serif;line-height:1.6}
+.vault-shell {width:min(560px,calc(100% - 32px));margin:6vh auto;padding:32px;background:white;border:1px solid #e4e7ec;border-radius:20px;box-shadow:0 20px 60px #1018280d}
+.vault-kicker {color:var(--accent-600);font-size:12px;font-weight:700;letter-spacing:.08em}
+h1 {font-size:28px;line-height:1.25}
+p {font-size:14px;color:var(--ink-500)}
+form {display:grid;gap:12px;margin:24px 0}
+label {font-size:14px;font-weight:600}
+input,button {width:100%;font:inherit;border-radius:9px;padding:12px}
+input {border:1px solid #d0d5dd;min-width:0}
+button {border:0;background:var(--accent-500);color:white;font-weight:600;cursor:pointer}
+a {color:var(--accent-600)}
+.vault-signout {background:transparent;color:var(--accent-600);border:1px solid #d0d5dd}
+:focus-visible {outline:3px solid var(--accent-500);outline-offset:3px}
+.vault-error {padding:12px;border:1px solid #fda29b;border-radius:8px;background:#fff1f0;color:#b42318}
+.vault-note {font-size:12px}
+@media(max-width:480px) {.vault-shell {padding:24px;margin:24px auto}h1 {font-size:24px}}

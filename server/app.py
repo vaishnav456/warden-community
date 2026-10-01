@@ -267,6 +267,10 @@ def favicon_compat():
 
 # ── Error handlers ────────────────────────────────────────────────────────────
 
+from services.tenant_crypto import VaultLocked
+from services.vault_access import locked_vault_response
+app.register_error_handler(VaultLocked, locked_vault_response)
+
 @app.errorhandler(400)
 def bad_request(e):
     if request.path.startswith("/api/"):

@@ -6,6 +6,28 @@ organization. In managed mode the DEK is wrapped by
 existing installations can upgrade without rotating secrets. BYOK can re-wrap
 the same DEK later without re-encrypting every row.
 
+## BYOK restart and recovery
+
+Switching managed mode to BYOK re-wraps the existing DEK; existing ciphertext
+does not change. The current process remains unlocked after the switch.
+The unwrapped DEK is held only in process memory and is lost on restart or
+explicit vault lock. An ordinary HTTP 500 does not itself clear this cache.
+
+While locked, protected console requests lead to
+`/settings/security/vault`, a standalone page that never reads encrypted
+endpoint records. An organization administrator can enter the existing
+passphrase there. Other roles see administrator-contact guidance. Unlocking
+is CSRF-protected, rate-limited and audited, and unlocks the organization for
+the running process rather than just one browser session.
+
+API/fetch requests receive HTTP 423 with `error: tenant_vault_locked` and
+`unlock_url`; HTMX responses also provide an `HX-Redirect` to the unlock page.
+Protected operations fail closed while locked, with no plaintext fallback.
+Failed mutations are not automatically replayed after unlock. No passphrase
+or derived wrapping key is persisted; losing the passphrase makes encrypted
+data unrecoverable. BYOK does not hide plaintext from an authorized running
+server once unlocked.
+
 ## Encrypted endpoint data
 
 The following values are ciphertext in PostgreSQL and are decrypted only in
