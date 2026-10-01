@@ -973,6 +973,19 @@ def get_endpoint_recovery_keys(endpoint_id, current_only=False):
     return _get(path + "&order=escrowed_at.desc")
 
 
+def update_endpoint_recovery_status(company_id, endpoint_id, key_id, volume_status,
+                                    protection_status, encryption_percentage, collected_at):
+    # A status refresh must not touch the encrypted recovery password, escrow
+    # time or current/retired flags. Timestamp fencing rejects delayed reports.
+    return _patch(
+        f"endpoint_recovery_keys?id=eq.{_q(key_id)}&company_id=eq.{_q(company_id)}"
+        f"&endpoint_id=eq.{_q(endpoint_id)}&is_current=eq.true"
+        f"&last_reported_at=lt.{_q(collected_at)}",
+        {"volume_status": volume_status, "protection_status": protection_status,
+         "encryption_percentage": encryption_percentage, "last_reported_at": collected_at},
+    )
+
+
 def escrow_endpoint_recovery_key(company, endpoint_id, volume_mount, protector_id,
                                  recovery_password, volume_status=None,
                                  protection_status=None, encryption_percentage=None):

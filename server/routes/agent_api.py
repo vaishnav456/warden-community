@@ -19,6 +19,8 @@ import db
 from middleware.auth import agent_auth_required
 from middleware.security import check_rate_limit, get_client_ip
 from services.signing import sign_job
+from services.timezones import windows_timezone
+from services.bitlocker_status import record_status as record_bitlocker_status
 from services.agent_updates import AgentBuildUnavailable, as_download, build_for_endpoint
 from services.experience_assets import is_available
 from services.home_sync import (
@@ -542,6 +544,12 @@ def heartbeat():
     if isinstance(body.get("policy_inventory"), dict):
         _record_policy_values(endpoint, body["policy_inventory"], "agent_startup")
 
+    if reported_platform == "windows" and body.get("bitlocker_status"):
+        try:
+            record_bitlocker_status(endpoint, body["bitlocker_status"])
+        except Exception:
+            current_app.logger.exception("BitLocker status update deferred for endpoint %s", endpoint["id"])
+
     # Record metrics
     if cpu_pct is not None:
         db.insert_metric(
@@ -591,8 +599,8 @@ def heartbeat():
     capabilities_field = body.get("capabilities")
     capability_aware = "capabilities" in body
     reported_capabilities = {
-        str(value) for value in capabilities_field
-        if isinstance(capabilities_field, list) and isinstance(value, str)
+        value for value in (capabilities_field if isinstance(capabilities_field, list) else [])
+        if isinstance(value, str)
     }
     _queue_profile_device_identity(
         endpoint, body, reported_capabilities, reported_platform,
@@ -638,7 +646,8 @@ def heartbeat():
         "ok": True,
         "commands": commands,
         "server_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "branch_timezone": branch_timezone if reported_platform == "windows" else None,
+        # Stored branch values remain IANA for scheduling; tzutil needs a Windows ID.
+        "branch_timezone": windows_timezone(branch_timezone) if reported_platform == "windows" else None,
     })
 
 

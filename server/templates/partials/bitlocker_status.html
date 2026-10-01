@@ -1,0 +1,14 @@
+      {% for key in recovery_keys %}
+        <div class="recovery-key-row">
+          <div><b>{{ key.volume_mount }} volume</b><small>{{ key.volume_status or 'Status pending' }} · {{ key.encryption_percentage or 0 }}% · protection {{ key.protection_status or 'Unknown' }}</small><small>Status reported {{ key.last_reported_at | timeago if key.last_reported_at else 'never' }}{% if not key.status_fresh %} · snapshot (not live){% endif %} · escrowed {{ key.escrowed_at | timeago }}</small><code>Protector ID: {{ key.protector_id }}</code></div>
+          <div class="flex items-center gap-2">
+            <span class="badge {{ 'badge-online' if key.is_current else 'badge-neutral' }}">{{ 'Current' if key.is_current else 'Retired' }}</span>
+            {% if current_user.role == 'company_admin' %}<button @click="revealRecoveryKey('{{ key.id }}')" :disabled="revealingRecoveryKey" class="btn btn-secondary btn-sm">Reveal</button>{% endif %}
+          </div>
+          <div x-show="recoveryKeyId === '{{ key.id }}'" x-cloak class="recovery-key-secret">
+            <span>Visible for 60 seconds</span><code x-text="recoveryKeyText"></code><button @click="copyRecoveryKey()" class="btn btn-secondary btn-sm">Copy</button>
+          </div>
+        </div>
+      {% else %}
+        <div class="endpoint-empty-compact">No BitLocker recovery key has been escrowed for this endpoint.</div>
+      {% endfor %}

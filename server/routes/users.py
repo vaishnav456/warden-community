@@ -80,6 +80,11 @@ def create():
         branches = db.get_branches(g.company["id"])
         return render_template("partials/user_row.html", admin=admin, branches=branches)
 
+    # Alpine submits through wardenFetchJSON. Redirects become HTML after fetch
+    # follows them, causing a false failure even though the account was created.
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify({"ok": True}), 201
+
     return redirect(url_for("users.list_users"))
 
 

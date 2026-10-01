@@ -261,7 +261,8 @@ def detail(endpoint_id):
     elif tab == "metrics":
         metrics = db.get_metrics(endpoint_id, hours=24)
     elif tab == "encryption":
-        recovery_keys = db.get_endpoint_recovery_keys(endpoint_id)
+        from services.bitlocker_status import display_status
+        recovery_keys = display_status(endpoint)
 
     from policy_templates import POLICY_TEMPLATES
     from policy_settings import POLICY_SETTINGS
@@ -387,6 +388,21 @@ def endpoint_status(endpoint_id):
         abort(404)
     require_branch_scope(endpoint.get("branch_id"))
     return render_template("partials/endpoint_status.html", endpoint=endpoint)
+
+
+@bp.get("/partials/bitlocker-status/<endpoint_id>")
+@login_required
+@company_required
+def bitlocker_status_partial(endpoint_id):
+    endpoint = db.get_endpoint(endpoint_id)
+    if not endpoint or str(endpoint["company_id"]) != str(g.company["id"]):
+        abort(404)
+    require_branch_scope(endpoint.get("branch_id"))
+    from services.bitlocker_status import display_status
+    response = make_response(render_template(
+        "partials/bitlocker_status.html", recovery_keys=display_status(endpoint)))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.route("/endpoints/<endpoint_id>/recovery-keys/<recovery_key_id>/reveal", methods=["POST"])

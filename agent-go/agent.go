@@ -119,6 +119,7 @@ func runAgent(stopCh <-chan struct{}) {
 	go runIdentityBroker(stopCh)
 	go runSupportBroker(stopCh)
 	go ensureSupportShortcut()
+	go runBitLockerStatusCollector(stopCh)
 
 	// Inventory the effective, configured machine policies in the background.
 	// The first heartbeat is not delayed; once collection finishes, the next
@@ -366,12 +367,17 @@ func postHeartbeat(jobCapacity int) ([]json.RawMessage, error) {
 		body["policy_inventory"] = inventory
 	}
 	policyInventoryMu.Unlock()
+	bitLockerStatus := pendingBitLockerStatus()
+	if bitLockerStatus != nil {
+		body["bitlocker_status"] = bitLockerStatus
+	}
 	rawResp, err := apiPostRaw(
 		"/api/agent/heartbeat", body, true, heartbeatTimeoutSec,
 	)
 	if err != nil {
 		return nil, err
 	}
+	acknowledgeBitLockerStatus(bitLockerStatus)
 	if inventoryReady {
 		policyInventoryMu.Lock()
 		pendingPolicyInventory = nil
