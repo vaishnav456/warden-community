@@ -22,17 +22,33 @@ services:
       - sh
       - -c
       - >-
-        mkdir -p /uploads/apps /uploads/branding /agent-dist &&
-        chown -R 10001:10001 /uploads /agent-dist &&
-        chmod -R u=rwX,g=,o= /uploads /agent-dist
+        mkdir -p /uploads/apps /uploads/branding /agent-dist /home-node-dist &&
+        chown -R 10001:10001 /uploads /agent-dist /home-node-dist &&
+        chmod -R u=rwX,g=,o= /uploads /agent-dist /home-node-dist
     volumes:
       - warden-uploads:/uploads
       - warden-agent-dist:/agent-dist
+      - warden-home-node-dist:/home-node-dist
     restart: "no"
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+
+  home-node-build:
+    build:
+      context: ./home-node
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    volumes:
+      - warden-home-node-dist:/output
+    restart: "no"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
 
   postgres:
     build:
@@ -90,6 +106,8 @@ services:
         condition: service_started
       storage-init:
         condition: service_completed_successfully
+      home-node-build:
+        condition: service_completed_successfully
     networks: [warden-db, warden-services, warden-ingress]
     env_file:
       - path: ./server/.env
@@ -98,7 +116,7 @@ services:
       - warden-uploads:/app/../uploads
       - warden-agent-dist:/app/../agent-dist
       - warden-device-ca:/var/lib/warden/device-ca
-      - ./home-node/dist:/app/../home-node-dist:ro
+      - warden-home-node-dist:/app/../home-node-dist:ro
     environment:
       - PYTHONUNBUFFERED=1
       # gunicorn.conf.py reads HOST at process start, before config.py has
@@ -167,4 +185,5 @@ volumes:
   warden-build-output:
   warden-uploads:
   warden-agent-dist:
+  warden-home-node-dist:
   warden-device-ca:

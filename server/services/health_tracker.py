@@ -12,8 +12,8 @@ _lock = threading.Lock()
 
 # Registered services, their last-tick timestamps, and expected interval (seconds)
 _services: dict[str, dict] = {
-    "stale_checker": {"last_tick": None, "ticks": 0, "interval": 30},
-    "alert_engine":  {"last_tick": None, "ticks": 0, "interval": 30},
+    "stale_checker": {"last_tick": None, "ticks": 0, "interval": 60},
+    "alert_engine":  {"last_tick": None, "ticks": 0, "interval": 60},
     "scheduler":     {"last_tick": None, "ticks": 0, "interval": 60},
 }
 

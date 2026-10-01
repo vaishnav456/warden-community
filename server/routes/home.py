@@ -52,11 +52,25 @@ def _home_artifact_digest(path, mtime_ns, size):
     return digest.hexdigest()
 
 
+def _home_release_version():
+    # Prefer metadata built alongside the binaries: a stale .env version must
+    # never label a new executable as an older release in a signed manifest.
+    metadata = config.HOME_NODE_DIST_DIR / "version.txt"
+    try:
+        if metadata.is_file():
+            version = metadata.read_text(encoding="utf-8").strip()
+            return version if len(version) <= 64 and _parse_version(version) else None
+    except (OSError, UnicodeError):
+        return None
+    return config.HOME_NODE_VERSION
+
+
 def _home_update_for(node, reported_capabilities):
     platform = str(reported_capabilities.get("os") or "").lower()
     arch = str(reported_capabilities.get("arch") or "amd64").lower()
     current = _parse_version(reported_capabilities.get("version"))
-    target = _parse_version(config.HOME_NODE_VERSION)
+    release_version = _home_release_version()
+    target = _parse_version(release_version)
     if current is None or target is None or current >= target or arch != "amd64":
         return None
     filenames = {
@@ -71,7 +85,7 @@ def _home_update_for(node, reported_capabilities):
     now = int(time.time())
     payload = {
         "node_id": str(node["id"]),
-        "version": config.HOME_NODE_VERSION,
+        "version": release_version,
         "platform": f"{platform}-amd64",
         "download_url": (
             f"{config.SERVER_URL.rstrip('/')}/api/home-node/update/{platform}-amd64"

@@ -1,0 +1,6 @@
+dist/
+*.exe
+*.test
+warden-home.json
+*.pem
+*.key

@@ -26,6 +26,8 @@ def library():
     apps = db.get_app_library(company_id, include_global=True)
     endpoints = db.get_endpoints(company_id)
     if g.admin.get("role") == "branch_admin":
+        if not g.admin.get("branch_id"):
+            abort(403)
         endpoints = [ep for ep in endpoints if str(ep.get("branch_id")) == str(g.admin.get("branch_id"))]
     return render_template("apps/library.html", apps=apps, endpoints=endpoints)
 

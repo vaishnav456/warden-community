@@ -111,6 +111,11 @@ def setup_context():
     if blocked is not None:
         return blocked
 
+    from middleware.request_validation import validate_json_body
+    invalid_body = validate_json_body()
+    if invalid_body is not None:
+        return invalid_body
+
     # /health endpoint — skip auth entirely
     if request.path == "/health":
         return

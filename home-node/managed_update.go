@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,7 +21,7 @@ import (
 	"time"
 )
 
-const homeNodeVersion = "1.1.5"
+const homeNodeVersion = "1.1.6"
 
 type managedUpdate struct {
 	NodeID      string `json:"node_id"`
@@ -116,13 +117,26 @@ func verifyManagedUpdate(update managedUpdate, allowCurrentVersion bool) error {
 }
 
 func downloadManagedUpdate(update managedUpdate, destination string) error {
+	candidate, err := url.Parse(update.DownloadURL)
+	if err != nil {
+		return err
+	}
+	base, err := url.Parse(cfg.WardenURL)
+	if err != nil || base.Scheme != "https" || base.Host == "" {
+		return errors.New("configured Warden origin must use HTTPS")
+	}
+	if candidate.Scheme != "https" || candidate.User != nil || candidate.Fragment != "" || !strings.EqualFold(candidate.Host, base.Host) {
+		return errors.New("managed update origin does not match the configured Warden server")
+	}
 	request, err := http.NewRequest(http.MethodGet, update.DownloadURL, nil)
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Accept", "application/octet-stream")
 	request.Header.Set("X-Warden-Home-Key", cfg.NodeKey)
-	response, err := (&http.Client{Timeout: 15 * time.Minute}).Do(request)
+	response, err := (&http.Client{Timeout: 15 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("managed update redirect refused")
+	}}).Do(request)
 	if err != nil {
 		return err
 	}

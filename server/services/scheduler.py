@@ -48,6 +48,23 @@ def _dispatch_once():
             log.warning("scheduler: error dispatching job %s ('%s'): %s", job.get("id"), job.get("name"), e)
 
 
+def scheduled_targets(job):
+    """Resolve current ownership, not just the scope at schedule creation."""
+    company_id = job["company_id"]
+    branch_id = job.get("branch_id")
+    if job.get("endpoint_id"):
+        endpoint = db.get_endpoint(job["endpoint_id"])
+        candidates = [endpoint] if endpoint else []
+    else:
+        candidates = db.get_endpoints(company_id, branch_id=branch_id)
+        candidates = [endpoint for endpoint in candidates if endpoint.get("status") == "online"]
+    return [
+        endpoint for endpoint in candidates
+        if str(endpoint.get("company_id")) == str(company_id)
+        and (not branch_id or str(endpoint.get("branch_id")) == str(branch_id))
+    ]
+
+
 def _dispatch_job(job):
     company_id = job["company_id"]
     branch_id = job.get("branch_id")
@@ -59,19 +76,7 @@ def _dispatch_job(job):
         log.warning("Scheduler: blocked '%s': %s", job.get("name"), decision.message)
         return
     # Resolve target endpoints
-    if job.get("endpoint_id"):
-        ep = db.get_endpoint(job["endpoint_id"])
-        targets = [ep] if ep else []
-    elif branch_id:
-        targets = [
-            e for e in db.get_endpoints(company_id, branch_id=branch_id)
-            if e.get("status") == "online"
-        ]
-    else:
-        targets = [
-            e for e in db.get_endpoints(company_id)
-            if e.get("status") == "online"
-        ]
+    targets = scheduled_targets(job)
 
     dispatched = 0
     skipped = 0

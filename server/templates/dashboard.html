@@ -25,12 +25,12 @@
       {% set dashboard_platform = e.platform or 'windows' %}
       <a href="/endpoints/{{ e.id }}" class="dashboard-endpoint">
         <div class="device-glyph platform-mark-{{ dashboard_platform }}"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if dashboard_platform == 'darwin' else dashboard_platform }}"></use></svg><i class="{{ 'online' if e.status == 'online' else '' }}"></i></div>
-        <div class="dashboard-endpoint-name"><b>{{ e.display_name or e.hostname }}</b><span>{{ e.os_name or 'Windows endpoint' }}</span></div>
+        <div class="dashboard-endpoint-name"><b>{{ e.display_name or e.hostname }}</b><span>{{ e.hostname }} · {{ e.os_name or 'Windows endpoint' }}</span></div>
         <div class="endpoint-mini-metrics">
           <span><small>CPU</small><b>{{ (e.cpu_pct | round(0) | int ~ '%') if e.cpu_pct is not none else '—' }}</b></span>
           <span><small>MEM</small><b>{{ (e.ram_used_pct | round(0) | int ~ '%') if e.ram_used_pct is not none else '—' }}</b></span>
         </div>
-        <div class="dashboard-endpoint-seen"><b>{{ e.status | title }}</b><span>{{ e.last_seen | timeago }}</span></div>
+        <div class="dashboard-endpoint-seen {{ 'is-online' if e.status == 'online' else '' }}"><b>{{ e.status | title }}</b><span>{{ e.last_seen | timeago }}</span></div>
         <svg class="row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-width="2" d="m9 6 6 6-6 6"/></svg>
       </a>
       {% else %}

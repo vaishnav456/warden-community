@@ -20,10 +20,16 @@ VALID_SCHEDULED_JOB_TYPES = [
 def index():
     company_id = g.company["id"]
     jobs = db.get_scheduled_jobs(company_id)
+    branch_id = None
     if g.admin.get("role") == "branch_admin":
-        jobs = [j for j in jobs if str(j.get("branch_id")) == str(g.admin.get("branch_id"))]
+        branch_id = g.admin.get("branch_id")
+        if not branch_id:
+            abort(403)
+        jobs = [j for j in jobs if str(j.get("branch_id")) == str(branch_id)]
     branches = db.get_branches(company_id)
-    endpoints = db.get_endpoints(company_id)
+    if branch_id:
+        branches = [branch for branch in branches if str(branch.get("id")) == str(branch_id)]
+    endpoints = db.get_endpoints(company_id, branch_id=branch_id)
     return render_template(
         "schedule/index.html",
         jobs=jobs,
@@ -44,6 +50,8 @@ def create_job():
     if not isinstance(body, dict):
         return jsonify({"error": "request body must be a JSON object"}), 400
 
+    if not isinstance(body.get("name", ""), str) or not isinstance(body.get("job_type", ""), str):
+        return jsonify({"error": "name and job_type must be strings"}), 400
     name = (body.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -202,19 +210,8 @@ def run_now(job_id):
         return jsonify({"error": decision.code, "message": decision.message}), 403
 
     # Resolve targets (same logic as scheduler._dispatch_job)
-    if job.get("endpoint_id"):
-        ep = db.get_endpoint(job["endpoint_id"])
-        targets = [ep] if ep else []
-    elif branch_id:
-        targets = [
-            e for e in db.get_endpoints(company_id, branch_id=branch_id)
-            if e.get("status") == "online"
-        ]
-    else:
-        targets = [
-            e for e in db.get_endpoints(company_id)
-            if e.get("status") == "online"
-        ]
+    from services.scheduler import scheduled_targets
+    targets = scheduled_targets(job)
 
     dispatched = 0
     skipped = 0

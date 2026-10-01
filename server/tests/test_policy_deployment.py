@@ -94,7 +94,7 @@ class ScheduledJobRaceTests(unittest.TestCase):
             "endpoint_id": "endpoint-1", "job_type": "COLLECT_SYSINFO",
             "payload": {}, "name": "Inventory",
         }
-        endpoint = {"id": "endpoint-1", "branch_id": "branch-1", "status": "online"}
+        endpoint = {"id": "endpoint-1", "company_id": "company-1", "branch_id": "branch-1", "status": "online"}
         with mock.patch("services.entitlements.check_job", return_value=mock.Mock(allowed=True)), \
              mock.patch.object(scheduler.db, "get_endpoint", return_value=endpoint), \
              mock.patch.object(scheduler.db, "create_system_job_once", return_value=None) as create_once, \

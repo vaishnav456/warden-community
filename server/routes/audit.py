@@ -1,7 +1,7 @@
 """
 Warden — Audit Log routes
 """
-from flask import Blueprint, render_template, request, g
+from flask import Blueprint, render_template, request, g, abort
 
 import db
 from middleware.auth import login_required, company_required
@@ -23,6 +23,8 @@ def log():
     endpoint_id = request.args.get("endpoint_id")
     actor_id = request.args.get("actor_id")
     branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
+    if g.admin.get("role") == "branch_admin" and not branch_id:
+        abort(403)
 
     entries = db.get_audit_log(
         company_id, limit=limit, offset=offset,

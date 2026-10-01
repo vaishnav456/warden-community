@@ -2703,18 +2703,43 @@ def revoke_saved_escalation(policy_id, admin_id):
 
 
 def find_matching_policy(company_id, endpoint_id, windows_user, operation, payload):
+    if not isinstance(payload, dict):
+        return None
     now = _now_iso()
     rows = _get(
         f"saved_escalations?company_id=eq.{_q(company_id)}&operation=eq.{_q(operation)}"
         f"&revoked_at=is.null&or=(valid_until.is.null,valid_until.gt.{_q(now)})"
     )
+    endpoint = None
+    endpoint_loaded = False
     for p in rows:
         scope = p.get("scope", "")
-        if "this_endpoint" in scope and p.get("endpoint_id") != endpoint_id:
+        if scope not in {
+            "this_user_this_endpoint", "this_user_all_endpoints",
+            "any_user_this_endpoint", "any_user_this_branch", "company_wide",
+        }:
             continue
-        if "this_user" in scope and p.get("windows_user") and p["windows_user"] != windows_user:
+        if "this_endpoint" in scope and (
+            not p.get("endpoint_id") or str(p["endpoint_id"]) != str(endpoint_id)
+        ):
             continue
+        if "this_user" in scope and (
+            not p.get("windows_user") or p["windows_user"] != windows_user
+        ):
+            continue
+        if scope == "any_user_this_branch" or p.get("branch_id"):
+            if not endpoint_loaded:
+                endpoint = get_endpoint(endpoint_id)
+                endpoint_loaded = True
+            if (
+                not endpoint or not p.get("branch_id")
+                or str(endpoint.get("company_id")) != str(company_id)
+                or str(endpoint.get("branch_id")) != str(p["branch_id"])
+            ):
+                continue
         match = p.get("payload_match") or {}
+        if not isinstance(match, dict):
+            continue
         if all(str(payload.get(k)) == str(v) for k, v in match.items()):
             return p
     return None
@@ -3059,6 +3084,14 @@ def create_build_request(company_id, branch_id, enrollment_token_id, config_json
         "target_platform": target_platform,
     })
     return rows[0] if (rows and isinstance(rows, list)) else rows
+
+
+def fail_claimed_build(req_id, claim_token, error):
+    """A delayed failure report cannot overwrite a completed/reclaimed build."""
+    return bool(_patch(
+        f"build_requests?id=eq.{_q(req_id)}&claim_token=eq.{_q(claim_token)}&status=eq.building",
+        {"status": "failed", "build_log": error[:4000], "updated_at": _now_iso(), "lease_expires_at": None},
+    ))
 
 
 def get_build_request(req_id):
@@ -3595,10 +3628,12 @@ def get_endpoints_bulk(company_id, branch_id=None, endpoint_ids=None):
 # Status / monitoring helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_job_queue_stats(company_id):
+def get_job_queue_stats(company_id, branch_id=None):
     """Return pending/running/completed/failed job counts for the last 24h."""
     rows = _get(
         f"jobs?company_id=eq.{_q(str(company_id))}"
+        + (f"&branch_id=eq.{_q(str(branch_id))}" if branch_id else "")
+        +
         f"&created_at=gt.{_q(_now_iso_offset(-86400))}"
         f"&select=status"
     ) or []
@@ -3616,9 +3651,13 @@ def _now_iso_offset(offset_seconds: int) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def get_endpoint_summary(company_id):
+def get_endpoint_summary(company_id, branch_id=None):
     """Return online/offline/pending counts for a company's endpoints."""
-    rows = _get(f"endpoints?company_id=eq.{_q(str(company_id))}&select=status") or []
+    rows = _get(
+        f"endpoints?company_id=eq.{_q(str(company_id))}"
+        + (f"&branch_id=eq.{_q(str(branch_id))}" if branch_id else "")
+        + "&select=status"
+    ) or []
     counts = {"online": 0, "offline": 0, "pending": 0}
     for r in rows:
         s = r.get("status", "")

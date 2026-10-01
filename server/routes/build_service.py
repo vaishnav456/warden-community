@@ -126,8 +126,17 @@ def complete_msi(req_id):
 @bp.route("/api/build/<req_id>/fail", methods=["POST"])
 @build_service_auth_required
 def fail(req_id):
+    req = db.get_build_request(req_id)
+    if not req:
+        abort(404)
+    if req.get("status") != "building" or not _valid_claim(req):
+        return jsonify({"error": "stale_build_claim"}), 409
     body = request.get_json(silent=True) or {}
-    db.update_build_request(req_id, "failed", error=body.get("error", "Build failed"))
+    error = body.get("error", "Build failed")
+    if not isinstance(error, str) or len(error) > 10000:
+        return jsonify({"error": "invalid_build_error"}), 400
+    if not db.fail_claimed_build(req_id, req["claim_token"], error):
+        return jsonify({"error": "stale_build_claim"}), 409
     return jsonify({"ok": True})
 
 

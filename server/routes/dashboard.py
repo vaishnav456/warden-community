@@ -44,6 +44,7 @@ def index():
         "dashboard.html",
         company=company,
         endpoints=endpoints,
+        total_count=len(endpoints),
         online_count=online_count,
         offline_count=offline_count,
         pending_escalations=pending_esc,

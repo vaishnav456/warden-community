@@ -110,13 +110,37 @@ def approve(req_id):
     if save_policy:
         body = request.get_json(silent=True) or {}
         scope = request.form.get("scope") or body.get("scope", "this_user_this_endpoint")
+        allowed_scopes = {
+            "this_user_this_endpoint", "this_user_all_endpoints",
+            "any_user_this_endpoint", "any_user_this_branch", "company_wide",
+        }
+        if not isinstance(scope, str) or scope not in allowed_scopes:
+            return jsonify({"error": "Invalid policy scope"}), 400
+        if g.admin.get("role") == "branch_admin" and scope in {
+            "this_user_all_endpoints", "company_wide",
+        }:
+            return jsonify({"error": "Branch administrators cannot save company-wide policies"}), 403
+        if (
+            ("this_endpoint" in scope and not esc.get("endpoint_id"))
+            or ("this_user" in scope and not esc.get("windows_user"))
+            or (scope == "any_user_this_branch" and not esc.get("branch_id"))
+        ):
+            return jsonify({"error": "Policy scope is missing its required binding"}), 400
         valid_days_raw = request.form.get("valid_days") or body.get("valid_days")
         if valid_days_raw not in (None, "", "null"):
             try:
                 valid_days = int(valid_days_raw)
             except (TypeError, ValueError):
                 return jsonify({"error": f"invalid valid_days: {valid_days_raw!r}"}), 400
+            if (
+                isinstance(valid_days_raw, bool)
+                or not isinstance(valid_days_raw, (str, int))
+                or not 1 <= valid_days <= 365
+            ):
+                return jsonify({"error": "valid_days must be an integer between 1 and 365"}), 400
         note = request.form.get("note") or body.get("note", "")
+        if not isinstance(note, str) or len(note) > 1000:
+            return jsonify({"error": "Policy note must be text of at most 1000 characters"}), 400
 
     is_secondary = esc["status"] == "pending_secondary"
     token, updated = db.approve_escalation(
@@ -129,7 +153,7 @@ def approve(req_id):
         # must not create a second.
         return jsonify({"error": "Escalation was already updated by another request"}), 409
 
-    if save_policy:
+    if save_policy and updated["status"] == "approved":
         db.create_saved_escalation(
             company_id=g.company["id"],
             scope=scope,
@@ -138,7 +162,7 @@ def approve(req_id):
             approved_by=g.admin["id"],
             valid_days=valid_days,
             note=note,
-            branch_id=esc.get("branch_id") if "branch" in scope else None,
+            branch_id=esc.get("branch_id") if "branch" in scope or g.admin.get("role") == "branch_admin" else None,
             endpoint_id=esc.get("endpoint_id") if "endpoint" in scope else None,
             windows_user=esc.get("windows_user") if "user" in scope else None,
         )

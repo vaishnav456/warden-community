@@ -42,7 +42,7 @@ import (
 	memPkg "github.com/shirou/gopsutil/v3/mem"
 )
 
-const agentVersion = "2.3.4"
+const agentVersion = "2.3.5"
 
 var (
 	buildServerURL, buildServerEd25519Pubkey, buildCertFingerprint, buildTLSTrustMode string
@@ -1580,6 +1580,14 @@ func listDirectory(p map[string]interface{}) (int, string, error) {
 }
 
 func download(url, dest, expected string) error {
+	if err := validateDownloadURL(url); err != nil {
+		return err
+	}
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	decoded, err := hex.DecodeString(expected)
+	if err != nil || len(decoded) != sha256.Size {
+		return errors.New("a valid SHA-256 digest is required")
+	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
@@ -1588,17 +1596,27 @@ func download(url, dest, expected string) error {
 	clientMu.RLock()
 	client := httpClient
 	clientMu.RUnlock()
-	resp, err := client.Do(req)
+	if client == nil {
+		return errors.New("communication client is not initialized")
+	}
+	downloadClient := *client
+	downloadClient.Timeout = 5 * time.Minute
+	downloadClient.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("download redirect refused") }
+	resp, err := downloadClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download HTTP %d", resp.StatusCode)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 201<<20))
+	const maxDownloadBytes = 200 << 20
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(b) == 0 || len(b) > maxDownloadBytes {
+		return errors.New("download has an invalid size")
 	}
 	if expected != "" {
 		h := sha256.Sum256(b)
@@ -1652,6 +1670,14 @@ func uninstallApp(p map[string]interface{}) (int, string, error) {
 }
 
 func updateAgent(p map[string]interface{}) (int, string, error) {
+	version := stringValue(p["version"])
+	comparison, err := compareAgentVersions(version, agentVersion)
+	if err != nil {
+		return 1, "", fmt.Errorf("invalid update version: %w", err)
+	}
+	if comparison <= 0 {
+		return 0, "Update skipped: version is not newer than the installed agent", nil
+	}
 	url := stringValue(p["download_url"])
 	if url == "" {
 		return 1, "", errors.New("missing update URL")
@@ -1669,7 +1695,15 @@ func updateAgent(p map[string]interface{}) (int, string, error) {
 	}
 	dest := filepath.Join(installDir, "warden-agent")
 	backup := filepath.Join(dataDir, "warden-agent.previous")
-	script := filepath.Join(os.TempDir(), fmt.Sprintf("warden-update-%d.sh", os.Getpid()))
+	scriptFile, err := os.CreateTemp(dataDir, "warden-update-*.sh")
+	if err != nil {
+		return 1, "", err
+	}
+	script := scriptFile.Name()
+	if err := scriptFile.Close(); err != nil {
+		_ = os.Remove(script)
+		return 1, "", err
+	}
 	content := "#!/bin/sh\nsleep 3\nset -u\n" +
 		"cp " + strconv.Quote(dest) + " " + strconv.Quote(backup) + " || exit 1\n" +
 		"mv " + strconv.Quote(staged) + " " + strconv.Quote(dest) + " || exit 1\n" +
@@ -1684,6 +1718,17 @@ func updateAgent(p map[string]interface{}) (int, string, error) {
 	content += "rm -f \"$0\"\n"
 	if err := os.WriteFile(script, []byte(content), 0700); err != nil {
 		return 1, "", err
+	}
+	if runtime.GOOS == "linux" {
+		// A detached child still belongs to the old service's systemd cgroup.
+		// A separate transient service survives restarting warden-agent.
+		command := exec.Command("systemd-run", "--collect", "--unit=warden-agent-update-"+strconv.Itoa(os.Getpid()), "/bin/sh", script)
+		code, output, err := runCommand(command, 30*time.Second)
+		if err != nil || code != 0 {
+			_ = os.Remove(script)
+			return 1, output, fmt.Errorf("could not schedule independent update helper: %v", err)
+		}
+		return 0, "Agent update scheduled", nil
 	}
 	return startDetached(exec.Command("sh", script), "Agent update scheduled")
 }

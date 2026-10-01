@@ -195,6 +195,17 @@ def enroll():
         return jsonify({"error": "rate_limited"}), 429
 
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "invalid_request_body"}), 400
+    for field, limit in {
+        "token": 512, "hostname": 64, "agent_version": 64,
+        "csr_pem": 16384, "installation_id": 32, "enrollment_nonce": 64,
+    }.items():
+        value = body.get(field, "")
+        if not isinstance(value, str) or len(value) > limit:
+            return jsonify({"error": f"invalid_{field}"}), 400
+    if body.get("os_info") is not None and not isinstance(body["os_info"], dict):
+        return jsonify({"error": "invalid_os_info"}), 400
     token = body.get("token", "").strip()
     hostname = body.get("hostname", "").strip()
     hardware_id = _normalise_hardware_id(body.get("hardware_id"))

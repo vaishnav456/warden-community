@@ -54,6 +54,8 @@ def csrf_protect():
         if isinstance(body, dict):
             submitted = body.get("csrf_token")
 
-    if not expected or not submitted or not secrets.compare_digest(expected, submitted):
+    if (not isinstance(expected, str) or not isinstance(submitted, str)
+            or not expected or not submitted
+            or not secrets.compare_digest(expected.encode("utf-8"), submitted.encode("utf-8"))):
         abort(403)
     return None

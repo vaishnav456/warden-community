@@ -92,6 +92,9 @@ def create_policy():
     company_id = g.company["id"]
     body = request.get_json(silent=True) or {}
 
+    if not isinstance(body, dict) or not isinstance(body.get("name", ""), str) or not isinstance(body.get("description", ""), str):
+        return jsonify({"error": "name and description must be strings"}), 400
+
     name = (body.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -142,6 +145,11 @@ def update_policy(policy_id):
         abort(404)
 
     body = request.get_json(silent=True) or {}
+
+    if not isinstance(body, dict) or not isinstance(body.get("name", ""), str) or not isinstance(body.get("description", ""), str):
+        return jsonify({"error": "name and description must be strings"}), 400
+    if "enabled" in body and not isinstance(body["enabled"], bool):
+        return jsonify({"error": "enabled must be a boolean"}), 400
 
     name = (body.get("name") or "").strip()
     if not name:
