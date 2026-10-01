@@ -115,24 +115,7 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	// which leaves laptop reinstalls queued indefinitely. An explicit task XML
 	// keeps the reboot-persistent SYSTEM handoff while allowing it on battery.
 	taskXMLPath := filepath.Join(handoffDir, "reinstall-task.xml")
-	taskXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Author>Warden</Author></RegistrationInfo>
-  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT45S</Delay></BootTrigger></Triggers>
-  <Principals><Principal id="System"><UserId>S-1-5-18</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <Enabled>true</Enabled><Hidden>true</Hidden><WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT15M</ExecutionTimeLimit><Priority>4</Priority>
-  </Settings>
-  <Actions Context="System"><Exec><Command>C:\Windows\System32\cmd.exe</Command><Arguments>/d /c ""%s""</Arguments></Exec></Actions>
-</Task>`, runnerPath)
+	taskXML := reinstallTaskXML(runnerPath)
 	if err := os.WriteFile(taskXMLPath, encodeUTF16LE(taskXML), 0600); err != nil {
 		return 1, "", fmt.Errorf("write reinstall task definition: %w", err)
 	}
@@ -141,7 +124,7 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	}
 	createOut, err := runReinstallTaskCommand(
 		"/Create", "/TN", taskName,
-		"/XML", taskXMLPath, "/F",
+		"/XML", taskXMLPath, "/RU", "SYSTEM", "/F",
 	)
 	if err != nil {
 		fenceErr := cancelReinstallHandoff(handoffDir)
@@ -165,6 +148,29 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	}
 
 	return 0, fmt.Sprintf("Verified agent %s update handoff started; service restart scheduled", version), nil
+}
+
+// ServiceAccount is a COM registration enum, NOT a Task Scheduler XML value.
+// Keep the SYSTEM SID in XML and select SYSTEM explicitly at registration.
+func reinstallTaskXML(runnerPath string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Author>Warden</Author></RegistrationInfo>
+  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT45S</Delay></BootTrigger></Triggers>
+  <Principals><Principal id="System"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <Enabled>true</Enabled><Hidden>true</Hidden><WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT15M</ExecutionTimeLimit><Priority>4</Priority>
+  </Settings>
+  <Actions Context="System"><Exec><Command>C:\Windows\System32\cmd.exe</Command><Arguments>/d /c ""%s""</Arguments></Exec></Actions>
+</Task>`, runnerPath)
 }
 
 func runReinstallTaskCommand(args ...string) ([]byte, error) {
