@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
@@ -146,10 +147,12 @@ async def _cleanup_home_pair(session_id: str) -> None:
 
 # ── Relay helpers ─────────────────────────────────────────────────────────────
 
-async def _relay(src, dst) -> None:
+async def _relay(src, dst, quality=None) -> None:
     """Forward all messages from src → dst until the connection closes."""
     async for msg in src:
         await dst.send(msg)
+        if quality is not None:
+            quality['bytes_to_browser']+=len(msg.encode('utf-8') if isinstance(msg,str) else msg)
 
 
 _REMOTE_MESSAGE_CAPABILITY = {
@@ -173,6 +176,7 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
         "view": True, "control": True, "clipboard": True,
         "file_transfer": True, "process_manager": True, "reboot": True,
     }
+    last_ping=0.0
     async for msg in src:
         if not isinstance(msg, str):
             log.warning("Dropped binary browser message for session %s", session.get("id"))
@@ -182,6 +186,12 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
             message_type = str(payload.get("type") or "")
         except (ValueError, TypeError, AttributeError):
             log.warning("Dropped malformed browser message for session %s", session.get("id"))
+            continue
+        if message_type=='relay_ping' and capabilities.get('view',False):
+            nonce=payload.get('nonce')
+            if isinstance(nonce,str) and len(nonce)<=64 and time.monotonic()-last_ping>=5:
+                last_ping=time.monotonic()
+                await src.send(json.dumps({'type':'relay_pong','nonce':nonce}))
             continue
         required = _REMOTE_MESSAGE_CAPABILITY.get(message_type)
         if not required or not capabilities.get(required, False):
@@ -194,6 +204,26 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
 
 
 # ── Browser-side handler ──────────────────────────────────────────────────────
+
+async def _measure_remote_quality(agent_ws,session,quality):
+    while True:
+        try:
+            start=time.monotonic()
+            pong=await agent_ws.ping()
+            await asyncio.wait_for(pong,5)
+            quality['agent_rtt_ms']=round((time.monotonic()-start)*1000)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            quality['agent_rtt_ms']=None
+        quality['measured_at']=datetime.now(timezone.utc).isoformat()
+        try:
+            await asyncio.to_thread(db._patch,f"remote_sessions?id=eq.{db._q(session['id'])}&company_id=eq.{db._q(session['company_id'])}",{'connection_quality':dict(quality)})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning('Remote quality receipt deferred for session %s',session['id'])
+        await asyncio.sleep(15)
 
 async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
     # Validate vnc_token against active session
@@ -247,12 +277,13 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
     log.info("Relay active: browser ↔ agent (session %s)", session_id)
 
     health_tracker.increment_connections()
+    quality={'transport':'server_relay','bytes_to_browser':0,'agent_rtt_ms':None}
+    quality_task=asyncio.create_task(_measure_remote_quality(agent_ws,session,quality))
+    relay_tasks=[asyncio.create_task(_relay_browser_to_agent(websocket, agent_ws, session)),
+                 asyncio.create_task(_relay(agent_ws, websocket,quality))]
     try:
         done, pending = await asyncio.wait(
-            [
-                asyncio.ensure_future(_relay_browser_to_agent(websocket, agent_ws, session)),
-                asyncio.ensure_future(_relay(agent_ws, websocket)),
-            ],
+            relay_tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
         for t in pending:
@@ -260,6 +291,10 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
     except (OSError, websockets.exceptions.WebSocketException) as exc:
         log.warning("Relay error (session %s): %s", session_id, exc)
     finally:
+        for task in relay_tasks:task.cancel()
+        await asyncio.gather(*relay_tasks, return_exceptions=True)
+        quality_task.cancel()
+        await asyncio.gather(quality_task, return_exceptions=True)
         health_tracker.decrement_connections()
         # Signal agent side that relay is done before cleanup
         pair.done.set()

@@ -567,7 +567,13 @@ def heartbeat():
         })
 
     # Fetch pending jobs and sign each as an Ed25519 envelope. Payloads are
-    # stored with organization encryption (see services/tenant_crypto.py) — a
+    running_id=body.get('running_job_id')
+    if running_id:
+        import uuid
+        try:running_id=str(uuid.UUID(str(running_id)))
+        except ValueError:return jsonify(error='invalid_running_job_id'),400
+        db._rpc('renew_agent_job_lease',dict(p_endpoint=endpoint['id'],p_job=running_id))
+    # stored encrypted per-tenant (see services/tenant_crypto.py) — a
     # BYOK-mode company whose vault is currently locked can't have its jobs
     # decrypted for dispatch; skip those (left pending, logged) rather than
     # failing the whole heartbeat for every other job.
@@ -714,6 +720,36 @@ def bitlocker_recovery():
         "protector_id": protector_id,
     })
     return jsonify({"ok": True, "recovery_key_id": str(record["id"])})
+
+
+@bp.post('/api/agent/home-progress')
+@agent_auth_required
+def home_progress():
+    if not check_rate_limit(f"home-progress:{g.endpoint['id']}",30):
+        return jsonify(error='rate_limited'),429
+    body = request.get_json(silent=True)
+    if not isinstance(body,dict) or not isinstance(body.get('report'),dict):
+        return jsonify(error='invalid_payload'),400
+    job_id = str(body.get('job_id') or '')
+    report = body['report']
+    job = db.get_job(job_id,decrypt=False)
+    if not job or str(job.get('endpoint_id')) != str(g.endpoint['id']) or job.get('type') != 'SYNC_WARDEN_HOME':
+        return jsonify(error='not_found'),404
+    if report.get('kind') != 'warden_home_sync' or report.get('version') != 1 or report.get('status') != 'running':
+        return jsonify(error='invalid_report'),400
+    encoded = json.dumps(report,separators=(',',':'))
+    if len(encoded.encode('utf-8')) > 256*1024:
+        return jsonify(error='report_too_large'),413
+    from routes.home import _home_transfer_view
+    clean = _home_transfer_view(dict(log_output=encoded),{}).get('report')
+    if clean is None:
+        return jsonify(error='invalid_report'),400
+    clean.update(kind='warden_home_sync',version=1,status='running')
+    encoded=json.dumps(clean,separators=(',',':'))
+    company = db.get_company_by_id(g.endpoint['company_id'])
+    updated = db._patch(f"jobs?id=eq.{db._q(job_id)}&status=eq.running",{
+        'log_output':db.encrypt_field(company,encoded,'job.log-output')})
+    return jsonify(ok=True,accepted=bool(updated))
 
 
 @bp.route("/api/agent/job-result", methods=["POST"])
@@ -1156,7 +1192,66 @@ def report_software():
             "executable_path": executable_path or None,
         })
     db.replace_software_inventory(g.endpoint["id"], accepted)
+    db._patch(f"endpoints?id=eq.{db._q(g.endpoint['id'])}",{"software_inventory_at":db._now_iso()})
     return jsonify({"ok": True, "count": len(accepted)})
+
+
+@bp.post('/api/agent/support-request')
+@agent_auth_required
+def request_support():
+    if not check_rate_limit('support:'+str(g.endpoint['id']),5,fail_closed=True):
+        return jsonify(error='rate_limited'),429
+    body=request.get_json(silent=True) or {}
+    if not isinstance(body,dict):return jsonify(error='invalid_request'),400
+    username=str(body.get('username') or '').strip()
+    message=str(body.get('message') or '').strip()
+    if not 1<=len(username)<=256 or not 1<=len(message)<=2000 or any(ord(c)<32 and c not in '\n\t' for c in username+message):
+        return jsonify(error='invalid_request'),400
+    endpoint=g.endpoint
+    path=f"support_requests?endpoint_id=eq.{db._q(endpoint['id'])}&company_id=eq.{db._q(endpoint['company_id'])}&status=in.(open,claimed)&limit=1"
+    existing=db._get(path)
+    if existing:return jsonify(ok=True,request_id=existing[0]['id'],existing=True)
+    company=db.get_company_by_id(endpoint['company_id'])
+    encrypted=db.encrypt_field(company,dict(username=username,message=message),'support.request')
+    try:
+        row=db._post('support_requests',dict(company_id=endpoint['company_id'],endpoint_id=endpoint['id'],request_encrypted=encrypted))[0]
+    except Exception:
+        existing=db._get(path)
+        if existing:return jsonify(ok=True,request_id=existing[0]['id'],existing=True)
+        raise
+    db.audit(endpoint['company_id'],None,'support_requested',dict(request_id=row['id']),branch_id=endpoint.get('branch_id'),endpoint_id=endpoint['id'])
+    return jsonify(ok=True,request_id=row['id'])
+
+
+@bp.get('/api/agent/traffic-config')
+@agent_auth_required
+def traffic_config():
+    from services.fleet_tools import traffic_for
+    rule=traffic_for(g.endpoint)
+    if not rule:return jsonify(traffic=None)
+    return jsonify(traffic={key:rule[key] for key in ('business_start','business_end','business_kbps','offhours_kbps')})
+
+
+@bp.get('/api/agent/package-cache')
+@agent_auth_required
+def package_cache_config():
+    from services.fleet_tools import traffic_for
+    from services.home_grants import issue_package_grant
+    rule=traffic_for(g.endpoint)
+    if not rule or not rule.get('package_cache_node_id'):return jsonify(cache=None)
+    app=db.get_app(request.args.get('app_id'))
+    if not app or (app.get('company_id') and str(app['company_id'])!=str(g.endpoint['company_id'])):abort(404)
+    if request.args.get('sha256')!=app.get('sha256'):abort(409)
+    node=next((n for n in db.get_home_nodes(g.endpoint['company_id']) if str(n['id'])==str(rule['package_cache_node_id'])),None)
+    if not node or node.get('status')!='online' or (node.get('branch_id') and str(node['branch_id'])!=str(g.endpoint.get('branch_id'))):return jsonify(cache=None)
+    if not (node.get('capabilities') or {}).get('package_cache'):return jsonify(cache=None)
+    if node.get('deployment_mode')=='p2p':return jsonify(cache=None)
+    # Cache uses exactly the same TLS/mTLS transport as Home, never an HTTP LAN shortcut.
+    return jsonify(cache=dict(id=node['id'],local_url=node.get('local_url'),public_url=node.get('public_url'),
+        connection_mode=node.get('deployment_mode') or 'local',p2p_url=f"https://warden-home-{node['id']}.internal:9443",
+        stun_urls=config.HOME_P2P_STUN_URLS,tls_fingerprint=node.get('tls_fingerprint'),
+        ca_certificate_pem=node.get('ca_certificate_pem'),require_mtls=bool(node.get('require_mtls',True)),
+        grant=issue_package_grant(g.endpoint,node,app)))
 
 
 @bp.route("/api/agent/patch-inventory", methods=["POST"])

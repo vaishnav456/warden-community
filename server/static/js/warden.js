@@ -3564,6 +3564,27 @@ document.addEventListener('DOMContentLoaded', () => {
   const startProgress = () => routeProgress?.classList.add('is-active');
   const stopProgress = () => routeProgress?.classList.remove('is-active');
   document.body.addEventListener('htmx:beforeRequest', startProgress);
+  // Polling must not replace a focused confirmation form or close a receipt.
+  document.body.addEventListener('htmx:beforeRequest', (event) => {
+    const activity = document.getElementById('home-live-activity');
+    if (activity && event.detail.elt === activity && activity.contains(document.activeElement)) {
+      event.preventDefault();
+    }
+  });
+  document.body.addEventListener('htmx:beforeSwap', (event) => {
+    if (event.detail.target?.id !== 'home-live-activity') return;
+    event.detail.target.dataset.openReceipts = JSON.stringify(
+      Array.from(event.detail.target.querySelectorAll('article')).filter(a => a.querySelector('details')?.open)
+        .map(a => a.querySelector('a[href^="/jobs/"]')?.getAttribute('href')));
+  });
+  document.body.addEventListener('htmx:afterSwap', (event) => {
+    if (event.detail.target?.id !== 'home-live-activity') return;
+    const open = JSON.parse(event.detail.target.dataset.openReceipts || '[]');
+    event.detail.target.querySelectorAll('article').forEach(article => {
+      const details = article.querySelector('details');
+      if (details && open.includes(article.querySelector('a[href^="/jobs/"]')?.getAttribute('href'))) details.open = true;
+    });
+  });
   document.body.addEventListener('htmx:afterSettle', stopProgress);
   document.body.addEventListener('htmx:responseError', stopProgress);
   window.addEventListener('beforeunload', startProgress);

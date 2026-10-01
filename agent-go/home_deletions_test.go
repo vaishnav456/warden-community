@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,54 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestHomeReaddAfterObservedDeletionUploadsWithoutConfirmation(t *testing.T) {
+	for _, content := range []string{"hello", "changed contents"} {
+		t.Run(content, func(t *testing.T) {
+			root := t.TempDir()
+			path := "user/Documents/file.txt"
+			digest := homeTestDigest([]byte("hello"))
+			version := fmt.Sprintf("%s:%d", digest, 456)
+			state := &homeSyncState{Version: 1, Files: map[string]string{}}
+			uploads := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/list" {
+					w.Header().Set("X-Warden-Deletion-Tracking", "1")
+					json.NewEncoder(w).Encode([]homeRemoteFile{{Path: path, Size: 5, ModTime: 456, SHA256: digest, Deleted: true}})
+					return
+				}
+				if r.Method != http.MethodPut || r.Header.Get("X-Warden-Readd-Version") != version {
+					t.Error("unexpected request", r.Method, r.Header)
+					w.WriteHeader(409)
+					return
+				}
+				got, _ := io.ReadAll(r.Body)
+				if string(got) != content {
+					t.Error("wrong re-add contents", string(got))
+				}
+				uploads++
+				w.Header().Set("X-Warden-SHA256", homeTestDigest(got))
+				w.WriteHeader(204)
+			}))
+			defer server.Close()
+			space := homeSpace{Name: "Home", Prefix: "user", MaxFileBytes: 1024}
+			node := homeNode{LocalURL: server.URL, Writable: true}
+			mapping := homeMapping{Target: "Documents"}
+			confirm := func([]string) int { t.Fatal("unexpected re-add popup"); return 2 }
+			if _, err := syncHomeMappingFilesTracked(space, node, mapping, root, server.Client(), state, confirm); err != nil {
+				t.Fatal(err)
+			}
+			if state.Deleted[path] != version {
+				t.Fatal("deletion not recorded", state)
+			}
+			os.WriteFile(filepath.Join(root, "file.txt"), []byte(content), 0600)
+			report, err := syncHomeMappingFilesTracked(space, node, mapping, root, server.Client(), state, confirm)
+			if err != nil || uploads != 1 || report.Uploaded != 1 {
+				t.Fatal("re-add failed", report, err, uploads)
+			}
+		})
+	}
+}
 
 func TestHomeDeletionRequiresExplicitChoiceAndNeverRestoresPendingFile(t *testing.T) {
 	for _, decision := range []int{0, 1, 2} {

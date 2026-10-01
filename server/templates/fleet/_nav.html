@@ -1,0 +1,8 @@
+<nav aria-label="Fleet tools" class="flex flex-wrap gap-2 mb-5">
+<a class="btn btn-secondary btn-sm" href="/operations/software">Application patches</a>
+<a class="btn btn-secondary btn-sm" href="/operations/device-policies">Device policies</a>
+<a class="btn btn-secondary btn-sm" href="/operations/support">Support queue</a>
+<a class="btn btn-secondary btn-sm" href="/operations/connections">Connections</a>
+{% if g.admin.role in ['superadmin','company_admin'] %}<a class="btn btn-secondary btn-sm" href="/operations/traffic">Branch traffic</a><a class="btn btn-secondary btn-sm" href="/operations/recovery">Home recovery</a>{% endif %}
+<a class="btn btn-secondary btn-sm" href="/operations/reports">Reports</a>
+</nav>

@@ -1569,7 +1569,9 @@ def remote_view_status(endpoint_id, session_id):
     if not session or str(session["endpoint_id"]) != endpoint_id:
         abort(404)
     _require_remote_session_capability(session, "view")
+    from services.device_health import remote_diagnostic
     return jsonify({
+        "diagnostic": remote_diagnostic(endpoint, session),
         "status": session.get("status"),
         "fail_reason": session.get("fail_reason"),
         "consent_required": bool(session.get("consent_required")),

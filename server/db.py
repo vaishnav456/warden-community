@@ -1620,7 +1620,16 @@ def create_job(company_id, branch_id, endpoint_id, job_type, payload, created_by
         data["expires_at"] = expires_at
     if escalation_id:
         data["escalation_id"] = escalation_id
-    rows = _post("jobs", data)
+    if job_type == "INSTALL_APP":
+        from services.package_storage import installation
+        with installation(company_id, payload):
+            rows = _post("jobs", data)
+    elif job_type == "FILE_PUSH":
+        from services.tenant_storage import admission
+        with admission(company_id, len((data.get("payload") or "").encode("utf-8")) + 4096):
+            rows = _post("jobs", data)
+    else:
+        rows = _post("jobs", data)
     job = rows[0] if (rows and isinstance(rows, list)) else rows
     if job:
         job["payload"] = payload  # return the plaintext the caller just gave us
@@ -1630,13 +1639,23 @@ def create_job(company_id, branch_id, endpoint_id, job_type, payload, created_by
 def create_system_job_once(company_id, branch_id, endpoint_id, job_type, payload):
     """Atomically create scheduler work unless the same operation is active."""
     company = get_company_by_id(company_id)
-    rows = _rpc("create_system_job_once", {
+    params = {
         "p_company_id": str(company_id),
         "p_branch_id": str(branch_id) if branch_id else None,
         "p_endpoint_id": str(endpoint_id),
         "p_type": job_type,
         "p_encrypted_payload": encrypt_field(company, payload, "job.payload") if payload is not None else None,
-    }) or []
+    }
+    if job_type == "INSTALL_APP":
+        from services.package_storage import installation
+        with installation(company_id, payload):
+            rows = _rpc("create_system_job_once", params) or []
+    elif job_type == "FILE_PUSH":
+        from services.tenant_storage import admission
+        with admission(company_id, len((params["p_encrypted_payload"] or "").encode("utf-8")) + 4096):
+            rows = _rpc("create_system_job_once", params) or []
+    else:
+        rows = _rpc("create_system_job_once", params) or []
     job = rows[0] if rows else None
     if job:
         job["payload"] = payload
@@ -2548,7 +2567,7 @@ def create_escalation_request(company_id, branch_id, endpoint_id, windows_user,
         datetime.now(timezone.utc) +
         timedelta(minutes=config.ESCALATION_WINDOW_MINUTES)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rows = _post("escalation_requests", {
+    data = {
         "company_id": company_id,
         "branch_id": branch_id,
         "endpoint_id": endpoint_id,
@@ -2560,7 +2579,17 @@ def create_escalation_request(company_id, branch_id, endpoint_id, windows_user,
         "expires_at": expires_at,
         "requires_dual_approval": requires_dual,
         "requested_by": requested_by,
-    })
+    }
+    if operation == "INSTALL_APP":
+        from services.package_storage import installation
+        with installation(company_id, payload):
+            rows = _post("escalation_requests", data)
+    elif operation == "FILE_PUSH":
+        from services.tenant_storage import admission
+        with admission(company_id, len((data["payload"] or "").encode("utf-8")) + 4096):
+            rows = _post("escalation_requests", data)
+    else:
+        rows = _post("escalation_requests", data)
     esc = rows[0] if (rows and isinstance(rows, list)) else rows
     if esc:
         esc["payload"] = payload
@@ -2887,19 +2916,58 @@ def count_open_alerts(company_id, branch_id=None):
 # App Library
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_app_library(company_id=None, include_global=True):
+def get_app_library(company_id=None, include_global=True, include_deleting=False):
+    suffix = "" if include_deleting else "&deletion_requested_at=is.null"
     if include_global and company_id:
-        rows = _get(f"app_library?or=(company_id.is.null,company_id.eq.{_q(company_id)})&order=name.asc")
+        rows = _get(f"app_library?or=(company_id.is.null,company_id.eq.{_q(company_id)})&order=name.asc" + suffix)
     elif company_id:
-        rows = _get(f"app_library?company_id=eq.{_q(company_id)}&order=name.asc")
+        rows = _get(f"app_library?company_id=eq.{_q(company_id)}&order=name.asc" + suffix)
     else:
-        rows = _get("app_library?company_id=is.null&order=name.asc")
+        rows = _get("app_library?company_id=is.null&order=name.asc" + suffix)
     return rows
 
 
-def get_app(app_id):
-    rows = _get(f"app_library?id=eq.{_q(app_id)}&limit=1")
+def get_app(app_id, include_deleting=False):
+    suffix = "" if include_deleting else "&deletion_requested_at=is.null"
+    rows = _get(f"app_library?id=eq.{_q(app_id)}&limit=1" + suffix)
     return rows[0] if rows else None
+
+
+def get_app_file_references(file_path):
+    return _get(f"app_library?file_path=eq.{_q(file_path)}&select=id&limit=2")
+
+
+def request_app_deletion(app_id, company_id):
+    rows = _patch(f"app_library?id=eq.{_q(app_id)}&company_id=eq.{_q(company_id)}",
+                  {"deletion_requested_at": _now_iso()})
+    if not rows:
+        raise RuntimeError("Could not mark package for deletion")
+
+
+def package_in_use(company_id, app_id):
+    from services.package_storage import package_id
+    company = None
+    sources = (
+        ("jobs", "type=eq.INSTALL_APP&status=in.(pending,approved,running)", "job.payload"),
+        ("escalation_requests", "operation=eq.INSTALL_APP&status=in.(pending,pending_secondary,approved)", "escalation.payload"),
+        ("scheduled_jobs", "job_type=eq.INSTALL_APP&enabled=eq.true", None),
+    )
+    for table, filters, domain in sources:
+        offset = 0
+        while True:
+            rows = _get(f"{table}?company_id=eq.{_q(company_id)}&{filters}"
+                        f"&select=id,payload&order=id.asc&limit=500&offset={offset}")
+            for row in rows:
+                payload = row.get("payload")
+                if domain and payload is not None:
+                    company = company or get_company_by_id(company_id)
+                    payload = decrypt_field(company, payload, domain)
+                if not isinstance(payload, dict) or str(package_id(payload)) == str(app_id):
+                    return True  # Unreadable active references fail closed.
+            if len(rows) < 500:
+                break
+            offset += len(rows)
+    return bool(_get(f"software_patch_rules?company_id=eq.{_q(company_id)}&app_id=eq.{_q(app_id)}&enabled=eq.true&select=id&limit=1"))
 
 
 def create_app(name, version, sha256, file_path, size_bytes, company_id=None,
@@ -3506,7 +3574,12 @@ def create_scheduled_job(company_id, branch_id, endpoint_id, name, job_type, pay
         data["endpoint_id"] = str(endpoint_id)
     if created_by:
         data["created_by"] = str(created_by)
-    rows = _post("scheduled_jobs", data)
+    if job_type == 'INSTALL_APP':
+        from services.package_storage import installation
+        with installation(company_id,payload):
+            rows = _post('scheduled_jobs',data)
+    else:
+        rows = _post("scheduled_jobs", data)
     return rows[0] if (rows and isinstance(rows, list)) else rows
 
 

@@ -33,13 +33,22 @@ class FrontendContractTests(unittest.TestCase):
         for relative in (
             "templates/landing.html", "routes/marketing.py",
             "static/css/landing.css", "static/js/landing.js",
+            "static/css/landing-console.css", "static/js/landing-console.js",
+            "routes/trial.py",
         ):
             self.assertFalse((SERVER_DIR / relative).exists(), relative)
         application = (SERVER_DIR / "app.py").read_text(encoding="utf-8")
         self.assertNotIn("marketing_bp", application)
+        self.assertNotIn("trial_bp", application)
         dashboard = (SERVER_DIR / "routes" / "dashboard.py").read_text(encoding="utf-8")
         self.assertIn('@bp.route("/")', dashboard)
         self.assertIn('@bp.route("/dashboard")', dashboard)
+
+    def test_actual_application_root_is_not_a_marketing_route(self):
+        from app import app
+        roots=[rule.endpoint for rule in app.url_map.iter_rules() if rule.rule=='/' and 'GET' in rule.methods]
+        self.assertEqual(roots,['dashboard.entry'])
+        self.assertFalse(any(rule.endpoint.startswith(('marketing.','trial.')) for rule in app.url_map.iter_rules()))
 
     def test_container_runtime_is_non_root_and_read_only(self):
         server_dockerfile = (SERVER_DIR / "Dockerfile").read_text(encoding="utf-8")

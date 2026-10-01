@@ -9,6 +9,7 @@ from flask import Blueprint, render_template, request, jsonify, g, abort, send_f
 
 import config
 import db
+from services.tenant_storage import admission,StorageError
 from middleware.auth import login_required, company_required, role_required, require_branch_scope
 
 bp = Blueprint("apps", __name__)
@@ -23,7 +24,7 @@ MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 @company_required
 def library():
     company_id = g.company["id"]
-    apps = db.get_app_library(company_id, include_global=True)
+    apps = db.get_app_library(company_id, include_global=True,include_deleting=True)
     endpoints = db.get_endpoints(company_id)
     if g.admin.get("role") == "branch_admin":
         if not g.admin.get("branch_id"):
@@ -69,29 +70,24 @@ def upload():
 
     sha256 = hashlib.sha256(data).hexdigest()
 
-    # Store file
-    dest_dir = config.UPLOAD_DIR / "apps" / sha256[:2]
+    company_id = g.company['id']
+    dest_dir = config.UPLOAD_DIR / "apps" / str(company_id) / sha256[:2]
     dest_path = dest_dir / f"{sha256}{ext}"
     try:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path.write_bytes(data)
+        with admission(company_id,len(data),replacing=dest_path):
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path.write_bytes(data)
+            app = db.create_app(name=name,version=version,sha256=sha256,
+                file_path=str(dest_path.relative_to(config.UPLOAD_DIR)),size_bytes=len(data),company_id=company_id,
+                description=description,install_args=install_args,self_service=self_service)
+            if not app:
+                raise StorageError('storage_unavailable','Could not register application package')
+    except StorageError as exc:
+        return jsonify(error=exc.code,message=str(exc)),exc.status
     except OSError:
         current_app.logger.exception("Could not store application package")
         return jsonify({"error": "Application storage is temporarily unavailable. Please retry."}), 503
 
-    company_id = g.company["id"]
-
-    app = db.create_app(
-        name=name,
-        version=version,
-        sha256=sha256,
-        file_path=str(dest_path.relative_to(config.UPLOAD_DIR)),
-        size_bytes=len(data),
-        company_id=company_id,
-        description=description,
-        install_args=install_args,
-        self_service=self_service,
-    )
     db.audit(g.company["id"], g.admin["id"], "app_uploaded",
              {"name": name, "version": version, "sha256": sha256})
 
@@ -141,16 +137,15 @@ def update(app_id):
 @company_required
 @role_required("company_admin")
 def delete(app_id):
-    from services.entitlements import check_mutation
-    decision = check_mutation(g.company["id"])
-    if not decision.allowed:
-        return jsonify({"error": decision.code, "message": decision.message}), 403
-    app = _managed_app(app_id)
-    db.delete_app(app_id)
+    from services.package_storage import delete_package
+    app = db.get_app(app_id,include_deleting=True)
+    if not app or str(app.get('company_id')) != str(g.company['id']):
+        abort(404)
+    result = delete_package(g.company['id'],app_id)
     db.audit(g.company["id"], g.admin["id"], "app_deleted", {
         "app_id": app_id, "name": app.get("name"), "sha256": app.get("sha256"),
     })
-    return jsonify({"ok": True})
+    return jsonify(result)
 
 
 @bp.route("/apps/<app_id>/deploy", methods=["POST"])

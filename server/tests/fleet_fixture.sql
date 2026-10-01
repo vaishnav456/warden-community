@@ -1,0 +1,16 @@
+-- ISOLATED DISPOSABLE DATABASE ONLY. No application credentials.
+CREATE EXTENSION pgcrypto;
+CREATE ROLE service_role;
+CREATE SCHEMA endpt;
+CREATE TABLE endpt.companies(id uuid PRIMARY KEY);
+CREATE TABLE endpt.branches(id uuid PRIMARY KEY,company_id uuid REFERENCES endpt.companies);
+CREATE TABLE endpt.admin_users(id uuid PRIMARY KEY);
+CREATE TABLE endpt.endpoints(id uuid PRIMARY KEY,company_id uuid REFERENCES endpt.companies,branch_id uuid REFERENCES endpt.branches);
+CREATE TABLE endpt.app_library(id uuid PRIMARY KEY,company_id uuid REFERENCES endpt.companies,deletion_requested_at timestamptz);
+CREATE TABLE endpt.remote_sessions(id uuid PRIMARY KEY);
+CREATE TABLE endpt.home_storage_nodes(id uuid PRIMARY KEY);
+CREATE TABLE endpt.jobs(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),company_id uuid,branch_id uuid,endpoint_id uuid,type text,payload text,status text,created_by uuid,started_at timestamptz,lease_expires_at timestamptz);
+INSERT INTO endpt.companies VALUES('00000000-0000-0000-0000-000000000001'),('00000000-0000-0000-0000-000000000002');
+INSERT INTO endpt.branches VALUES('00000000-0000-0000-0000-000000000011','00000000-0000-0000-0000-000000000001'),('00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000001');
+INSERT INTO endpt.endpoints VALUES('00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000011'),('00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000002',NULL),('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000012');
+INSERT INTO endpt.app_library VALUES('00000000-0000-0000-0000-000000000020','00000000-0000-0000-0000-000000000001',NULL);

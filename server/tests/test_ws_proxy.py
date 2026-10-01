@@ -104,6 +104,26 @@ class RelayLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await ws_proxy._relay_browser_to_agent(source, destination, session)
         self.assertEqual(destination.sent, ['{"type":"viewport_size","width":100}'])
 
+    async def test_relay_ping_is_read_only_and_not_forwarded(self):
+        source=MessageStream(['{"type":"relay_ping","nonce":"sample"}','{"type":"relay_ping","nonce":"duplicate"}'])
+        destination=MessageStream()
+        await ws_proxy._relay_browser_to_agent(source,destination,dict(id='session',capabilities=dict(view=True)))
+        self.assertEqual(destination.sent,[])
+        self.assertEqual(len(source.sent),1)
+        self.assertIn('relay_pong',source.sent[0])
+
+    async def test_quality_probe_failure_does_not_end_relay(self):
+        from unittest.mock import AsyncMock
+        browser=FakeWebSocket();agent=FakeWebSocket()
+        pair=ws_proxy._Pair();pair.agent_ws=agent;pair.ready.set()
+        async def failed_probe(*args):raise RuntimeError('probe failed')
+        async def relay(*args):await asyncio.sleep(0.01)
+        session=dict(id='session',endpoint_id='endpoint',company_id='tenant',status='active')
+        with patch.object(ws_proxy.db,'get_remote_session_by_token',return_value=session),patch.object(ws_proxy,'_attach_peer',new=AsyncMock(return_value=pair)),patch.object(ws_proxy,'_measure_remote_quality',new=failed_probe),patch.object(ws_proxy,'_relay_browser_to_agent',new=relay),patch.object(ws_proxy,'_relay',new=relay),patch.object(ws_proxy,'_close_session'),patch.object(ws_proxy,'_cleanup_pair',new=AsyncMock()):
+            await ws_proxy._handle_browser(browser,'endpoint','token')
+        self.assertTrue(pair.done.is_set())
+        self.assertEqual(browser.closed_with,(1000,''))
+
     @patch.object(ws_proxy, "PAIR_TIMEOUT", 0.001)
     @patch.object(ws_proxy.db, "mark_remote_session_failed")
     @patch.object(ws_proxy.db, "get_remote_session")

@@ -117,6 +117,8 @@ func runAgent(stopCh <-chan struct{}) {
 	}
 	lastTamperRepair = time.Now()
 	go runIdentityBroker(stopCh)
+	go runSupportBroker(stopCh)
+	go ensureSupportShortcut()
 
 	// Inventory the effective, configured machine policies in the background.
 	// The first heartbeat is not delayed; once collection finishes, the next
@@ -347,12 +349,14 @@ func postHeartbeat(jobCapacity int) ([]json.RawMessage, error) {
 		"agent_uptime_sec":      int(time.Since(agentStartTime).Seconds()),
 		"job_capacity":          jobCapacity,
 		"platform":              runtime.GOOS,
+		"running_job_id":        activeAgentJobID(),
 		"local_ip":              primaryLocalIPv4(),
 		"device_type":           windowsDeviceType(),
 		"topology_telemetry":    topologyTelemetry(),
 		"capabilities":          capabilities,
 		"capability_details": map[string]interface{}{
 			"remote_control": "Native Windows desktop capture and input",
+			"device_health":  deviceHealthSnapshot(),
 		},
 	}
 	policyInventoryMu.Lock()
@@ -429,6 +433,8 @@ func processJob(rawJSON []byte, pubKey ed25519.PublicKey) {
 		appendJobLog(env.JobID, line)
 	}
 
+	setActiveAgentJobID(env.JobID)
+	defer setActiveAgentJobID("")
 	exitCode, logOutput, dispErr := safeDispatchJob(env, logCallback)
 	logOutput = limitResultText(logOutput, 1024*1024, "job output")
 	status := "completed"

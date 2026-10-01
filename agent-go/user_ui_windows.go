@@ -67,6 +67,8 @@ type wardenUI struct {
 	instruction, footer       string
 	approval, transient       bool
 	deletion                  bool
+	support                   bool
+	edit                      uintptr
 	result                    int
 	width, height             int32
 	scale                     float64
@@ -112,6 +114,11 @@ func wardenWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uint
 		id := wParam & 0xffff
 		if id == 6 || id == 7 || id == 1 {
 			if u.approval && id == 6 && lParam != 0 {
+				if u.support {
+					buffer := make([]uint16, 2001)
+					user32DLL.NewProc("GetWindowTextW").Call(u.edit, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+					supportMessageFromUI = windows.UTF16ToString(buffer)
+				}
 				u.result = 0
 			}
 			if u.deletion && id == 7 && lParam != 0 {
@@ -148,6 +155,7 @@ func runWardenWindow(title, instruction, content, footer, severity string, appro
 	procSetProcessDPIAware.Call()
 	u := &wardenUI{instruction: instruction, footer: footer, approval: approval, transient: transient, result: 2, scale: 1}
 	u.deletion = title == "Warden Home deletions" && approval
+	u.support = title == "Warden Support" && approval
 	if p := user32DLL.NewProc("GetDpiForSystem"); p.Find() == nil {
 		dpi, _, _ := p.Call()
 		if dpi >= 96 {
@@ -211,13 +219,24 @@ func runWardenWindow(title, instruction, content, footer, severity string, appro
 		body = "IMPORTANT\r\n\r\n" + body
 	}
 	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n")
-	edit := child("EDIT", body, 0x0004|0x0040|0x0800|0x00200000|0x00010000, u.px(24), u.px(146), u.width-u.px(48), u.height-u.px(268), 20)
+	editStyle := uintptr(0x0004 | 0x0040 | 0x0800 | 0x00200000 | 0x00010000)
+	if u.support {
+		editStyle &^= 0x0800
+	}
+	edit := child("EDIT", body, editStyle, u.px(24), u.px(146), u.width-u.px(48), u.height-u.px(268), 20)
+	u.edit = edit
+	if u.support {
+		uiSendMessage.Call(edit, 0x00c5, 2000, 0)
+	}
 	label, buttonID := "Dismiss", uintptr(1)
 	if approval {
 		label, buttonID = "Deny access", 7
 	}
 	if u.deletion {
 		label = "Restore files"
+	}
+	if u.support {
+		label = "Cancel"
 	}
 	buttonWidth := u.px(150)
 	if approval {
@@ -227,6 +246,9 @@ func runWardenWindow(title, instruction, content, footer, severity string, appro
 	allow := uintptr(1)
 	if approval {
 		allowLabel := "Allow this session"
+		if u.support {
+			allowLabel = "Send request"
+		}
 		if u.deletion {
 			allowLabel = "Delete from Home"
 		}

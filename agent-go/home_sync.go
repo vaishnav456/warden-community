@@ -25,17 +25,18 @@ import (
 )
 
 type homeNode struct {
-	ID             string   `json:"id"`
-	LocalURL       string   `json:"local_url"`
-	PublicURL      string   `json:"public_url"`
-	TLSFingerprint string   `json:"tls_fingerprint"`
-	CACertificate  string   `json:"ca_certificate_pem"`
-	RequireMTLS    bool     `json:"require_mtls"`
-	Writable       bool     `json:"writable"`
-	Grant          string   `json:"grant"`
-	ConnectionMode string   `json:"connection_mode"`
-	P2PURL         string   `json:"p2p_url"`
-	STUNURLs       []string `json:"stun_urls"`
+	ConditionalWrites bool     `json:"-"`
+	ID                string   `json:"id"`
+	LocalURL          string   `json:"local_url"`
+	PublicURL         string   `json:"public_url"`
+	TLSFingerprint    string   `json:"tls_fingerprint"`
+	CACertificate     string   `json:"ca_certificate_pem"`
+	RequireMTLS       bool     `json:"require_mtls"`
+	Writable          bool     `json:"writable"`
+	Grant             string   `json:"grant"`
+	ConnectionMode    string   `json:"connection_mode"`
+	P2PURL            string   `json:"p2p_url"`
+	STUNURLs          []string `json:"stun_urls"`
 }
 
 type homeMapping struct {
@@ -43,16 +44,17 @@ type homeMapping struct {
 	Target string `json:"target"`
 }
 type homeSpace struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name"`
-	Type           string        `json:"type"`
-	AccessMode     string        `json:"access_mode"`
-	Prefix         string        `json:"prefix"`
-	Mappings       []homeMapping `json:"mappings"`
-	SyncMode       string        `json:"sync_mode"`
-	ConflictPolicy string        `json:"conflict_policy"`
-	MaxFileBytes   int64         `json:"max_file_bytes"`
-	Nodes          []homeNode    `json:"nodes"`
+	Resolution     *homeResolution `json:"resolution,omitempty"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Type           string          `json:"type"`
+	AccessMode     string          `json:"access_mode"`
+	Prefix         string          `json:"prefix"`
+	Mappings       []homeMapping   `json:"mappings"`
+	SyncMode       string          `json:"sync_mode"`
+	ConflictPolicy string          `json:"conflict_policy"`
+	MaxFileBytes   int64           `json:"max_file_bytes"`
+	Nodes          []homeNode      `json:"nodes"`
 }
 type homeRemoteFile struct {
 	Deleted bool   `json:"deleted,omitempty"`
@@ -105,12 +107,22 @@ func homeHTTPClient(node homeNode, username string) (*http.Client, error) {
 		}
 	}
 	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	measured := &homeMeasuredTransport{start: time.Now(), quality: homeConnectionQuality{Transport: "direct_https"}}
 	if node.ConnectionMode == "p2p" {
+		measured.setTransport("unknown")
 		transport = newHomeP2PTLSTransport(tlsCfg, func() (net.Conn, error) {
-			return dialHomeP2P(username, node)
+			connection, err := dialHomeP2P(username, node)
+			switch connection.(type) {
+			case *homeRelayConn:
+				measured.setTransport("encrypted_relay")
+			case *homeP2PConn:
+				measured.setTransport("direct_webrtc")
+			}
+			return connection, err
 		})
 	}
-	return &http.Client{Timeout: 10 * time.Minute, CheckRedirect: rejectRedirect, Transport: transport}, nil
+	measured.base = branchTrafficTransport{base: transport}
+	return &http.Client{Timeout: 30 * time.Minute, CheckRedirect: rejectRedirect, Transport: measured}, nil
 }
 
 func homeNodeURL(node homeNode) string {
@@ -202,12 +214,22 @@ func localHomeRoot(username string, space homeSpace, source string) (string, err
 	return abs, nil
 }
 
-func homeRequest(client *http.Client, node homeNode, method, path string, body io.Reader, mtime int64) (*http.Response, error) {
+func homeRequest(client *http.Client, node homeNode, method, path string, body io.Reader, mtime int64, readdVersion ...string) (*http.Response, error) {
 	req, err := http.NewRequest(method, homeNodeURL(node)+"/v1/file?path="+url.QueryEscape(path), body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+node.Grant)
+	if len(readdVersion) > 0 && readdVersion[0] != "" {
+		req.Header.Set("X-Warden-Readd-Version", readdVersion[0])
+	}
+	if len(readdVersion) > 1 {
+		if readdVersion[1] == "-" {
+			req.Header.Set("If-None-Match", "*")
+		} else if readdVersion[1] != "" {
+			req.Header.Set("If-Match", "\""+readdVersion[1]+"\"")
+		}
+	}
 	if mtime > 0 {
 		req.Header.Set("X-Warden-Mtime", time.Unix(mtime, 0).UTC().Format(time.RFC3339))
 	}
@@ -232,15 +254,26 @@ func listHomeFiles(client *http.Client, node homeNode, prefix string) ([]homeRem
 
 // Reports contain metadata only; grants and file contents never enter job logs.
 type homeFileResult struct {
-	Space  string `json:"space"`
-	Path   string `json:"path"`
-	Action string `json:"action"`
-	Status string `json:"status"`
-	Bytes  int64  `json:"bytes,omitempty"`
-	Error  string `json:"error,omitempty"`
+	MappedPath string `json:"mapped_path,omitempty"`
+	SpaceID    string `json:"space_id,omitempty"`
+	LocalSHA   string `json:"local_sha,omitempty"`
+	ServerCopy string `json:"server_copy,omitempty"`
+	Verified   bool   `json:"verified,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+	Space      string `json:"space"`
+	Path       string `json:"path"`
+	Action     string `json:"action"`
+	Status     string `json:"status"`
+	Bytes      int64  `json:"bytes,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type homeSyncReport struct {
+	Connections     []homeConnectionQuality `json:"connections,omitempty"`
+	CurrentFile     string                  `json:"current_file,omitempty"`
+	CurrentAction   string                  `json:"current_action,omitempty"`
+	CurrentBytes    int64                   `json:"current_bytes,omitempty"`
+	onProgress      func(homeSyncReport)
 	Deleted         int              `json:"deleted"`
 	Kind            string           `json:"kind"`
 	Version         int              `json:"version"`
@@ -262,7 +295,12 @@ type homeSyncReport struct {
 
 const homeReportDetailLimit = 100
 
-func (report *homeSyncReport) record(space, path, action, status string, size int64, err error) {
+func (report *homeSyncReport) record(space, path, action, status string, size int64, err error) *homeFileResult {
+	defer func() {
+		if report.onProgress != nil {
+			report.onProgress(*report)
+		}
+	}()
 	switch status {
 	case "deleted":
 		report.Deleted++
@@ -278,6 +316,8 @@ func (report *homeSyncReport) record(space, path, action, status string, size in
 		report.Unchanged++
 	case "skipped":
 		report.Skipped++
+	case "conflict":
+		report.Skipped++
 	case "failed":
 		report.Failed++
 	}
@@ -288,20 +328,27 @@ func (report *homeSyncReport) record(space, path, action, status string, size in
 	// Keep the error list useful even when many successful files precede it.
 	if len(report.Files) < homeReportDetailLimit {
 		report.Files = append(report.Files, detail)
+		return &report.Files[len(report.Files)-1]
 	} else {
 		report.OmittedDetails++
-		if err != nil {
+		if err != nil || status == "conflict" {
 			for i := len(report.Files) - 1; i >= 0; i-- {
-				if report.Files[i].Error == "" {
+				if report.Files[i].Error == "" && report.Files[i].Status != "conflict" {
 					report.Files[i] = detail
-					break
+					return &report.Files[i]
 				}
 			}
 		}
 	}
+	return nil
 }
 
 func (report *homeSyncReport) merge(other homeSyncReport) {
+	for _, connection := range other.Connections {
+		if len(report.Connections) < 30 {
+			report.Connections = append(report.Connections, connection)
+		}
+	}
 	report.Deleted += other.Deleted
 	report.Uploaded += other.Uploaded
 	report.Downloaded += other.Downloaded
@@ -317,9 +364,9 @@ func (report *homeSyncReport) merge(other homeSyncReport) {
 			report.Files = append(report.Files, detail)
 		} else {
 			report.OmittedDetails++
-			if detail.Error != "" {
+			if detail.Error != "" || detail.Status == "conflict" {
 				for i := len(report.Files) - 1; i >= 0; i-- {
-					if report.Files[i].Error == "" {
+					if report.Files[i].Error == "" && report.Files[i].Status != "conflict" {
 						report.Files[i] = detail
 						break
 					}
@@ -349,8 +396,11 @@ func (report *homeSyncReport) transferError() error {
 	return fmt.Errorf("%d failed, %d skipped", report.Failed, report.Skipped)
 }
 
-func syncHomeMapping(space homeSpace, node homeNode, m homeMapping, username string) (homeSyncReport, error) {
+func syncHomeMapping(space homeSpace, node homeNode, m homeMapping, username string, observer ...func(homeSyncReport)) (homeSyncReport, error) {
 	var report homeSyncReport
+	if err := refreshBranchTraffic(); err != nil {
+		return report, fmt.Errorf("cannot enforce branch traffic policy: %w", err)
+	}
 	localRoot, err := localHomeRoot(username, space, m.Source)
 	if err != nil {
 		return report, err
@@ -363,7 +413,11 @@ func syncHomeMapping(space homeSpace, node homeNode, m homeMapping, username str
 		return report, err
 	}
 	defer client.CloseIdleConnections()
-	return syncHomeMappingTracked(space, node, m, username, localRoot, client)
+	report, err = syncHomeMappingTracked(space, node, m, username, localRoot, client, observer...)
+	if measured, ok := client.Transport.(*homeMeasuredTransport); ok {
+		report.Connections = append(report.Connections, measured.snapshot())
+	}
+	return report, err
 }
 
 // This boundary also lets transfer failures be exercised against a real HTTP
@@ -372,14 +426,18 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 	return syncHomeMappingFilesTracked(space, node, m, localRoot, client, nil, nil)
 }
 
-func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, localRoot string, client *http.Client, state *homeSyncState, confirm func([]string) int) (homeSyncReport, error) {
+func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, localRoot string, client *http.Client, state *homeSyncState, confirm func([]string) int, observer ...func(homeSyncReport)) (homeSyncReport, error) {
 	var report homeSyncReport
+	if len(observer) > 0 {
+		report.onProgress = observer[0]
+	}
 	target, err := cleanHomePart(m.Target)
 	if err != nil {
 		return report, err
 	}
 	remoteRoot := strings.Trim(space.Prefix, "/") + "/" + target
-	remote, deletionSupported, err := listHomeFilesTracked(client, node, remoteRoot)
+	remote, deletionSupported, conditionalWrites, err := listHomeFilesFeatures(client, node, remoteRoot)
+	node.ConditionalWrites = conditionalWrites
 	if err != nil {
 		return report, err
 	}
@@ -416,6 +474,7 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 		}
 	}
 	handled := map[string]bool{}
+	resolvedLocal := map[string]string{}
 	canUpload := space.AccessMode != "read" && space.SyncMode != "download"
 	if space.SyncMode != "upload" {
 		for _, f := range remote {
@@ -481,6 +540,32 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 				handled[f.Path] = true
 				continue
 			}
+			localSHA := ""
+			if statErr == nil && state != nil && canUpload && f.SHA256 != "" {
+				localSHA, err = localHomeDigest(abs)
+				if err != nil {
+					report.record(space.Name, rel, "compare", "failed", 0, err)
+					continue
+				}
+				baseline := state.Files[f.Path]
+				_, pending := state.Conflicts[f.Path]
+				if pending || conflictPolicy == "keep_both" || (baseline != "" && baseline != localSHA && baseline != f.SHA256) {
+					choice, err := prepareHomeConflict(space, node, localRoot, rel, f, localSHA, client, state, &report)
+					if err != nil {
+						report.record(space.Name, rel, "conflict", "failed", 0, err)
+					}
+					if choice == "local" || choice == "both" {
+						resolvedLocal[f.Path] = choice
+					} else {
+						blocked[f.Path] = true
+					}
+					continue
+				}
+				if baseline != "" && baseline == f.SHA256 && baseline != localSHA {
+					resolvedLocal[f.Path] = "local"
+					continue
+				}
+			}
 			if statErr == nil && conflictPolicy == "keep_both" {
 				if info.ModTime().Unix() >= f.ModTime {
 					abs = abs + ".server-conflict-" + time.Now().UTC().Format("20060102-150405")
@@ -490,18 +575,28 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 						continue
 					}
 				}
-			} else if statErr == nil && info.ModTime().Unix() >= f.ModTime && conflictPolicy != "server_wins" {
+			} else if statErr == nil && info.ModTime().Unix() >= f.ModTime && conflictPolicy != "server_wins" && !(state != nil && state.Files[f.Path] != "" && state.Files[f.Path] == localSHA) {
 				if !canUpload {
 					report.record(space.Name, rel, "compare", "skipped", 0, errors.New("newer local file retained by conflict policy"))
 				}
 				continue
 			}
-			copied, err := downloadHomeFile(client, node, f, abs, space.MaxFileBytes)
+			report.CurrentFile, report.CurrentAction, report.CurrentBytes = rel, "Downloading", 0
+			copied, err := downloadHomeFile(client, node, f, abs, space.MaxFileBytes, func(n int64) {
+				report.CurrentBytes = n
+				if report.onProgress != nil {
+					report.onProgress(report)
+				}
+			})
 			if err != nil {
 				report.record(space.Name, rel, "download", "failed", 0, err)
 				continue
 			}
-			report.record(space.Name, rel, "download", "downloaded", copied, nil)
+			detail := report.record(space.Name, rel, "download", "downloaded", copied, nil)
+			if f.SHA256 != "" && detail != nil {
+				detail.Verified = true
+				detail.SHA256 = f.SHA256
+			}
 			if abs == dst {
 				if state != nil {
 					if digest, err := localHomeDigest(dst); err == nil {
@@ -525,6 +620,11 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 			return nil
 		}
 		if walkErr != nil {
+			// A reviewed conflict copy can be moved out of this directory
+			// after Walk captured its entries; that is not a failed transfer.
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
 			report.record(space.Name, rel, "scan", "failed", 0, walkErr)
 			return nil
 		}
@@ -554,13 +654,20 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 			return nil
 		}
 		remotePath := remoteRoot + "/" + filepath.ToSlash(rel)
+		if state != nil {
+			for original, conflict := range state.Conflicts {
+				if conflict.ServerCopy == filepath.ToSlash(rel) && resolvedLocal[original] != "both" {
+					return nil
+				}
+			}
+		}
 		if blocked[remotePath] {
 			return nil
 		}
 		if handled[remotePath] {
 			return nil
 		}
-		if rf, ok := remoteByPath[remotePath]; ok {
+		if rf, ok := remoteByPath[remotePath]; ok && !rf.Deleted {
 			equal, err := homeContentMatches(client, node, rf, path, info)
 			if err != nil {
 				report.record(space.Name, rel, "compare", "failed", 0, err)
@@ -573,7 +680,26 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 				report.record(space.Name, rel, "compare", "unchanged", 0, nil)
 				return nil
 			}
-			if rf.ModTime > info.ModTime().Unix() {
+			if state != nil && space.SyncMode == "upload" && rf.SHA256 != "" {
+				localSHA, hashErr := localHomeDigest(path)
+				baseline := state.Files[remotePath]
+				_, pending := state.Conflicts[remotePath]
+				if hashErr != nil {
+					report.record(space.Name, rel, "compare", "failed", 0, hashErr)
+					return nil
+				}
+				if pending || (baseline != "" && baseline != localSHA && baseline != rf.SHA256) {
+					choice, err := prepareHomeConflict(space, node, localRoot, filepath.ToSlash(rel), rf, localSHA, client, state, &report)
+					if err != nil {
+						report.record(space.Name, rel, "conflict", "failed", 0, err)
+					}
+					if choice != "local" && choice != "both" {
+						return nil
+					}
+					resolvedLocal[remotePath] = choice
+				}
+			}
+			if rf.ModTime > info.ModTime().Unix() && resolvedLocal[remotePath] == "" {
 				report.record(space.Name, rel, "compare", "skipped", 0, errors.New("newer remote content retained by conflict policy"))
 				return nil
 			}
@@ -583,9 +709,27 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 			report.record(space.Name, rel, "upload", "failed", 0, err)
 			return nil
 		}
+		report.CurrentFile, report.CurrentAction, report.CurrentBytes = rel, "Uploading", 0
+		if report.onProgress != nil {
+			report.onProgress(report)
+		}
+		// Transport may read uploads on another goroutine. Report byte totals
+		// only after its acknowledgement; do not mutate shared reports there.
 		counter := &homeByteCounter{}
 		digest := sha256.New()
-		resp, err := homeRequest(client, node, http.MethodPut, remotePath, io.TeeReader(f, io.MultiWriter(counter, digest)), info.ModTime().Unix())
+		readdVersion := ""
+		if state != nil {
+			readdVersion = state.Deleted[remotePath]
+		}
+		expectedCurrent := "-"
+		if remoteFile, exists := remoteByPath[remotePath]; exists {
+			expectedCurrent = remoteFile.SHA256
+			if remoteFile.Deleted {
+				expectedCurrent = readdVersion
+			}
+		}
+		resp, err := homeRequest(client, node, http.MethodPut, remotePath, io.TeeReader(f, io.MultiWriter(counter, digest)), info.ModTime().Unix(), readdVersion, expectedCurrent)
+		verified := false
 		f.Close()
 		if err == nil {
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
@@ -595,6 +739,7 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 			if receipt := resp.Header.Get("X-Warden-SHA256"); err == nil && receipt != "" && !strings.EqualFold(receipt, hex.EncodeToString(digest.Sum(nil))) {
 				err = errors.New("upload content hash acknowledgement mismatch")
 			}
+			verified = err == nil && resp.Header.Get("X-Warden-SHA256") != ""
 			resp.Body.Close()
 		}
 		if err == nil && counter.n != info.Size() {
@@ -605,8 +750,21 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 		} else {
 			if state != nil {
 				state.Files[remotePath] = hex.EncodeToString(digest.Sum(nil))
+				if choice := resolvedLocal[remotePath]; choice != "" {
+					if conflict, ok := state.Conflicts[remotePath]; ok && choice == "local" {
+						if _, err := recoverHomeFile(localRoot, filepath.Join(localRoot, filepath.FromSlash(conflict.ServerCopy))); err != nil {
+							report.record(space.Name, rel, "recover", "failed", 0, err)
+							return nil
+						}
+					}
+					delete(state.Conflicts, remotePath)
+				}
 			}
-			report.record(space.Name, rel, "upload", "uploaded", counter.n, nil)
+			detail := report.record(space.Name, rel, "upload", "uploaded", counter.n, nil)
+			if detail != nil {
+				detail.Verified = verified
+				detail.SHA256 = hex.EncodeToString(digest.Sum(nil))
+			}
 		}
 		return nil
 	})
@@ -616,14 +774,20 @@ func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, 
 	return report, report.transferError()
 }
 
-type homeByteCounter struct{ n int64 }
+type homeByteCounter struct {
+	n        int64
+	progress func(int64)
+}
 
 func (counter *homeByteCounter) Write(p []byte) (int, error) {
 	counter.n += int64(len(p))
+	if counter.progress != nil {
+		counter.progress(counter.n)
+	}
 	return len(p), nil
 }
 
-func downloadHomeFile(client *http.Client, node homeNode, file homeRemoteFile, dst string, maxBytes int64) (int64, error) {
+func downloadHomeFile(client *http.Client, node homeNode, file homeRemoteFile, dst string, maxBytes int64, progress ...func(int64)) (int64, error) {
 	resp, err := homeRequest(client, node, http.MethodGet, file.Path, nil, 0)
 	if err != nil {
 		return 0, err
@@ -641,7 +805,11 @@ func downloadHomeFile(client *http.Client, node homeNode, file homeRemoteFile, d
 	}
 	defer os.Remove(tmp.Name())
 	digest := sha256.New()
-	copied, err := io.Copy(io.MultiWriter(tmp, digest), io.LimitReader(resp.Body, maxBytes+1))
+	counter := &homeByteCounter{}
+	if len(progress) > 0 {
+		counter.progress = progress[0]
+	}
+	copied, err := io.Copy(io.MultiWriter(tmp, digest, counter), io.LimitReader(resp.Body, maxBytes+1))
 	closeErr := tmp.Close()
 	if err != nil {
 		return 0, err
@@ -681,7 +849,7 @@ func syncWardenHomeNow(username string, raw interface{}) error {
 	return err
 }
 
-func syncWardenHomeWithReport(username string, raw interface{}) (report homeSyncReport, finalErr error) {
+func syncWardenHomeWithReport(username string, raw interface{}, observer ...func(homeSyncReport)) (report homeSyncReport, finalErr error) {
 	report = homeSyncReport{Kind: "warden_home_sync", Version: 1, Username: username, StartedAt: time.Now().UTC().Format(time.RFC3339), Files: []homeFileResult{}}
 	defer func() {
 		report.CompletedAt = time.Now().UTC().Format(time.RFC3339)
@@ -717,7 +885,19 @@ func syncWardenHomeWithReport(username string, raw interface{}) (report homeSync
 			for _, node := range space.Nodes {
 				for _, candidate := range homeNodeCandidates(node) {
 					var err error
-					mappingReport, err = syncHomeMapping(space, candidate, mapping, username)
+					mappingReport, err = syncHomeMapping(space, candidate, mapping, username, func(partial homeSyncReport) {
+						if len(observer) > 0 {
+							snapshot := report
+							snapshot.Files = append([]homeFileResult(nil), report.Files...)
+							snapshot.Connections = append([]homeConnectionQuality(nil), report.Connections...)
+							snapshot.merge(partial)
+							snapshot.Status = "running"
+							snapshot.CurrentFile = partial.CurrentFile
+							snapshot.CurrentAction = partial.CurrentAction
+							snapshot.CurrentBytes = partial.CurrentBytes
+							observer[0](snapshot)
+						}
+					})
 					if err == nil {
 						last = nil
 						break
@@ -835,7 +1015,7 @@ func runInteractiveHomeCommand(username, executable string, args []string) (uint
 	return 0, errors.New("drive command timed out")
 }
 
-func syncWardenHomeJob(p map[string]interface{}) (int, string, error) {
+func syncWardenHomeJob(p map[string]interface{}, jobIDs ...string) (int, string, error) {
 	username, _ := p["username"].(string)
 	if !identityUsernamePattern.MatchString(username) {
 		return 1, "", errors.New("invalid Warden Home username")
@@ -854,7 +1034,56 @@ func syncWardenHomeJob(p map[string]interface{}) (int, string, error) {
 	if !ok {
 		return 1, "", errors.New("missing signed Warden Home configuration")
 	}
-	report, syncErr := syncWardenHomeWithReport(username, home)
+	if resolution, valid := p["resolution"].(map[string]interface{}); valid {
+		encoded, err := json.Marshal(home)
+		if err != nil {
+			return 1, "", err
+		}
+		var spaces []homeSpace
+		if err = json.Unmarshal(encoded, &spaces); err != nil {
+			return 1, "", err
+		}
+		spaceID, _ := resolution["space_id"].(string)
+		for index := range spaces {
+			if spaces[index].ID == spaceID {
+				raw, _ := json.Marshal(resolution)
+				var choice homeResolution
+				if err = json.Unmarshal(raw, &choice); err != nil {
+					return 1, "", err
+				}
+				spaces[index].Resolution = &choice
+			}
+		}
+		home = spaces
+	}
+	// Progress is best-effort and bounded: a slow control plane must not
+	// stall direct Home transfers or create one goroutine per file chunk.
+	var progress chan homeSyncReport
+	if len(jobIDs) > 0 && jobIDs[0] != "" {
+		progress = make(chan homeSyncReport, 1)
+		jobID := jobIDs[0]
+		go func() {
+			for snapshot := range progress {
+				if _, err := apiPostAuth("/api/agent/home-progress", map[string]interface{}{"job_id": jobID, "report": snapshot}); err != nil {
+					logWarn("Home live progress deferred: %v", err)
+				}
+			}
+		}()
+		defer close(progress)
+	}
+	lastProgress := time.Time{}
+	report, syncErr := syncWardenHomeWithReport(username, home, func(snapshot homeSyncReport) {
+		if progress == nil || time.Since(lastProgress) < 5*time.Second {
+			return
+		}
+		lastProgress = time.Now()
+		snapshot.Files = append([]homeFileResult(nil), snapshot.Files...)
+		snapshot.Connections = append([]homeConnectionQuality(nil), snapshot.Connections...)
+		select {
+		case progress <- snapshot:
+		default:
+		}
+	})
 	output, err := json.Marshal(report)
 	if err != nil {
 		return 1, "", err

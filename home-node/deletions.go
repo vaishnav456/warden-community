@@ -1,7 +1,7 @@
 package main
 
 // Deletion markers are encrypted and authenticated with the Home storage key.
-// Retain encrypted data for recovery, but never serve/list it as an active file.
+// Keep only the deletion record to prevent stale uploads; remove file contents.
 import (
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,10 @@ type homeDeletion struct {
 	SHA256    string `json:"sha256"`
 	Size      int64  `json:"size"`
 	DeletedAt int64  `json:"deleted_at"`
+}
+
+func homeDeletionVersion(deletion *homeDeletion) string {
+	return fmt.Sprintf("%s:%d", deletion.SHA256, deletion.DeletedAt)
 }
 
 func deletionAAD(rel string) []byte {
@@ -83,12 +88,62 @@ func writeHomeDeletion(rel string, deletion homeDeletion) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(data+".deleted", aead.Seal(nonce, nonce, plain, deletionAAD(rel)), 0600)
+	// Persist the marker FIRST so a failed cleanup cannot resurrect the file.
+	if err := atomicWrite(data+".deleted", aead.Seal(nonce, nonce, plain, deletionAAD(rel)), 0600); err != nil {
+		return err
+	}
+	return purgeHomeDeletion(rel)
+}
+
+// Caller holds storageMu and the space lock. Never remove the tombstone: other
+// endpoints still need it to distinguish intentional deletion from missing data.
+func purgeHomeDeletion(rel string) error {
+	deletion, err := readHomeDeletion(rel)
+	if err != nil || deletion == nil {
+		return err
+	}
+	data, meta, err := pathsFor(rel)
+	if err != nil {
+		return err
+	}
+	for _, path := range []string{data, meta} {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("invalid deleted file storage path")
+		}
+	}
+	for _, path := range []string{data, meta} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove deleted Home file: %w", err)
+		}
+	}
+	return nil
+}
+
+// Upgrade repair: previously confirmed deletions retained encrypted contents.
+// Authenticate every marker before cleanup; unmarked files are never touched.
+func cleanupHomeDeletions(prefix string) error {
+	entries, err := appendHomeDeletions(prefix, nil)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := purgeHomeDeletion(entry.Path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Caller holds storageMu and the cross-process space lock. Compare-and-delete
 // refuses to delete content that changed after the user saw the confirmation.
-func confirmHomeDeletion(rel, expected string) (int, error) {
+func confirmHomeDeletion(rel, expected string, grants ...grant) (int, error) {
 	previous, err := readHomeDeletion(rel)
 	if err != nil {
 		return 500, err
@@ -96,6 +151,9 @@ func confirmHomeDeletion(rel, expected string) (int, error) {
 	if previous != nil {
 		if expected != "" && !strings.EqualFold(expected, previous.SHA256) {
 			return 412, errors.New("deleted version changed")
+		}
+		if err := purgeHomeDeletion(rel); err != nil {
+			return 500, err
 		}
 		return 204, nil
 	}
@@ -125,7 +183,27 @@ func confirmHomeDeletion(rel, expected string) (int, error) {
 	if expected != "" && !strings.EqualFold(expected, digest) {
 		return 412, errors.New("remote file changed; deletion not applied")
 	}
-	if err := writeHomeDeletion(rel, homeDeletion{SHA256: digest, Size: m.Size, DeletedAt: time.Now().Unix()}); err != nil {
+	if len(grants) > 0 {
+		g := grants[0]
+		if _, err := historyUsageAndCleanup(g.Prefix, true); err != nil {
+			return 500, err
+		}
+		growth, err := historyGrowth(rel, g.HistoryDays)
+		if err != nil {
+			return 500, err
+		}
+		used := prefixUsage(g.Prefix)
+		if used == math.MaxInt64 || used < m.Size || growth > math.MaxInt64-(used-m.Size) {
+			return 500, errors.New("storage usage cannot be authenticated")
+		}
+		if g.QuotaBytes > 0 && used-m.Size+growth > g.QuotaBytes {
+			return 507, errors.New("recycle history exceeds space quota")
+		}
+		if err := archiveHomeVersion(rel, g.HistoryDays, true); err != nil {
+			return 500, err
+		}
+	}
+	if err := writeHomeDeletion(rel, homeDeletion{SHA256: digest, Size: m.Size, DeletedAt: time.Now().UnixNano()}); err != nil {
 		return 500, err
 	}
 	return http.StatusNoContent, nil

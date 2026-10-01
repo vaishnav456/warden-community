@@ -16,6 +16,19 @@ import (
 
 const reinstallRoot = `C:\ProgramData\WardenReinstall`
 
+// Called only after envelope signature validation. A downgrade additionally
+// binds the administrator's rollback authorization to the installed version.
+func validateReinstallVersion(version string, p map[string]interface{}) error {
+	cmp, err := compareAgentVersions(version, agentVersion)
+	if err != nil {
+		return fmt.Errorf("invalid reinstall version: %w", err)
+	}
+	if cmp < 0 && p["rollback_from"] != agentVersion {
+		return fmt.Errorf("agent downgrade from %s to %s is not allowed", agentVersion, version)
+	}
+	return nil
+}
+
 func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string, error) {
 	relayMu.Lock()
 	remoteActive := relayLive != nil
@@ -35,10 +48,8 @@ func prepareAgentReinstall(jobID string, p map[string]interface{}) (int, string,
 	if providerURL == "" || providerSHA256 == "" {
 		return 1, "", fmt.Errorf("Windows reinstall is missing its Credential Provider artifact")
 	}
-	if cmp, err := compareAgentVersions(version, agentVersion); err != nil {
-		return 1, "", fmt.Errorf("invalid reinstall version: %w", err)
-	} else if cmp < 0 {
-		return 1, "", fmt.Errorf("agent downgrade from %s to %s is not allowed", agentVersion, version)
+	if err := validateReinstallVersion(version, p); err != nil {
+		return 1, "", err
 	}
 
 	handoffDir := filepath.Join(reinstallRoot, strings.ToLower(jobID))

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
@@ -14,6 +15,13 @@ func main() {
 	// If a command-line argument is given, handle service management
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "--request-support":
+			message := ""
+			if len(os.Args) > 2 {
+				message = strings.Join(os.Args[2:], " ")
+			}
+			os.Exit(runSupportCLI(message))
+			return
 		case "--home-deletion-confirm":
 			if len(os.Args) != 3 {
 				os.Exit(2)

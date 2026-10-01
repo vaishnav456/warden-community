@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const homeNodeVersion = "1.1.7"
+const homeNodeVersion = "1.1.9"
 
 type managedUpdate struct {
 	NodeID      string `json:"node_id"`

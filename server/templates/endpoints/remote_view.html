@@ -191,6 +191,7 @@
     <button id="btn-disconnect">✕ Disconnect</button>
     </div>
   </div>
+  <p id="remote-connection-diagnostic" role="status" class="text-xs p-2" hidden></p>
   <div id="canvas-wrap">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="drop-overlay">Drop files onto the remote computer<br><small>Files will be delivered to Public Desktop</small></div>
@@ -257,6 +258,13 @@
   const pathModal = document.getElementById('path-modal');
 
   let ws, sw = 0, sh = 0, scale = 1;
+  let relayRTT = null, relayPingAt = 0, relayPingNonce = '';
+  setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      relayPingAt = performance.now(); relayPingNonce = String(relayPingAt);
+      ws.send(JSON.stringify({type:'relay_ping', nonce:relayPingNonce}));
+    }
+  }, 15000);
   let scaleMode = 'fit', viewOnly = !REMOTE_CAPABILITIES.control, reconnectAttempts = 0, allowReconnect = true;
   let relayWasPaired = false, recoveringSession = false;
   let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
@@ -391,6 +399,10 @@
       if (typeof e.data === 'string') {
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type === 'relay_pong') {
+          if (msg.nonce === relayPingNonce) relayRTT = Math.round(performance.now() - relayPingAt);
+          return;
+        }
 
         if (msg.type === 'init') {
           sw = msg.w; sh = msg.h;
@@ -561,6 +573,11 @@
     }
     if (!res.ok) return;
     const data = await res.json();
+    const diagnostic = document.getElementById('remote-connection-diagnostic');
+    if (diagnostic && data.diagnostic) {
+      diagnostic.textContent = `${data.diagnostic.title}: ${data.diagnostic.detail} ${data.diagnostic.action}`;
+      diagnostic.hidden = data.diagnostic.code === 'connecting' && lastFrameAt > 0;
+    }
     if (data.consent_required && data.consent_status === 'pending') {
       setStatus('Waiting for endpoint approval…', '');
     } else if (data.consent_required && data.consent_status === 'approved' && (!ws || ws.readyState !== WebSocket.OPEN)) {
@@ -1227,7 +1244,7 @@
     const elapsed = (now - lastStatsAt) / 1000;
     const fps = elapsed ? Math.round(frameCount / elapsed) : 0;
     const age = lastFrameAt ? Math.round(now - lastFrameAt) : 0;
-    document.getElementById('quality-stats').textContent = `${fps} fps · ${age || '—'} ms frame age`;
+    document.getElementById('quality-stats').textContent = `${fps} fps · ${age || '—'} ms frame age · ${relayRTT === null ? '—' : relayRTT} ms relay RTT`;
     frameCount = 0;
     lastStatsAt = now;
   }, 2000);

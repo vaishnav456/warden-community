@@ -1,6 +1,45 @@
 /* One component language for the real workspace and its public showcase.
    Load after workbench/landing styles. No layout or behavior dependencies. */
 @import url('./design-tokens.css');
+.storage-usage-progress{appearance:none;border:0;border-radius:8px;height:8px;overflow:hidden;accent-color:var(--accent-500);background:var(--base-700)}
+.storage-usage-progress::-webkit-progress-bar{background:var(--base-700);border-radius:8px}
+.storage-usage-progress::-webkit-progress-value{background:var(--accent-500);border-radius:8px}
+.storage-usage-progress::-moz-progress-bar{background:var(--accent-500);border-radius:8px}
+/* Keep modal actions reachable on short screens and at browser zoom. */
+.endpoint-modal-backdrop,.directory-modal-backdrop,.modal-backdrop,.dialog-backdrop,
+[class*="fixed inset-0 bg-black"] {
+  overflow-y:auto;overscroll-behavior:contain;
+}
+.endpoint-modal-backdrop {z-index:1500;padding:1rem;}
+.endpoint-modal-backdrop>.endpoint-dialog,
+[class*="fixed inset-0 bg-black"]>[class*="bg-base-850"],
+.directory-modal-backdrop>.directory-modal,.modal-backdrop>.modal-panel {
+  min-width:0;min-height:0;max-height:calc(100vh - 2rem);
+  max-height:calc(100dvh - 2rem);overflow-y:auto;overscroll-behavior:contain;
+}
+.endpoint-modal-backdrop>.remote-access-dialog {
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.remote-access-dialog>.remote-access-head,.remote-access-dialog>.remote-access-actions {flex-shrink:0;}
+.remote-access-dialog>.remote-access-body {
+  flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+}
+.remote-access-actions {flex-wrap:wrap;}
+.remote-access-actions .btn {min-height:44px;white-space:normal;}
+@media(max-width:650px) {
+  .endpoint-modal-backdrop {padding:.5rem;}
+  .endpoint-modal-backdrop>.endpoint-dialog {max-height:calc(100vh - 1rem);max-height:calc(100dvh - 1rem);}
+  .remote-access-actions {gap:.5rem;}
+  .remote-access-actions .btn {flex:1 1 100%;width:100%;}
+}
+@media(max-height:480px) {
+  .remote-access-dialog>.remote-access-head {padding:.65rem 1rem;grid-template-columns:2.25rem minmax(0,1fr);gap:.65rem;}
+  .remote-access-head .remote-access-mark {width:2.25rem;height:2.25rem;border-radius:.65rem;}
+  .remote-access-head h3 {font-size:1rem;}
+  .remote-access-head p {display:none;}
+  .remote-access-dialog>.remote-access-actions {padding:.65rem 1rem;}
+}
 :root {
   --workspace-card-radius:12px;
   --workspace-control-radius:8px;

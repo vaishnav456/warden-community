@@ -25,7 +25,7 @@ def _b64(value):
 
 def issue_home_grant(*, company_id, endpoint_id, identity_id, space_id, node_id,
                      prefix, permissions, max_file_bytes=536870912,
-                     quota_bytes=None, ttl_seconds=900):
+                     quota_bytes=None, ttl_seconds=900,history_days=0):
     now = int(time.time())
     payload = {
         "v": 1, "iss": "warden", "aud": "warden-home-node",
@@ -34,6 +34,7 @@ def issue_home_grant(*, company_id, endpoint_id, identity_id, space_id, node_id,
         "node_id": str(node_id), "prefix": prefix,
         "max_file_bytes": int(max_file_bytes),
         "quota_bytes": int(quota_bytes) if quota_bytes else 0,
+        "history_days":max(0,min(365,int(history_days))),
         "permissions": sorted(set(permissions)), "iat": now,
         "exp": now + max(60, min(int(ttl_seconds), 3600)),
         "nonce": secrets.token_urlsafe(18),
@@ -44,7 +45,7 @@ def issue_home_grant(*, company_id, endpoint_id, identity_id, space_id, node_id,
 
 
 def issue_replication_grant(*, company_id, source_node_id, target_node_id, space_id, prefix,
-                            max_file_bytes=536870912, quota_bytes=None, ttl_seconds=900):
+                            max_file_bytes=536870912, quota_bytes=None, ttl_seconds=900,history_days=0):
     """Authorize one node to mirror one tenant space to another node."""
     now = int(time.time())
     payload = {
@@ -54,11 +55,21 @@ def issue_replication_grant(*, company_id, source_node_id, target_node_id, space
         "prefix": prefix.strip("/"), "permissions": ["read", "replicate"],
         "max_file_bytes": int(max_file_bytes),
         "quota_bytes": int(quota_bytes) if quota_bytes else 0,
+        "history_days":max(0,min(365,int(history_days))),
         "iat": now, "exp": now + max(60, min(int(ttl_seconds), 3600)),
         "nonce": secrets.token_urlsafe(18),
     }
     message = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return f"{_b64(message)}.{_b64(sign_canonical_payload(payload))}"
+
+
+def issue_package_grant(endpoint,node,app):
+    now=int(time.time())
+    payload=dict(v=1,iss='warden',aud='warden-package-cache',company_id=str(endpoint['company_id']),
+        endpoint_id=str(endpoint['id']),node_id=str(node['id']),app_id=str(app['id']),
+        package_sha256=app['sha256'],max_file_bytes=int(app.get('size_bytes') or 0),
+        prefix='packages/'+app['sha256'],permissions=['package'],iat=now,exp=now+900,nonce=secrets.token_urlsafe(18))
+    return f"{_b64(json.dumps(payload,sort_keys=True,separators=(',',':')).encode())}.{_b64(sign_canonical_payload(payload))}"
 
 
 def _seen_age(node, now=None):
@@ -161,11 +172,13 @@ def replication_config_for(node, spaces):
                 if peer.get("deployment_mode") == "p2p" else [],
                 "max_file_bytes": int(space.get("max_file_bytes") or 536870912),
                 "quota_bytes": int(space.get("quota_bytes") or 0),
+                "history_days":int(space.get('history_days') or 0),
                 "prefix": prefix, "grant": issue_replication_grant(
                     company_id=node["company_id"], source_node_id=node["id"],
                     target_node_id=peer["id"], space_id=space["id"], prefix=prefix,
                     max_file_bytes=space.get("max_file_bytes") or 536870912,
                     quota_bytes=space.get("quota_bytes"),
+                    history_days=space.get('history_days',0),
                 ),
             })
             break
@@ -283,6 +296,7 @@ def home_config_for(endpoint, identity, spaces, assignments):
                     prefix=prefix, permissions=permissions,
                     max_file_bytes=space.get("max_file_bytes") or 536870912,
                     quota_bytes=space.get("quota_bytes"),
+                    history_days=space.get('history_days',0),
                 ),
             })
         if nodes:

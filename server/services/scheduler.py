@@ -77,10 +77,14 @@ def _dispatch_job(job):
         return
     # Resolve target endpoints
     targets = scheduled_targets(job)
+    from services.fleet_tools import defer_updates
 
     dispatched = 0
     skipped = 0
     for ep in targets:
+        if job_type in {'INSTALL_APP','UPDATE_AGENT','REINSTALL_AGENT'} and defer_updates(ep):
+            skipped += 1
+            continue
         capabilities = set(ep.get("capabilities") or [])
         if capabilities and job_type not in capabilities:
             skipped += 1
@@ -109,15 +113,25 @@ def _check_auto_updates():
     privileged Windows service."""
     try:
         company = db.get_auto_update_company()
+        companies = [company] if company else []
     except Exception as e:
-        log.warning("scheduler: get_auto_update_company failed: %s", e)
+        log.warning("scheduler: get_companies_with_auto_update failed: %s", e)
         return
-    if not company:
+    if not companies:
         return
 
     builds = {}
 
-    for company in [company]:
+    from services.agent_rollouts import campaigns, ACTIVE
+    # A paused campaign must also block ordinary auto-updates: otherwise its
+    # failure stop/canary boundary could be bypassed by this scheduler.
+    try:
+        protected = {key for row in campaigns(active_only=True) if row['status'] in ACTIVE for key in row['targets']}
+    except Exception as exc:
+        log.warning('Cannot verify rollout boundaries; auto-updates deferred: %s', exc)
+        return
+
+    for company in companies:
         company_id = company["id"]
         try:
             endpoints = db.get_endpoints(company_id)
@@ -126,6 +140,8 @@ def _check_auto_updates():
             continue
 
         for ep in endpoints:
+            if str(ep['id']) in protected or db.get_active_remote_session(ep['id']):
+                continue
             if ep.get("status") != "online":
                 continue
             target = db.endpoint_target_platform(ep)
@@ -172,6 +188,9 @@ def _check_auto_updates():
                 )
                 continue
             try:
+                from services.fleet_tools import defer_updates
+                if defer_updates(dict(ep,company_id=company_id)):
+                    continue
                 created = db.create_system_job_once(
                     company_id, ep.get("branch_id"), ep["id"], "UPDATE_AGENT", payload,
                 )
@@ -204,13 +223,38 @@ def _promote_patch_rollouts():
             log.warning("scheduler: patch rollout promotion failed for %s: %s", deployment["id"], e)
 
 
+def _purge_expired_trials():
+    try:
+        purged = db.purge_expired_hosted_trials()
+    except Exception as e:
+        log.warning("scheduler: expired hosted-trial cleanup failed: %s", e)
+        return
+    for item in purged:
+        from services.tenant_crypto import lock_company
+        lock_company(item.get("company_id"))
+        log.info("Hosted trial deleted: lead=%s tenant=%s endpoints=%s",
+                 item.get("lead_id"), item.get("company_id"),
+                 item.get("deleted_endpoint_count", 0))
+
+
 def _loop():
     while True:
         time.sleep(_INTERVAL)
         health_tracker.ping("scheduler")
         _dispatch_once()
+        try:
+            from services.agent_rollouts import tick
+            tick()
+        except Exception:
+            log.exception('Staged agent update check failed')
         _check_auto_updates()
+        try:
+            from services.fleet_tools import tick as patch_applications
+            patch_applications()
+        except Exception:
+            log.exception('Application patch check deferred')
         _promote_patch_rollouts()
+        _purge_expired_trials()
 
 
 def start():

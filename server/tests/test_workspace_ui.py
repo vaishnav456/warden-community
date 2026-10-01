@@ -7,6 +7,15 @@ SERVER = pathlib.Path(__file__).resolve().parents[1]
 
 
 class WorkspaceUITests(unittest.TestCase):
+    def test_modal_actions_remain_reachable_on_short_screens(self):
+        css = (SERVER / "static/css/workspace-ui.css").read_text(encoding="utf-8")
+        self.assertIn("max-height:calc(100dvh - 2rem)", css)
+        self.assertIn(".remote-access-dialog>.remote-access-body", css)
+        self.assertIn("flex:1 1 auto;min-height:0;overflow-y:auto", css)
+        self.assertIn(".remote-access-dialog>.remote-access-actions {flex-shrink:0;}", css)
+        self.assertIn("@media(max-height:480px)", css)
+        self.assertIn("max-height:calc(100dvh - 1rem)", css)
+
     def test_workspace_loads_shared_components_after_legacy_styles(self):
         base = (SERVER / "templates/base.html").read_text(encoding="utf-8")
         self.assertGreater(base.index("css/workspace-ui.css"), base.index("css/workbench.css"))

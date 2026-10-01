@@ -32,6 +32,7 @@ db-init/04-bootstrap-admin.sql
 docker-compose.override.yml
 
 # Python
+/tmp/
 __pycache__/
 *.pyc
 *.pyo

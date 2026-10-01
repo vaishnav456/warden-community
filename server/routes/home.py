@@ -31,6 +31,103 @@ bp = Blueprint("home", __name__)
 node_api_bp = Blueprint("home_node_api", __name__)
 _FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_MAPPING = {"Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos"}
+
+
+@bp.route('/storage/history',methods=['GET','POST'])
+@login_required
+@company_required
+@role_required('superadmin','company_admin','branch_admin')
+def history():
+    from middleware.auth import require_branch_scope
+    branch = g.admin.get('branch_id') if g.admin.get('role') == 'branch_admin' else None
+    if g.admin.get('role') == 'branch_admin' and not branch:
+        abort(403)
+    if request.method == 'POST':
+        endpoint = db.get_endpoint(request.form.get('endpoint_id',''))
+        if not endpoint or str(endpoint.get('company_id')) != str(g.company['id']):
+            abort(404)
+        require_branch_scope(endpoint.get('branch_id'))
+        if 'WARDEN_HOME_HISTORY' not in (endpoint.get('capabilities') or []):
+            abort(409,'Update the Windows agent for Home history support')
+        action = request.form.get('action','list')
+        if action not in {'list','restore'}:
+            abort(400)
+        path = request.form.get('path','').replace('\\','/')
+        if not path or len(path)>1024 or path.startswith('/') or '\x00' in path or any(part in {'','.','..'} for part in path.split('/')):
+            abort(400,'Use a relative file path including the mapped folder, such as Documents/report.txt')
+        space_id = request.form.get('space_id','')
+        principal,assignments,_ = resolve_home_access_context(endpoint,short_windows_username(endpoint.get('interactive_user')))
+        accessible = home_config_for(endpoint,principal,db.get_home_spaces(g.company['id']),assignments) if principal else []
+        space = next((space for space in accessible if str(space['id'])==space_id),None)
+        if not space or (action=='restore' and (space.get('access_mode')=='read' or space.get('sync_mode')=='download')):
+            abort(403)
+        version = request.form.get('version_id','')
+        if action=='restore' and not re.fullmatch('[0-9a-f]{32}',version):
+            abort(400)
+        from services.entitlements import check_job
+        if not check_job(g.company['id'],'WARDEN_HOME_HISTORY').allowed:
+            abort(403)
+        job = db.create_system_job_once(g.company['id'],endpoint.get('branch_id'),endpoint['id'],
+            'WARDEN_HOME_HISTORY',dict(username=principal['username'],space_id=space_id,path=path,action=action,version_id=version))
+        db.audit(g.company['id'],g.admin['id'],'home_history_'+action,{'endpoint_id':endpoint['id'],'space_id':space_id,'path':path})
+        flash('History request queued. Refresh this page for its result.' if job else 'A history request is already queued or running.','success')
+        return redirect(url_for('home.history'),code=303)
+    query=f"jobs?company_id=eq.{db._q(g.company['id'])}&type=eq.WARDEN_HOME_HISTORY&order=created_at.desc&limit=30"
+    if branch:
+        query+=f'&branch_id=eq.{db._q(branch)}'
+    jobs=[]
+    company=db.get_company_by_id(g.company['id'])
+    for raw in db._get(query):
+        job=db._decrypt_job(raw,company)
+        try:
+            output=json.loads(job.get('log_output') or '{}')
+            if output.get('kind')!='warden_home_history':
+                output={}
+            else:
+                from datetime import datetime,timezone
+                clean_versions=[]
+                versions=output.get('versions')
+                for version in (versions[:1000] if isinstance(versions,list) else []):
+                    if not isinstance(version,dict) or not re.fullmatch('[0-9a-f]{32}',str(version.get('id',''))) or not re.fullmatch('[0-9a-f]{64}',str(version.get('sha256',''))):
+                        continue
+                    if any(type(version.get(key)) is not int or version[key]<0 for key in ('size','saved_at','expires_at')):
+                        continue
+                    try:
+                        saved=datetime.fromtimestamp(version['saved_at'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+                        expiry=datetime.fromtimestamp(version['expires_at'],timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+                    except (ValueError,OverflowError,OSError):
+                        continue
+                    clean_versions.append(dict(version,saved_label=saved,expiry_label=expiry))
+                output=dict(output,versions=clean_versions)
+        except (TypeError,ValueError,AttributeError):
+            output={}
+        jobs.append(dict(job=job,report=output))
+    return render_template('home/history.html',jobs=jobs,spaces=db.get_home_spaces(g.company['id']),
+                           endpoints=db.get_endpoints(g.company['id'],branch_id=branch),active_page='home')
+
+
+@bp.post('/storage/spaces/<space_id>/history-policy')
+@login_required
+@company_required
+@role_required('superadmin','company_admin')
+def history_policy(space_id):
+    space=db.get_home_space(space_id)
+    if not space or str(space.get('company_id'))!=str(g.company['id']):
+        abort(404)
+    try:
+        days=int(request.form.get('history_days','0'))
+    except ValueError:
+        abort(400)
+    if not 0<=days<=365:
+        abort(400)
+    if days:
+        nodes=[membership.get('home_storage_nodes') or {} for membership in space.get('home_space_nodes') or []]
+        if not nodes or any(not (node.get('capabilities') or {}).get('encrypted_history') for node in nodes):
+            abort(409,'Update every Home node for encrypted history support first')
+    db._patch(f"home_spaces?id=eq.{db._q(space_id)}&company_id=eq.{db._q(g.company['id'])}",{'history_days':days})
+    db.audit(g.company['id'],g.admin['id'],'home_history_policy_changed',{'space_id':space_id,'history_days':days})
+    flash('History policy saved. New signed grants apply it; existing retained versions expire on their original schedule.','success')
+    return redirect(url_for('home.history'),code=303)
 _BOOTSTRAP_HANDOFFS = {}
 _BOOTSTRAP_HANDOFF_LOCK = threading.Lock()
 _BOOTSTRAP_HANDOFF_TTL_SECONDS = 10 * 60
@@ -164,7 +261,8 @@ def _storage_root(platform, value):
 def _home_transfer_view(job, endpoints):
     """Distinguish a file receipt from older agents' generic completed text."""
     item = dict(job)
-    item["endpoint_name"] = endpoints.get(str(job.get("endpoint_id")), {}).get("hostname") or "Removed endpoint"
+    endpoint = endpoints.get(str(job.get("endpoint_id")), {})
+    item["endpoint_name"] = endpoint.get("display_name") or endpoint.get("hostname") or "Removed endpoint"
     report = None
     try:
         candidate = json.loads(job.get("log_output") or "")
@@ -177,10 +275,31 @@ def _home_transfer_view(job, endpoints):
             report["folders_created"] = folders if type(folders) is int and folders >= 0 else 0
             deleted = candidate.get("deleted", 0)
             report["deleted"] = deleted if type(deleted) is int and deleted >= 0 else 0
-            report["files"] = [entry for entry in candidate.get("files", [])[:100] if isinstance(entry, dict)] if isinstance(candidate.get("files"), list) else []
-            report["omitted_details"] = candidate.get("omitted_details", 0)
-            report["username"] = candidate.get("username") or ""
+            report["files"] = []
+            report['connections']=[]
+            for entry in (candidate.get('connections',[])[:30] if isinstance(candidate.get('connections'),list) else []):
+                if not isinstance(entry,dict) or entry.get('transport') not in {'direct_https','direct_webrtc','encrypted_relay','unknown'}:continue
+                fields=('latency_ms','duration_ms','bytes')
+                if any(type(entry.get(field)) is not int or not 0<=entry[field]<=9223372036854775807 for field in fields):continue
+                report['connections'].append({**{field:entry[field] for field in fields},'transport':entry['transport'],'error':str(entry.get('error') or '')[:256]})
+            allowed = {'space':256,'path':1024,'action':40,'status':40,'error':2048,'space_id':64,
+                       'local_sha':64,'sha256':64,'server_copy':1024,'mapped_path':1024}
+            for entry in (candidate['files'][:100] if isinstance(candidate.get('files'),list) else []):
+                if not isinstance(entry,dict):
+                    continue
+                clean={key:str(entry.get(key) or '')[:limit] for key,limit in allowed.items()}
+                size=entry.get('bytes',0)
+                clean['bytes']=size if type(size) is int and 0<=size<=9223372036854775807 else 0
+                clean['verified']=entry.get('verified') is True and bool(re.fullmatch('[0-9a-f]{64}',clean['sha256']))
+                report['files'].append(clean)
+            omitted=candidate.get("omitted_details",0)
+            report["omitted_details"] = omitted if type(omitted) is int and omitted>=0 else 0
+            report["username"] = str(candidate.get("username") or "")[:256]
             report["status"] = candidate.get("status")
+            report["current_file"] = str(candidate.get("current_file") or '')[:1024]
+            report["current_action"] = str(candidate.get("current_action") or '')[:40]
+            current_bytes = candidate.get('current_bytes',0)
+            report['current_bytes'] = current_bytes if type(current_bytes) is int and current_bytes >= 0 else 0
     except (TypeError, ValueError):
         pass
     item["report"] = report
@@ -237,10 +356,98 @@ def index():
     return _render_home(_consume_bootstrap_handoff())
 
 
+@bp.get('/storage/activity')
+@login_required
+@company_required
+def activity():
+    branch = g.admin.get('branch_id') if g.admin.get('role') == 'branch_admin' else None
+    if g.admin.get('role') == 'branch_admin' and not branch:
+        abort(403)
+    endpoints = {str(ep['id']):ep for ep in db.get_endpoints(g.company['id'],branch_id=branch)}
+    transfers = [_home_transfer_view(job,endpoints) for job in db.get_home_sync_jobs(g.company['id'],branch_id=branch)]
+    response = make_response(render_template('home/_activity.html',transfers=transfers))
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@bp.post('/storage/activity/<job_id>/retry')
+@login_required
+@company_required
+@role_required('superadmin','company_admin','branch_admin')
+def retry_sync(job_id):
+    from middleware.auth import require_branch_scope
+    job = db.get_job(job_id,decrypt=False)
+    if not job or str(job.get('company_id')) != str(g.company['id']) or job.get('type') != 'SYNC_WARDEN_HOME':
+        abort(404)
+    endpoint = db.get_endpoint(job['endpoint_id'])
+    if not endpoint or str(endpoint.get('company_id')) != str(g.company['id']):
+        abort(404)
+    require_branch_scope(endpoint.get('branch_id'))
+    if job.get('status') not in {'failed','cancelled'}:
+        abort(409,'Only failed or cancelled syncs can be retried')
+    principal, assignments, _ = resolve_home_access_context(endpoint,short_windows_username(endpoint.get('interactive_user')))
+    if not principal or not home_config_for(endpoint,principal,db.get_home_spaces(g.company['id']),assignments):
+        abort(409,'The signed-in user no longer has an assigned Home space')
+    from services.entitlements import check_job
+    if not check_job(g.company['id'],'SYNC_WARDEN_HOME').allowed:
+        abort(403)
+    created = db.create_system_job_once(g.company['id'],endpoint.get('branch_id'),endpoint['id'],
+                                      'SYNC_WARDEN_HOME',{'username':principal['username'],'refresh':True})
+    flash('Sync retry queued.' if created else 'A sync is already queued or running.','success')
+    return redirect(url_for('home.index',section='activity'),code=303)
+
+
+@bp.post('/storage/activity/<job_id>/conflict')
+@login_required
+@company_required
+@role_required('superadmin','company_admin','branch_admin')
+def resolve_conflict(job_id):
+    from middleware.auth import require_branch_scope
+    job=db.get_job(job_id)
+    if not job or str(job.get('company_id'))!=str(g.company['id']) or job.get('type')!='SYNC_WARDEN_HOME':
+        abort(404)
+    endpoint=db.get_endpoint(job['endpoint_id'])
+    if not endpoint or str(endpoint.get('company_id'))!=str(g.company['id']):
+        abort(404)
+    require_branch_scope(endpoint.get('branch_id'))
+    choice=request.form.get('choice')
+    if choice not in {'local','home','both'}:
+        abort(400)
+    view=_home_transfer_view(job,{str(endpoint['id']):endpoint})
+    report=view.get('report') or {}
+    entry=next((entry for entry in report.get('files',[]) if entry.get('status')=='conflict'
+        and str(entry.get('space_id'))==request.form.get('space_id') and entry.get('path')==request.form.get('path')),None)
+    if not entry or not re.fullmatch('[0-9a-f]{64}',str(entry.get('sha256',''))) or not re.fullmatch('[0-9a-f]{64}',str(entry.get('local_sha',''))):
+        abort(409,'Conflict receipt is unavailable; run sync again')
+    principal,assignments,_=resolve_home_access_context(endpoint,short_windows_username(endpoint.get('interactive_user')))
+    accessible=home_config_for(endpoint,principal,db.get_home_spaces(g.company['id']),assignments) if principal else []
+    space=next((space for space in accessible if str(space['id'])==str(entry['space_id'])),None)
+    if not space or space.get('access_mode')=='read' or space.get('sync_mode')=='download':
+        abort(403)
+    from services.entitlements import check_job
+    if not check_job(g.company['id'],'SYNC_WARDEN_HOME').allowed:
+        abort(403)
+    # Receipts describe the file relative to its mapping; require an exact
+    # mapping target from the receipt rather than guessing among many mappings.
+    mapped_path=entry.get('mapped_path')
+    if not mapped_path:
+        abort(409,'Update the agent for mapping-aware conflict receipts')
+    if not isinstance(mapped_path,str) or len(mapped_path)>1024 or '\\' in mapped_path or any(part in {'','..','.'} for part in mapped_path.split('/')):
+        abort(400)
+    if not any(mapped_path.startswith(str(mapping.get('target','')).strip('/')+'/') for mapping in space.get('mappings',[]) if mapping.get('target')):
+        abort(403,'The reviewed file is outside the current mappings')
+    created=db.create_system_job_once(g.company['id'],endpoint.get('branch_id'),endpoint['id'],'SYNC_WARDEN_HOME',
+        dict(username=principal['username'],refresh=True,resolution=dict(space_id=entry['space_id'],path=mapped_path,
+            choice=choice,local_sha=entry['local_sha'],remote_sha=entry['sha256'])))
+    db.audit(g.company['id'],g.admin['id'],'home_conflict_resolution_requested',{'endpoint_id':endpoint['id'],'space_id':entry['space_id'],'choice':choice})
+    flash('Resolution queued; the agent rechecks both hashes before applying it.' if created else 'A sync is already running. Retry after it finishes.','success')
+    return redirect(url_for('home.index',section='activity'),code=303)
+
+
 @bp.get("/storage/download/<platform>")
 @login_required
 @company_required
-@role_required("company_admin")
+@role_required("superadmin", "company_admin")
 def download_home_node(platform):
     filenames = {
         "windows": "warden-home-node-windows-amd64.exe",
@@ -821,6 +1028,17 @@ def node_heartbeat():
     return jsonify({"ok": True, "node_id": node["id"], "company_id": node["company_id"],
                     "server_public_key": get_server_pubkey_b64(), "replication_peers": peers,
                     "update": _home_update_for(node, reported_capabilities)})
+
+
+@node_api_bp.get('/api/home-node/packages/<app_id>')
+def node_package(app_id):
+    node=_node_auth()
+    app=db.get_app(app_id)
+    if not app or (app.get('company_id') and str(app['company_id'])!=str(node['company_id'])):abort(404)
+    from flask import send_file
+    path=(config.UPLOAD_DIR/app['file_path']).resolve()
+    if not path.is_relative_to(config.UPLOAD_DIR.resolve()) or not path.is_file():abort(404)
+    return send_file(path,as_attachment=False,mimetype='application/octet-stream',conditional=False)
 
 
 @node_api_bp.get("/api/home-node/update/<platform>")

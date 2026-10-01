@@ -9,7 +9,7 @@ Run:
 import logging
 import secrets
 import time
-from flask import Flask, g, request, redirect, url_for, render_template
+from flask import Flask, g, request, redirect, url_for, render_template, jsonify
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
@@ -21,6 +21,11 @@ from services.page_help import page_help_for
 # ── App factory ───────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = config.SECRET_KEY
+from services.tenant_storage import StorageError
+
+@app.errorhandler(StorageError)
+def storage_error(error):
+    return jsonify(error=error.code,message=str(error)),error.status
 app.config.update(
     MAX_CONTENT_LENGTH=500 * 1024 * 1024,  # 500 MB upload limit
     SESSION_COOKIE_NAME="warden_session",
@@ -72,6 +77,10 @@ from routes.patches import bp as patches_bp
 from routes.assets import bp as assets_bp
 from routes.security_management import bp as security_management_bp
 from routes.home import bp as home_bp, node_api_bp as home_node_api_bp
+from routes.operations import bp as operations_bp
+app.register_blueprint(operations_bp)
+from routes.fleet_tools import bp as fleet_tools_bp
+app.register_blueprint(fleet_tools_bp)
 from routes.topology import bp as topology_bp
 
 app.register_blueprint(auth_bp)

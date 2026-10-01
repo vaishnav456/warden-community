@@ -47,38 +47,45 @@ const magicV2 = "WHOME2\x00"
 const chunkSize = 4 * 1024 * 1024
 
 type config struct {
-	NodeID           string `json:"node_id"`
-	NodeKey          string `json:"node_key"`
-	WardenURL        string `json:"warden_url"`
-	ServerPublicKey  string `json:"server_public_key"`
-	Listen           string `json:"listen"`
-	Root             string `json:"root"`
-	TLSCert          string `json:"tls_cert"`
-	TLSKey           string `json:"tls_key"`
-	ClientCA         string `json:"client_ca"`
-	ClientCert       string `json:"client_cert"`
-	ClientKey        string `json:"client_key"`
-	EncryptionKey    string `json:"encryption_key"`
-	PublicMode       bool   `json:"public_mode"`
-	Replication      bool   `json:"replication"`
-	StorageClusterID string `json:"storage_cluster_id"`
+	BackupRoot           string `json:"backup_root"`
+	BackupMaxBytes       int64  `json:"backup_max_bytes"`
+	BackupIntervalHours  int    `json:"backup_interval_hours"`
+	PackageCacheMaxBytes int64  `json:"package_cache_max_bytes"`
+	NodeID               string `json:"node_id"`
+	NodeKey              string `json:"node_key"`
+	WardenURL            string `json:"warden_url"`
+	ServerPublicKey      string `json:"server_public_key"`
+	Listen               string `json:"listen"`
+	Root                 string `json:"root"`
+	TLSCert              string `json:"tls_cert"`
+	TLSKey               string `json:"tls_key"`
+	ClientCA             string `json:"client_ca"`
+	ClientCert           string `json:"client_cert"`
+	ClientKey            string `json:"client_key"`
+	EncryptionKey        string `json:"encryption_key"`
+	PublicMode           bool   `json:"public_mode"`
+	Replication          bool   `json:"replication"`
+	StorageClusterID     string `json:"storage_cluster_id"`
 }
 
 type grant struct {
-	Audience     string   `json:"aud"`
-	CompanyID    string   `json:"company_id"`
-	EndpointID   string   `json:"endpoint_id"`
-	SourceNodeID string   `json:"source_node_id"`
-	IdentityID   string   `json:"identity_id"`
-	SpaceID      string   `json:"space_id"`
-	NodeID       string   `json:"node_id"`
-	Prefix       string   `json:"prefix"`
-	Permissions  []string `json:"permissions"`
-	MaxFileBytes int64    `json:"max_file_bytes"`
-	QuotaBytes   int64    `json:"quota_bytes"`
-	IssuedAt     int64    `json:"iat"`
-	ExpiresAt    int64    `json:"exp"`
-	Nonce        string   `json:"nonce"`
+	AppID         string   `json:"app_id"`
+	PackageSHA256 string   `json:"package_sha256"`
+	Audience      string   `json:"aud"`
+	CompanyID     string   `json:"company_id"`
+	EndpointID    string   `json:"endpoint_id"`
+	SourceNodeID  string   `json:"source_node_id"`
+	IdentityID    string   `json:"identity_id"`
+	SpaceID       string   `json:"space_id"`
+	NodeID        string   `json:"node_id"`
+	Prefix        string   `json:"prefix"`
+	Permissions   []string `json:"permissions"`
+	MaxFileBytes  int64    `json:"max_file_bytes"`
+	QuotaBytes    int64    `json:"quota_bytes"`
+	HistoryDays   int      `json:"history_days"`
+	IssuedAt      int64    `json:"iat"`
+	ExpiresAt     int64    `json:"exp"`
+	Nonce         string   `json:"nonce"`
 }
 
 type peer struct {
@@ -95,6 +102,7 @@ type peer struct {
 	Grant          string   `json:"grant"`
 	MaxFileBytes   int64    `json:"max_file_bytes"`
 	QuotaBytes     int64    `json:"quota_bytes"`
+	HistoryDays    int      `json:"history_days"`
 }
 
 type heartbeatResponse struct {
@@ -320,7 +328,7 @@ func verifyGrant(r *http.Request, raw, requestPath, permission string) (grant, e
 	if g.NodeID != cfg.NodeID || g.ExpiresAt < now || g.IssuedAt > now+300 || g.ExpiresAt-g.IssuedAt > 3600 || g.Nonce == "" {
 		return grant{}, errors.New("expired or mis-scoped grant")
 	}
-	if g.Audience != "warden-home-node" && g.Audience != "warden-home-replication" {
+	if g.Audience != "warden-home-node" && g.Audience != "warden-home-replication" && !(permission == "package" && g.Audience == "warden-package-cache") {
 		return grant{}, errors.New("invalid audience")
 	}
 	if err := verifyPeerCertificate(r, g); err != nil {
@@ -683,6 +691,11 @@ func prefixUsage(prefix string) int64 {
 	if walkResult != nil {
 		return math.MaxInt64
 	}
+	historyBytes, err := historyUsageAndCleanup(prefix, false)
+	if err != nil || used > math.MaxInt64-historyBytes {
+		return math.MaxInt64
+	}
+	used += historyBytes
 	return used
 }
 
@@ -690,13 +703,22 @@ func storeAuthorizedFile(rel string, src io.Reader, mtime int64, g grant) (int, 
 	return storeAuthorizedFileVerified(rel, src, mtime, g, "")
 }
 
-func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant, expectedSHA256 string) (int, error) {
-	if deletion, err := readHomeDeletion(rel); err != nil {
+func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant, expectedSHA256 string, readdVersion ...string) (int, error) {
+	deletion, err := readHomeDeletion(rel)
+	if err != nil {
 		return http.StatusInternalServerError, err
 	} else if deletion != nil {
-		return http.StatusConflict, errors.New("file was intentionally deleted; stale upload refused")
+		if len(readdVersion) == 0 || readdVersion[0] != homeDeletionVersion(deletion) {
+			return http.StatusConflict, errors.New("file was intentionally deleted; stale upload refused")
+		}
+		if err := purgeHomeDeletion(rel); err != nil {
+			return http.StatusInternalServerError, err
+		}
 	}
 	maxBytes := g.MaxFileBytes
+	if _, err := historyUsageAndCleanup(g.Prefix, true); err != nil {
+		return 500, err
+	}
 	if maxBytes <= 0 || maxBytes > 5*1024*1024*1024 {
 		maxBytes = 5 * 1024 * 1024 * 1024
 	}
@@ -716,6 +738,11 @@ func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant
 			return http.StatusInternalServerError, errors.New("storage usage cannot be authenticated")
 		}
 		remaining := g.QuotaBytes - usage + existing.Size
+		growth, err := historyGrowth(rel, g.HistoryDays)
+		if err != nil {
+			return 500, err
+		}
+		remaining -= growth
 		if remaining < allowed {
 			allowed, quotaLimited = remaining, true
 		}
@@ -726,6 +753,9 @@ func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant
 			return http.StatusInsufficientStorage, errFileTooLarge
 		}
 	}
+	if err := archiveHomeVersion(rel, g.HistoryDays, false); err != nil {
+		return 500, err
+	}
 	if err := writeFileVerified(rel, src, mtime, allowed, expectedSHA256); err != nil {
 		if errors.Is(err, errFileTooLarge) {
 			if quotaLimited {
@@ -734,6 +764,15 @@ func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant
 			return http.StatusRequestEntityTooLarge, err
 		}
 		return http.StatusInternalServerError, err
+	}
+	if deletion != nil {
+		data, _, err := pathsFor(rel)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if err := os.Remove(data + ".deleted"); err != nil {
+			return http.StatusInternalServerError, err
+		}
 	}
 	return http.StatusNoContent, nil
 }
@@ -802,6 +841,9 @@ func listStoredEntries(prefix string, includeDirectories bool) ([]fileEntry, err
 			return errors.New("symlink storage paths are not permitted")
 		}
 		if info.IsDir() {
+			if strings.HasSuffix(path, ".whome.history") && isHomeHistoryDirectory(path) {
+				return filepath.SkipDir
+			}
 			if includeDirectories && path != root {
 				rel, err := filepath.Rel(cfg.Root, path)
 				if err != nil {
@@ -853,8 +895,25 @@ func listStoredEntries(prefix string, includeDirectories bool) ([]fileEntry, err
 
 func handleList(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("path")
-	if _, err := verifyGrant(r, bearer(r), prefix, "read"); err != nil {
+	g, err := verifyGrant(r, bearer(r), prefix, "read")
+	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// Complete already-confirmed deletions from older releases before reporting
+	// sync success. This does not infer deletions from missing endpoint files.
+	storageMu.Lock()
+	release, err := acquireSpaceLock(g.Prefix)
+	if err == nil {
+		err = cleanupHomeDeletions(prefix)
+		if err == nil {
+			_, err = historyUsageAndCleanup(prefix, true)
+		}
+		release()
+	}
+	storageMu.Unlock()
+	if err != nil {
+		http.Error(w, "deletion cleanup failed; retry sync", http.StatusServiceUnavailable)
 		return
 	}
 	entries, err := listStoredEntries(prefix, r.URL.Query().Get("include_directories") == "1")
@@ -867,6 +926,7 @@ func handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Warden-Deletion-Tracking", "1")
+	w.Header().Set("X-Warden-Conditional-Writes", "1")
 	_ = json.NewEncoder(w).Encode(entries)
 }
 
@@ -932,7 +992,14 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "shared storage is busy", http.StatusServiceUnavailable)
 			return
 		}
-		status, writeErr := storeAuthorizedFile(rel, r.Body, mtime.Unix(), g)
+		current, currentErr := storedVersion(rel)
+		if currentErr != nil || (r.Header.Get("If-Match") != "" && strings.Trim(r.Header.Get("If-Match"), "\"") != current) || (r.Header.Get("If-None-Match") == "*" && current != "") {
+			release()
+			storageMu.Unlock()
+			http.Error(w, "file changed since sync; retry safely", 412)
+			return
+		}
+		status, writeErr := storeAuthorizedFileVerified(rel, r.Body, mtime.Unix(), g, "", r.Header.Get("X-Warden-Readd-Version"))
 		if writeErr == nil {
 			w.Header().Set("X-Warden-SHA256", loadMeta(meta).SHA256)
 		}
@@ -951,7 +1018,12 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "shared storage is busy", http.StatusServiceUnavailable)
 			return
 		}
-		status, deleteErr := confirmHomeDeletion(rel, strings.Trim(r.Header.Get("If-Match"), "\""))
+		status, deleteErr := confirmHomeDeletion(rel, strings.Trim(r.Header.Get("If-Match"), "\""), g)
+		if deleteErr == nil {
+			if deletion, err := readHomeDeletion(rel); err == nil && deletion != nil {
+				w.Header().Set("X-Warden-Deletion-Version", homeDeletionVersion(deletion))
+			}
+		}
 		release()
 		storageMu.Unlock()
 		if deleteErr != nil {
@@ -1252,7 +1324,9 @@ func replicateFrom(p peer) {
 			if err != nil {
 				allOK = false
 			} else {
-				if err := writeHomeDeletion(entry.Path, homeDeletion{SHA256: entry.SHA256, Size: entry.Size, DeletedAt: entry.ModTime}); err != nil {
+				if err := archiveHomeVersion(entry.Path, p.HistoryDays, true); err != nil {
+					allOK = false
+				} else if err := writeHomeDeletion(entry.Path, homeDeletion{SHA256: entry.SHA256, Size: entry.Size, DeletedAt: entry.ModTime}); err != nil {
 					allOK = false
 				}
 				release()
@@ -1282,7 +1356,12 @@ func replicateFrom(p peer) {
 		if err != nil {
 			continue
 		}
-		if local := loadMeta(metaPath); local.Exists && local.Valid && local.Size == entry.Size && entry.SHA256 != "" && local.SHA256 == entry.SHA256 {
+		deletion, deletionErr := readHomeDeletion(entry.Path)
+		if deletionErr != nil {
+			allOK = false
+			continue
+		}
+		if local := loadMeta(metaPath); deletion == nil && local.Exists && local.Valid && local.Size == entry.Size && entry.SHA256 != "" && local.SHA256 == entry.SHA256 {
 			continue
 		}
 		u := strings.TrimRight(base, "/") + "/v1/file?path=" + url.QueryEscape(entry.Path)
@@ -1297,9 +1376,15 @@ func replicateFrom(p peer) {
 			storageMu.Lock()
 			release, lockErr := acquireSpaceLock(p.Prefix)
 			if lockErr == nil {
+				// The authoritative primary now lists an active file at this path.
+				// Replace a replica's old tombstone only after verified download.
+				readdVersion := ""
+				if deletion, err := readHomeDeletion(entry.Path); err == nil && deletion != nil {
+					readdVersion = homeDeletionVersion(deletion)
+				}
 				_, writeErr := storeAuthorizedFileVerified(entry.Path, fileResp.Body, entry.ModTime, grant{
-					Prefix: p.Prefix, MaxFileBytes: p.MaxFileBytes, QuotaBytes: p.QuotaBytes,
-				}, entry.SHA256)
+					Prefix: p.Prefix, MaxFileBytes: p.MaxFileBytes, QuotaBytes: p.QuotaBytes, HistoryDays: p.HistoryDays,
+				}, entry.SHA256, readdVersion)
 				if writeErr != nil {
 					allOK = false
 				}
@@ -1373,7 +1458,7 @@ func heartbeatLoop(stop <-chan struct{}) {
 			replicationState[spaceID] = syncedAt
 		}
 		replicationMu.Unlock()
-		body, _ := json.Marshal(map[string]interface{}{"capacity_bytes": capacity, "used_bytes": used, "capabilities": map[string]interface{}{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": homeNodeVersion, "managed_updates": true, "encrypted_at_rest": true, "encryption_key_id": encryptionKeyID, "replication": cfg.Replication, "p2p": true, "p2p_transport": "webrtc-direct", "replication_sync": replicationState, "storage_cluster_id": cfg.StorageClusterID}})
+		body, _ := json.Marshal(map[string]interface{}{"capacity_bytes": capacity, "used_bytes": used, "capabilities": map[string]interface{}{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": homeNodeVersion, "managed_updates": true, "encrypted_at_rest": true, "encrypted_history": true, "encryption_key_id": encryptionKeyID, "replication": cfg.Replication, "p2p": true, "p2p_transport": "webrtc-direct", "replication_sync": replicationState, "storage_cluster_id": cfg.StorageClusterID, "independent_backup": backupStatus(), "package_cache": cfg.PackageCacheMaxBytes > 0}})
 		req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(cfg.WardenURL, "/")+"/api/home-node/heartbeat", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Warden-Home-Key", cfg.NodeKey)
@@ -1449,6 +1534,11 @@ func loadConfig(path string) error {
 	if err := os.MkdirAll(cfg.Root, 0700); err != nil {
 		return err
 	}
+	if _, err := os.Lstat(filepath.Join(cfg.Root, ".warden-restore-incomplete")); err == nil {
+		return errors.New("refusing incomplete restored Home store")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	return loadReplicationState()
 }
 
@@ -1464,6 +1554,8 @@ func runConfiguredServer(path string, stop <-chan struct{}) error {
 	mux.HandleFunc("/v1/list", handleList)
 	mux.HandleFunc("/v1/directory", handleDirectory)
 	mux.HandleFunc("/v1/file", handleFile)
+	mux.HandleFunc("/v1/history", handleHistory)
+	mux.HandleFunc("/v1/package", handlePackageCache)
 	servingCertificate, err := watchServingCertificate(cfg.TLSCert, cfg.TLSKey)
 	if err != nil {
 		return err
@@ -1495,6 +1587,7 @@ func runConfiguredServer(path string, stop <-chan struct{}) error {
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: http.MaxBytesHandler(mux, 5*1024*1024*1024+1024), TLSConfig: tlsCfg, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, WriteTimeout: 10 * time.Minute}
 	go heartbeatLoop(stop)
+	go backupLoop(stop)
 	go homeP2PLoop(stop)
 	log.Printf("Warden Home Node %s listening on %s", cfg.NodeID, cfg.Listen)
 	errCh := make(chan error, 1)
@@ -1520,14 +1613,35 @@ func main() {
 		return
 	}
 	command, args := "serve", os.Args[1:]
-	if len(args) > 0 && (args[0] == "serve" || args[0] == "install" || args[0] == "upgrade" || args[0] == "uninstall" || args[0] == "apply-update") {
+	if len(args) > 0 && (args[0] == "serve" || args[0] == "install" || args[0] == "upgrade" || args[0] == "uninstall" || args[0] == "apply-update" || args[0] == "backup" || args[0] == "verify-backup" || args[0] == "restore-backup") {
 		command, args = args[0], args[1:]
 	}
 	flags := flag.NewFlagSet(command, flag.ExitOnError)
 	path := flags.String("config", "warden-home.json", "configuration file")
 	manifest := flags.String("manifest", "", "signed managed-update manifest")
+	snapshot := flags.String("snapshot", "", "independent snapshot ID")
+	restoreRoot := flags.String("restore-root", "", "new, non-existing recovery directory")
 	_ = flags.Parse(args)
 	switch command {
+	case "backup", "verify-backup", "restore-backup":
+		if err := loadBackupConfig(*path); err != nil {
+			log.Fatal(err)
+		}
+		var result backupSummary
+		var err error
+		switch command {
+		case "backup":
+			result, err = createBackup()
+		case "verify-backup":
+			result, err = verifyBackup(*snapshot)
+		case "restore-backup":
+			result, err = restoreBackup(*snapshot, *restoreRoot)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		encoded, _ := json.Marshal(result)
+		fmt.Println(string(encoded))
 	case "install":
 		if err := installSystemService(*path); err != nil {
 			log.Fatal(err)

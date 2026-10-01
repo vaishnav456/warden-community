@@ -21,7 +21,7 @@
     <tbody>
       {% for app in apps %}
       <tr>
-        <td class="font-medium text-ink-100">{{ app.name }}</td>
+        <td class="font-medium text-ink-100">{{ app.name }}{% if app.deletion_requested_at %}<span class="badge badge-info ml-2">Cleanup pending</span>{% endif %}</td>
         <td class="text-ink-300">{{ app.version or '—' }}</td>
         <td class="text-ink-500">{{ app.size_bytes | filesizeformat }}</td>
         <td>
@@ -33,16 +33,20 @@
         <td class="font-mono-data text-xs text-ink-700">{{ app.sha256[:16] }}...</td>
         <td>
           <div class="flex items-center gap-2">
+            {% if not app.deletion_requested_at %}
             <a href="/apps/{{ app.id }}/download" class="text-xs text-accent-400 hover:underline">Download</a>
             <button type="button" class="text-xs text-accent-400 hover:underline" @click="openDeploy('{{ app.id }}', {{ app.name | tojson }}, '{{ app.file_path.rsplit('.', 1)[-1] | lower }}')">Deploy</button>
-            {% if app.company_id %}
+            {% if app.company_id or is_superadmin %}
             <button type="button" class="text-xs text-ink-500 hover:underline"
                     data-id="{{ app.id }}" data-name="{{ app.name }}" data-version="{{ app.version }}"
                     data-description="{{ app.description or '' }}" data-install-args="{{ app.install_args or '' }}"
                     data-self-service="{{ 'true' if app.self_service else 'false' }}"
                     @click="openEdit($el.dataset)">Edit</button>
+            {% endif %}
+            {% endif %}
+            {% if app.company_id and current_user.role in ['company_admin','superadmin'] %}
             <button type="button" class="text-xs text-status-critical hover:underline"
-                    @click="removeApp('{{ app.id }}', {{ app.name | tojson }})">Delete</button>
+                    @click="removeApp('{{ app.id }}', {{ app.name | tojson }})">{{ 'Retry cleanup' if app.deletion_requested_at else 'Delete & free space' }}</button>
             {% endif %}
           </div>
         </td>

@@ -4,6 +4,13 @@
 It runs on designated Windows or Linux file servers; ordinary endpoints keep
 using the normal Warden Agent.
 
+## Backups and branch package caching
+
+Independent encrypted backups and verified installer caching are opt-in.
+See [Fleet tools configuration and release notes](../docs/FLEET_TOOLS.md) for
+separate backup destinations, quotas, verification and non-overwriting recovery.
+Do not publish new agents before applying the server migration and piloting a node.
+
 ## Incremental sync and folders
 
 Agent 2.6.45 and Home Node 1.1.5 compare file contents using SHA-256, including
@@ -175,6 +182,81 @@ private directories to the service.
 
 Build both binaries from a machine with Go installed:
 
+Confirmed endpoint deletions remove the encrypted Home file and its metadata,
+including on replicas. A small encrypted `.whome.deleted` record remains so
+offline endpoints cannot upload the deleted version again. Do not remove these
+records manually. Version 1.1.8 also cleans up encrypted contents left by older
+confirmed deletions when that space is next listed for sync. A failed cleanup is
+reported as an error and retried, not acknowledged as successful deletion.
+
+With Windows agent 2.6.47 and Home Node 1.1.8, placing a file back at a deleted
+path re-adds it automatically (even with identical contents) once that device
+has recorded/applied the deletion. No re-add confirmation is shown. An offline
+device's old copy does not count as a re-add: matching copies are moved to
+`Warden Home Recovered`, while modified copies are kept locally without upload.
+Move a recovered file back after sync to intentionally re-add it. Uploads are
+conditional on the current deletion version, so outdated devices cannot undo a
+newer deletion. Re-added contents and hashes are replicated normally.
+
 ```powershell
 .\build.ps1
 ```
+
+## Reliability workflows (candidate agent 2.6.48 / Home Node 1.1.9)
+
+The console adds live receipts for server-requested sync jobs, hash-bound
+conflict review, optional encrypted file history, staged agent updates,
+remote-session diagnostics, storage cleanup and evidence-based device health.
+Employee onboarding/offboarding is not part of this change.
+
+History defaults to **off**. Company administrators choose 1–365 retention
+days per space at `/storage/history`, after every assigned node advertises
+`encrypted_history`. Encrypted history blobs and authenticated encrypted
+descriptors count against the Home space quota. Confirmed deletion removes the
+active encrypted file; with history enabled, a recoverable encrypted version
+remains until its expiry. Turning history off stops new versions, not existing
+expiry timers. Expired versions are purged on subsequent reads or writes, not
+by a guaranteed wall-clock timer. Each node records its own observed history;
+this is not an independent backup and failover nodes may have fewer versions.
+Browse/restore requests use the device's current user's fresh signed grants.
+Restore rejects stale server hashes. No file contents or Home encryption key
+are uploaded to Warden's control plane.
+
+Conflicts stop overwriting when both hashes changed relative to the last sync.
+Both versions are preserved; choose device, Home, or both in sync activity.
+Choices are refused when either reviewed hash changes. Discarded copies move
+to the device's `Warden Home Recovered` folder rather than being erased.
+Changed files still transfer in full; this is not changed-block transfer.
+Device/both choices require the node's conditional-write capability; older
+nodes keep both copies and request an update instead of risking an overwrite.
+
+Staged update campaigns are explicit opt-in actions at `/operations/updates`.
+You can name the pilot devices explicitly; an offline named pilot waits for
+reconnect rather than silently selecting a different device.
+Canaries and subsequent bounded batches use UTC maintenance windows, skip
+offline devices and active remote sessions, verify the expected-version
+heartbeat **after** job completion, and pause on failure. A paused campaign
+blocks normal automatic updates for its targets. Dispatch and job receipts
+commit atomically. Cancellation does not cancel already-dispatched jobs.
+Explicit Windows rollback requires agent 2.6.48+, the original previous build,
+and a signed `rollback_from` matching the installed release. No OS reboot is
+requested. A completed rollback stays paused until explicitly cancelled.
+
+Storage cleanup protects current MSI releases and retains agent ZIP archives
+needed for updates/rollback. Package deletion blocks active installs,
+approvals and enabled schedules. Hosted storage alerts use 80%/95% thresholds;
+Community has no hosted allowance and shows referenced package/build bytes
+only. Home quotas remain separate. Device health never treats missing/stale
+disk or security sensors as proof of health and does not auto-repair disks or
+restart security services.
+
+### Release ordering
+
+These source versions are candidates, not evidence of publication. Back up
+the database and Home keys first. Apply additive migrations **before** the
+candidate server: hosted `2026-10-01-reliability-workflows.sql` (after its
+storage/package migrations); Community `2026-10-01-storage-coordination.sql`
+then `2026-10-01-reliability-workflows.sql`. Fresh-install `db-init` equivalents
+are included. Update a controlled Home node and agent first; keep history off
+until nodes report support. Publish signed builds only after verifying
+connected-device behavior. Do not remove earlier agent ZIP artifacts.

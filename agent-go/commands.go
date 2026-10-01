@@ -74,6 +74,7 @@ var operationWhitelist = map[string]bool{
 	"CAPTURE_PACKETS":           true,
 	"COLLECT_NETWORK_FLOWS":     true,
 	"SYNC_WARDEN_HOME":          true,
+	"WARDEN_HOME_HISTORY":       true,
 	"APPLY_DEVICE_EXPERIENCE":   true,
 	"ENABLE_BITLOCKER":          true,
 	"ROTATE_BITLOCKER_RECOVERY": true,
@@ -212,7 +213,9 @@ func dispatchJob(env *Envelope, log logFn) (int, string, error) {
 	case "COLLECT_NETWORK_FLOWS":
 		return collectNetworkFlows()
 	case "SYNC_WARDEN_HOME":
-		return syncWardenHomeJob(p)
+		return syncWardenHomeJob(p, env.JobID)
+	case "WARDEN_HOME_HISTORY":
+		return homeHistoryJob(p)
 	case "APPLY_DEVICE_EXPERIENCE":
 		return applyDeviceExperience(p)
 	case "ENABLE_BITLOCKER":
@@ -761,9 +764,19 @@ func downloadFile(rawURL, dest, sha256hex string) error {
 		return fmt.Errorf("comms not initialized — call initComms first")
 	}
 	client2 := *client
-	client2.Timeout = 5 * time.Minute
+	if err = refreshBranchTraffic(); err != nil {
+		return fmt.Errorf("cannot enforce branch traffic policy: %w", err)
+	}
+	client2.Timeout = 30 * time.Minute
 	client2.CheckRedirect = rejectRedirect
-	resp, err := client2.Do(req)
+	client2.Transport = branchTrafficTransport{base: client.Transport}
+	resp, cacheErr := packageCacheResponse(validatedURL, sha256hex)
+	if cacheErr != nil {
+		logWarn("Branch package cache unavailable; using verified server download")
+	}
+	if resp == nil {
+		resp, err = client2.Do(req)
+	}
 	if err != nil {
 		return err
 	}

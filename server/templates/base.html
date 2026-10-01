@@ -91,9 +91,16 @@
         <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
         Apps
       </a>
-      <details class="nav-cluster" {{ 'open' if active_page in ['jobs', 'escalations', 'alerts'] else '' }}>
+      <details class="nav-cluster" {{ 'open' if active_page in ['jobs', 'escalations', 'alerts','device_health','updates','storage_cleanup'] else '' }}>
       <summary class="nav-section-label">Operations <span>⌄</span></summary>
       <div class="nav-cluster-items">
+      <a href="/operations/health" class="nav-item {{ 'active' if active_page == 'device_health' }}">{{ wicon('alerts') }} Device health</a>
+      <a href="/operations/software" class="nav-item {{ 'active' if active_page == 'fleet_software' }}">{{ wicon('apps') }} Fleet tools</a>
+      <a href="/operations/support" class="nav-item {{ 'active' if active_page == 'fleet_support' }}">{{ wicon('users') }} Support queue</a>
+      {% if g.admin.role in ['superadmin','company_admin'] %}
+      <a href="/operations/updates" class="nav-item {{ 'active' if active_page == 'updates' }}">{{ wicon('jobs') }} Update rollouts</a>
+      <a href="/operations/storage" class="nav-item {{ 'active' if active_page == 'storage_cleanup' }}">{{ wicon('apps') }} Storage cleanup</a>
+      {% endif %}
       <a href="/jobs" class="nav-item {{ 'active' if active_page == 'jobs' }}">
         {{ wicon('jobs') }}
         <svg class="nav-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>

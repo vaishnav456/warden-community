@@ -20,12 +20,14 @@ type homeSyncState struct {
 	Initialized bool              `json:"initialized"`
 	Version     int               `json:"version"`
 	Files       map[string]string `json:"files"`
+	Deleted     map[string]string `json:"deleted,omitempty"`
+	Conflicts map[string]homeConflict `json:"conflicts,omitempty"`
 	LastPrompt  int64             `json:"last_prompt"`
 }
 
 var homeMappingLocks sync.Map
 
-func syncHomeMappingTracked(space homeSpace, node homeNode, m homeMapping, username, root string, client *http.Client) (homeSyncReport, error) {
+func syncHomeMappingTracked(space homeSpace, node homeNode, m homeMapping, username, root string, client *http.Client, observer ...func(homeSyncReport)) (homeSyncReport, error) {
 	sum := sha256.Sum256([]byte(space.ID + "\x00" + space.Prefix + "\x00" + m.Target + "\x00" + strings.ToLower(root)))
 	path := filepath.Join(dataDir, "home-sync-"+hex.EncodeToString(sum[:])+".state")
 	value, _ := homeMappingLocks.LoadOrStore(path, &sync.Mutex{})
@@ -47,7 +49,7 @@ func syncHomeMappingTracked(space homeSpace, node homeNode, m homeMapping, usern
 	}
 	report, syncErr := syncHomeMappingFilesTracked(space, node, m, root, client, &state, func(paths []string) int {
 		return confirmHomeEndpointDeletions(username, space.Name, paths)
-	})
+	}, observer...)
 	plain, err := json.Marshal(state)
 	if err == nil {
 		raw, err = encryptDPAPI(plain, "Warden Home sync history")
@@ -112,26 +114,34 @@ func confirmHomeEndpointDeletions(username, space string, paths []string) int {
 }
 
 func listHomeFilesTracked(client *http.Client, node homeNode, prefix string) ([]homeRemoteFile, bool, error) {
+    files,deletion,_,err:=listHomeFilesFeatures(client,node,prefix)
+    return files,deletion,err
+}
+
+func listHomeFilesFeatures(client *http.Client, node homeNode, prefix string) ([]homeRemoteFile, bool, bool, error) {
 	req, err := http.NewRequest(http.MethodGet, homeNodeURL(node)+"/v1/list?include_directories=1&include_deletions=1&path="+url.QueryEscape(prefix), nil)
 	if err != nil {
-		return nil, false, err
+        return nil, false, false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+node.Grant)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, false, err
+        return nil, false, false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, false, fmt.Errorf("home list HTTP %d", resp.StatusCode)
+        return nil, false, false, fmt.Errorf("home list HTTP %d", resp.StatusCode)
 	}
 	var files []homeRemoteFile
 	err = json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024)).Decode(&files)
-	return files, resp.Header.Get("X-Warden-Deletion-Tracking") == "1", err
+    return files, resp.Header.Get("X-Warden-Deletion-Tracking") == "1", resp.Header.Get("X-Warden-Conditional-Writes")=="1", err
 }
 
 func processHomeDeletions(space homeSpace, node homeNode, root, remoteRoot string, client *http.Client, remote []homeRemoteFile, state *homeSyncState, supported bool, confirm func([]string) int, report *homeSyncReport) map[string]bool {
 	blocked := map[string]bool{}
+	if state != nil && state.Deleted == nil {
+		state.Deleted = map[string]string{}
+	}
 	var candidates []homeRemoteFile
 	for _, f := range remote {
 		if f.IsDir || !strings.HasPrefix(f.Path, remoteRoot+"/") {
@@ -151,14 +161,22 @@ func processHomeDeletions(space homeSpace, node homeNode, root, remoteRoot strin
 		info, statErr := os.Stat(local)
 		if f.Deleted {
 			blocked[f.Path] = true
+			version := fmt.Sprintf("%s:%d", f.SHA256, f.ModTime)
 			if os.IsNotExist(statErr) {
 				if state != nil {
 					delete(state.Files, f.Path)
+					state.Deleted[f.Path] = version
 				}
 				continue
 			}
 			if statErr != nil {
 				report.record(space.Name, rel, "delete", "failed", 0, statErr)
+				continue
+			}
+			// A file created AFTER this device observed/applied the deletion is
+			// an intentional re-add. No popup; send a conditional upload token.
+			if state != nil && state.Deleted[f.Path] == version && info.Mode().IsRegular() && node.Writable && space.AccessMode != "read" && space.SyncMode != "download" {
+				delete(blocked, f.Path)
 				continue
 			}
 			// Never erase locally modified/new content because another device
@@ -189,9 +207,13 @@ func processHomeDeletions(space homeSpace, node homeNode, root, remoteRoot strin
 			}
 			if state != nil {
 				delete(state.Files, f.Path)
+				state.Deleted[f.Path] = version
 			}
 			report.record(space.Name, rel, "delete", "deleted", 0, nil)
 			continue
+		}
+		if state != nil {
+			delete(state.Deleted, f.Path)
 		}
 		if state == nil || !os.IsNotExist(statErr) || state.Files[f.Path] == "" {
 			continue
@@ -243,6 +265,7 @@ func processHomeDeletions(space homeSpace, node homeNode, root, remoteRoot strin
 			report.record(space.Name, rel, "delete", "skipped", 0, errors.New("local file reappeared; deletion cancelled"))
 			continue
 		}
+		deletionVersion := ""
 		req, err := http.NewRequest(http.MethodDelete, homeNodeURL(node)+"/v1/file?path="+url.QueryEscape(f.Path), nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+node.Grant)
@@ -250,6 +273,7 @@ func processHomeDeletions(space homeSpace, node homeNode, root, remoteRoot strin
 			var resp *http.Response
 			resp, err = client.Do(req)
 			if err == nil {
+				deletionVersion = resp.Header.Get("X-Warden-Deletion-Version")
 				io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 				resp.Body.Close()
 				if resp.StatusCode != 204 {
@@ -261,6 +285,9 @@ func processHomeDeletions(space homeSpace, node homeNode, root, remoteRoot strin
 			report.record(space.Name, rel, "delete", "failed", 0, err)
 		} else {
 			delete(state.Files, f.Path)
+			if strings.HasPrefix(deletionVersion, f.SHA256+":") {
+				state.Deleted[f.Path] = deletionVersion
+			}
 			report.record(space.Name, rel, "delete", "deleted", 0, nil)
 		}
 	}
