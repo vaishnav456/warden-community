@@ -145,6 +145,73 @@ func backupUsage(root string) (int64, error) {
 }
 func backupAAD(id, object string) string { return "warden-backup/" + id + "/" + object }
 
+// Called under storageMu. Pin immutable encrypted inodes on the same filesystem,
+// then release the lock before hashing, copying or verifying large file data.
+// Metadata is published by atomic replacement, never modified in place.
+func captureBackupSource() (string, error) {
+	snapshot, err := os.MkdirTemp(cfg.Root, ".warden-backup-source-")
+	if err != nil {
+		return "", err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(snapshot)
+		}
+	}()
+	count := 0
+	deadline := time.Now().Add(30 * time.Second)
+	err = filepath.Walk(cfg.Root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if time.Now().After(deadline) {
+			return errors.New("backup source capture exceeded 30 seconds")
+		}
+		rel, err := filepath.Rel(cfg.Root, path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("symbolic path in Home root")
+		}
+		if info.IsDir() {
+			if rel == ".warden-locks" || rel == ".warden-package-cache" || strings.HasPrefix(rel, ".warden-backup-source-") {
+				return filepath.SkipDir
+			}
+			if rel == "." {
+				return nil
+			}
+			count++
+			if count > 200000 {
+				return errors.New("backup source limit exceeded")
+			}
+			return os.MkdirAll(filepath.Join(snapshot, rel), 0700)
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("non-regular Home object")
+		}
+		if strings.HasSuffix(rel, ".tmp") || strings.Contains(rel, ".tmp-") || rel == ".warden-restore-incomplete" {
+			return errors.New("incomplete Home write or restore")
+		}
+		if !strings.HasSuffix(rel, ".whome") && !strings.HasSuffix(rel, ".whome.meta") &&
+			!strings.HasSuffix(rel, ".whome.deleted") && !isHomeHistoryDirectory(filepath.Dir(path)) {
+			return nil
+		}
+		count++
+		if count > 200000 {
+			return errors.New("backup source limit exceeded")
+		}
+		// No fallback to an unbounded copy while holding the storage lock.
+		return os.Link(path, filepath.Join(snapshot, rel))
+	})
+	if err != nil {
+		return "", err
+	}
+	success = true
+	return snapshot, nil
+}
+
 func createBackup() (backupSummary, error) {
 	backupMu.Lock()
 	defer backupMu.Unlock()
@@ -177,9 +244,14 @@ func createBackup() (backupSummary, error) {
 	}()
 	manifest := backupManifest{Version: 1, ID: id, KeyID: encryptionKeyID, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	storageMu.Lock()
-	defer storageMu.Unlock()
+	snapshot, err := captureBackupSource()
+	storageMu.Unlock()
+	if err != nil {
+		return result, err
+	}
+	defer os.RemoveAll(snapshot)
 	deadline := time.Now().Add(20 * time.Minute)
-	err = filepath.Walk(cfg.Root, func(path string, info os.FileInfo, walkErr error) error {
+	err = filepath.Walk(snapshot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -189,7 +261,7 @@ func createBackup() (backupSummary, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("symbolic path in Home root")
 		}
-		rel, e := filepath.Rel(cfg.Root, path)
+		rel, e := filepath.Rel(snapshot, path)
 		if e != nil {
 			return e
 		}

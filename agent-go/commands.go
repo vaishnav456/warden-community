@@ -2221,11 +2221,12 @@ func complianceScan(jobID string, p map[string]interface{}) (int, string, error)
 	// discarding it, without failing the job since the scan itself succeeded.
 	postNote := ""
 	if _, err := apiPostAuth("/api/agent/compliance-result", map[string]interface{}{
-		"job_id":         jobID,
-		"policy_id":      policyID,
-		"overall_status": overall,
-		"score":          score,
-		"results":        results,
+		"job_id":             jobID,
+		"policy_id":          policyID,
+		"policy_fingerprint": p["policy_fingerprint"],
+		"overall_status":     overall,
+		"score":              score,
+		"results":            results,
 	}); err != nil {
 		postNote = fmt.Sprintf(" (warning: failed to report to compliance dashboard: %v)", err)
 	}
@@ -2761,6 +2762,13 @@ func windowsUpdate(p map[string]interface{}) (int, string, error) {
 		}
 		return 0, fmt.Sprintf("Windows Update scan triggered; reported %d pending updates", count), nil
 	case "install":
+		rebootMode, _ := p["reboot_mode"].(string)
+		if rebootMode == "" {
+			rebootMode = "notify"
+		}
+		if rebootMode != "never" && rebootMode != "notify" {
+			return 1, "", fmt.Errorf("unsupported restart mode; no updates installed")
+		}
 		allowed := map[string]bool{"Critical": true, "Important": true, "Moderate": true, "Low": true, "Unspecified": true}
 		severities := []string{}
 		if raw, ok := p["severities"].([]interface{}); ok {
@@ -2783,13 +2791,18 @@ func windowsUpdate(p map[string]interface{}) (int, string, error) {
 			`if($selected.Count -eq 0){ Write-Output 'No approved updates are applicable'; exit 0 }; ` +
 			`$downloader=$session.CreateUpdateDownloader(); $downloader.Updates=$selected; $download=$downloader.Download(); ` +
 			`$ready=New-Object -ComObject Microsoft.Update.UpdateColl; foreach($u in $selected){if($u.IsDownloaded){[void]$ready.Add($u)}}; ` +
-			`if($ready.Count -eq 0){throw 'No approved updates downloaded'}; $installer=$session.CreateUpdateInstaller(); $installer.Updates=$ready; $result=$installer.Install(); ` +
-			`Write-Output ("Installed {0} approved update(s); result={1}; reboot={2}" -f $ready.Count,$result.ResultCode,$result.RebootRequired); if($result.ResultCode -gt 3){exit 1}`
+			`if($download.ResultCode -ne 2 -or $ready.Count -ne $selected.Count){throw 'Approved updates did not all download; no installation started'}; ` +
+			`$installer=$session.CreateUpdateInstaller(); $installer.Updates=$ready; $installer.AllowSourcePrompts=$false; $result=$installer.Install(); ` +
+			`$failed=0; for($i=0;$i -lt $ready.Count;$i++){ $r=$result.GetUpdateResult($i); Write-Output ("Update {0}: result={1}; hresult={2}; reboot={3}" -f $ready.Item($i).Identity.UpdateID,$r.ResultCode,$r.HResult,$r.RebootRequired); if($r.ResultCode -ne 2){$failed++} }; ` +
+			`Write-Output ("Approved={0}; failed={1}; result={2}; reboot={3}" -f $ready.Count,$failed,$result.ResultCode,$result.RebootRequired); if($result.RebootRequired){Write-Output 'WARDEN_REBOOT_REQUIRED'}; if($failed -gt 0 -or $result.ResultCode -ne 2){exit 1}`
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 		defer cancel()
 		out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 		if ctx.Err() != nil {
 			return 1, string(out), fmt.Errorf("Windows Update installation timed out")
+		}
+		if rebootMode == "notify" && strings.Contains(string(out), "WARDEN_REBOOT_REQUIRED") {
+			notifyUserOfRemoteAccess("Windows updates need a restart", "Save your work and restart Windows when convenient. Warden has not forced a restart.")
 		}
 		if err != nil {
 			return commandExitCode(err), string(out), fmt.Errorf("Windows Update install: %w", err)

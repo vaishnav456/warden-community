@@ -1,0 +1,34 @@
+name: Module correction database regression
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: audit
+          POSTGRES_PASSWORD: isolated-test-only
+        options: >-
+          --health-cmd "pg_isready -U postgres -d audit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise migration and regression assertions in disposable database
+        env:
+          TEST_DB_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec -i "$TEST_DB_CONTAINER" psql -U postgres -d audit -v ON_ERROR_STOP=1 < server/tests/module_corrections_fixture.sql
+          docker exec -i "$TEST_DB_CONTAINER" psql -U postgres -d audit -v ON_ERROR_STOP=1 < migrations/2026-10-01-module-corrections.sql
+          docker exec -i "$TEST_DB_CONTAINER" psql -U postgres -d audit -v ON_ERROR_STOP=1 < migrations/2026-10-01-module-corrections.sql
+          docker exec -i "$TEST_DB_CONTAINER" psql -U postgres -d audit -v ON_ERROR_STOP=1 < server/tests/module_corrections_assertions.sql

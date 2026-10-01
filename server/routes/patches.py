@@ -109,8 +109,8 @@ def create_policy():
     if not 1 <= pilot <= 100 or not 0 <= broad_after <= 720 or not 1 <= deadline <= 2160 or broad_after > deadline:
         abort(400)
     reboot = request.form.get("reboot_mode", "notify")
-    if reboot not in {"never", "notify", "force_at_deadline"}:
-        abort(400)
+    if reboot not in {"never", "notify"}:
+        abort(400, "Forced restart deadlines are not supported. Choose notify or never force.")
     policy = db.create_patch_policy({
         "company_id": g.company["id"], "name": name, "scope_type": scope_type,
         "scope_value": scope_value, "severities": severities,
@@ -134,6 +134,8 @@ def deploy_policy(policy_id):
         require_branch_scope(policy.get("scope_value"))
     elif g.admin.get("role") == "branch_admin":
         abort(403)
+    if policy.get("reboot_mode") not in {"never", "notify"}:
+        abort(409, "This policy requests an unsupported forced restart. Create a notify/never-force policy.")
     endpoints = [endpoint for endpoint in db.get_endpoints(g.company["id"])
                  if endpoint.get("platform") == "windows" and endpoint_in_scope(endpoint, policy)]
     deployment_seed = f"{policy_id}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}"

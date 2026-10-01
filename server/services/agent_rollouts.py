@@ -109,7 +109,7 @@ def advance(row, now=None):
         if job.get('status') == 'completed':
             seen_age = age_seconds(ep.get('last_seen'),now)
             completed_age = age_seconds(job.get('completed_at'),now)
-            healthy = ep.get('status') == 'online' and ep.get('agent_version') == expected and seen_age is not None and completed_age is not None and seen_age < 180 and seen_age < completed_age
+            healthy = ep.get('status') == 'online' and ep.get('agent_version') == expected and seen_age is not None and completed_age is not None and 0 <= seen_age < 180 and 0 <= completed_age and seen_age < completed_age
             if healthy:
                 target['state'] = 'rolled_back' if expected == target['previous_version'] else 'verified'
             elif (age_seconds(job.get('completed_at'),now) or 0) > 600:

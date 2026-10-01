@@ -645,10 +645,7 @@ def revoke_refresh_token(token_id):
 
 
 def revoke_all_tokens_for_admin(admin_id):
-    _patch(f"refresh_tokens?admin_id=eq.{_q(admin_id)}&revoked=eq.false", {
-        "revoked": True,
-        "revoked_at": _now_iso(),
-    })
+    _rpc("revoke_admin_sessions", {"p_admin_id": str(admin_id)})
 
 
 def count_active_sessions(admin_id):
@@ -1605,6 +1602,9 @@ def has_job(endpoint_id, job_type):
 
 def create_job(company_id, branch_id, endpoint_id, job_type, payload, created_by,
                requires_dual_approval=False, escalation_id=None, expires_at=None):
+    if job_type == "COMPLIANCE_SCAN":
+        from services.compliance_state import prepare_scan
+        payload = prepare_scan(company_id, endpoint_id, payload)
     company = get_company_by_id(company_id)
     data = {
         "company_id": company_id,
@@ -1638,6 +1638,9 @@ def create_job(company_id, branch_id, endpoint_id, job_type, payload, created_by
 
 def create_system_job_once(company_id, branch_id, endpoint_id, job_type, payload):
     """Atomically create scheduler work unless the same operation is active."""
+    if job_type == "COMPLIANCE_SCAN":
+        from services.compliance_state import prepare_scan
+        payload = prepare_scan(company_id, endpoint_id, payload)
     company = get_company_by_id(company_id)
     params = {
         "p_company_id": str(company_id),
@@ -2191,11 +2194,10 @@ def get_software(endpoint_id, search=None, limit=100, offset=0):
 
 
 def replace_software_inventory(endpoint_id, items):
-    _delete(f"software_inventory?endpoint_id=eq.{_q(endpoint_id)}")
-    if items:
-        for item in items:
-            item["endpoint_id"] = endpoint_id
-        _post("software_inventory", items, prefer="return=minimal")
+    # One transaction preserves identities and vulnerability review decisions.
+    _rpc("replace_software_inventory", {
+        "p_endpoint_id": str(endpoint_id), "p_items": items or [],
+    })
 
 
 def replace_patch_inventory(company_id, endpoint_id, items):
@@ -2309,6 +2311,8 @@ def replace_vulnerability_findings(company_id, endpoint_id, findings):
         row = existing_by_key.get(key)
         fields = {"confidence": item["confidence"], "evidence": item["evidence"], "last_seen": now}
         if row:
+            if row.get("status") == "remediated":
+                fields.update(status="open", resolved_at=None)
             _patch(f"vulnerability_findings?id=eq.{_q(row['id'])}", fields)
         else:
             _post("vulnerability_findings", {
@@ -3524,7 +3528,7 @@ def delete_compliance_policy(policy_id):
 # Compliance results
 # ─────────────────────────────────────────────────────────────────────────────
 
-def upsert_compliance_result(endpoint_id, company_id, policy_id, overall_status, score, results):
+def upsert_compliance_result(endpoint_id, company_id, policy_id, overall_status, score, results, policy_fingerprint=None):
     # Use POST with upsert (on_conflict=endpoint_id)
     data = {
         "endpoint_id": str(endpoint_id),
@@ -3533,9 +3537,9 @@ def upsert_compliance_result(endpoint_id, company_id, policy_id, overall_status,
         "score": score,
         "results": results,
         "scanned_at": _now_iso(),
+        "policy_fingerprint": policy_fingerprint if isinstance(policy_fingerprint, str) and len(policy_fingerprint) == 64 else None,
+        "policy_id": str(policy_id) if policy_id else None,
     }
-    if policy_id:
-        data["policy_id"] = str(policy_id)
     _post("compliance_results", data,
           prefer="resolution=merge-duplicates,return=representation")
 

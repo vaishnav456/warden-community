@@ -8,7 +8,7 @@ import db
 KINDS = {
  'audit': ('audit_log','created_at',['id','created_at','action','actor_id','endpoint_id','branch_id']),
  'storage': ('audit_log','created_at',['id','created_at','action','actor_id','endpoint_id','branch_id']),
- 'remote': ('remote_sessions','started_at',['id','started_at','ended_at','endpoint_id','admin_id','status','consent_required','consent_status','access_mode','fail_reason']),
+ 'remote': ('remote_sessions','started_at',['id','started_at','ended_at','endpoint_id','branch_id','admin_id','status','consent_required','consent_status','access_mode','fail_reason']),
  'jobs': ('jobs','created_at',['id','created_at','completed_at','endpoint_id','branch_id','type','status','exit_code']),
 }
 
@@ -29,7 +29,8 @@ def export(company_id,kind,branch_id=None,days=30):
     path = f"{table}?company_id=eq.{db._q(company_id)}&{date}=gte.{db._q(cutoff)}&order={date}.desc,id.desc"
     if kind == 'storage':
         path += '&or=(action.ilike.*storage*,action.ilike.*package*,action.ilike.*app_*,action.ilike.*home*)'
-    allowed = {str(ep['id']) for ep in db.get_endpoints(company_id,branch_id=branch_id)} if branch_id else None
+    if branch_id:
+        path += f'&branch_id=eq.{db._q(branch_id)}'
     out=io.StringIO(newline='')
     writer=csv.writer(out);writer.writerow(columns)
     scanned=0
@@ -40,7 +41,7 @@ def export(company_id,kind,branch_id=None,days=30):
         if scanned > 10000:
             raise ValueError('Report exceeds 10,000 rows; select a shorter date range')
         for row in page:
-            if allowed is not None and str(row.get('endpoint_id')) not in allowed:
+            if branch_id and str(row.get('branch_id')) != str(branch_id):
                 continue
             writer.writerow([csv_cell(row.get(column)) for column in columns])
         if len(page)<1000:

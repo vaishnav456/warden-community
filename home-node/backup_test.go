@@ -77,6 +77,47 @@ func TestIndependentBackupEncryptedRestoreAndEmptyFolders(t *testing.T) {
 		t.Fatal("existing restore overwritten")
 	}
 }
+
+func TestBackupSourcePinsOldDataAndMetadataWithoutCopyLock(t *testing.T) {
+	setupBackupTest(t)
+	rel := "homes/alice/Documents/pinned.txt"
+	if _, err := storeAuthorizedFile(rel, bytes.NewBufferString("before"), 1, grant{Prefix: "homes/alice", MaxFileBytes: 1024}); err != nil {
+		t.Fatal(err)
+	}
+	storageMu.Lock()
+	snapshot, err := captureBackupSource()
+	storageMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(snapshot)
+	if !storageMu.TryLock() {
+		t.Fatal("capture retained storage lock")
+	}
+	storageMu.Unlock()
+	if _, err := storeAuthorizedFile(rel, bytes.NewBufferString("after!"), 2, grant{Prefix: "homes/alice", MaxFileBytes: 1024}); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.Open(filepath.Join(snapshot, rel+".whome"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plain bytes.Buffer
+	err = decryptStreamForPath(&plain, src, rel)
+	src.Close()
+	if err != nil || plain.String() != "before" {
+		t.Fatal("snapshot changed after live update", err)
+	}
+	// Metadata authentication uses the canonical active path; its bytes must stay pinned.
+	raw, err := os.ReadFile(filepath.Join(snapshot, rel+".whome.meta"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := os.ReadFile(filepath.Join(cfg.Root, rel+".whome.meta"))
+	if err != nil || bytes.Equal(raw, live) {
+        t.Fatal("snapshot metadata changed in place", err)
+	}
+}
 func TestBackupTamperQuotaAndInvalidDestination(t *testing.T) {
 	setupBackupTest(t)
 	rel := "homes/alice/file.txt"

@@ -33,6 +33,7 @@ def issue_access_token(admin):
         company_id=admin.get("company_id"),
         minutes=config.JWT_ACCESS_MINUTES,
     )
+    payload["sv"] = int(admin.get("access_token_version") or 0)
     return jwt.encode(payload, config.SECRET_KEY, algorithm="HS256")
 
 
@@ -106,6 +107,10 @@ def load_current_user():
 
     admin = db.get_admin_by_id(claims["sub"])
     if not admin or not admin.get("is_active"):
+        return
+    # The database generation invalidates already-issued JWTs immediately.
+    # Legacy tokens are generation zero, accepted only before the first revoke.
+    if type(claims.get("sv", 0)) is not int or claims.get("sv", 0) != int(admin.get("access_token_version") or 0):
         return
 
     if admin.get("role") not in {"company_admin", "branch_admin", "technician"} or not admin.get("company_id"):

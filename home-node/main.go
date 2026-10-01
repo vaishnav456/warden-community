@@ -652,7 +652,7 @@ func writeFileVerified(rel string, src io.Reader, mtime, maxBytes int64, expecte
 	tag := aead.Seal(nil, nonce, nil, metadataHashAAD(rel, m))
 	m.Auth = base64.RawURLEncoding.EncodeToString(append(nonce, tag...))
 	raw, _ := json.Marshal(m)
-	return os.WriteFile(meta, raw, 0600)
+	return atomicWrite(meta, raw, 0600)
 }
 
 func metadataAAD(rel string, size, mtime int64) []byte {

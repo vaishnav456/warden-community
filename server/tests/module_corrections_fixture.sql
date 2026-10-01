@@ -1,0 +1,25 @@
+-- Disposable PostgreSQL database only; never run against production.
+CREATE EXTENSION pgcrypto;
+CREATE ROLE service_role;
+CREATE SCHEMA endpt;
+CREATE TABLE endpt.companies(id uuid PRIMARY KEY);
+CREATE TABLE endpt.admin_users(id uuid PRIMARY KEY,company_id uuid,branch_id uuid,role text,is_active boolean DEFAULT true);
+CREATE TABLE endpt.endpoints(id uuid PRIMARY KEY,company_id uuid,branch_id uuid,is_active boolean DEFAULT true,tags jsonb DEFAULT '[]',software_inventory_at timestamptz);
+CREATE TABLE endpt.refresh_tokens(id uuid DEFAULT gen_random_uuid(),admin_id uuid,revoked boolean DEFAULT false,revoked_at timestamptz);
+CREATE TABLE endpt.remote_sessions(id uuid DEFAULT gen_random_uuid(),endpoint_id uuid,company_id uuid);
+CREATE TABLE endpt.compliance_results(endpoint_id uuid PRIMARY KEY);
+CREATE TABLE endpt.software_inventory(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),endpoint_id uuid,name text,version text,publisher text,install_date text,install_location text,executable_path text);
+CREATE TABLE endpt.vulnerability_findings(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),endpoint_id uuid,software_id uuid REFERENCES endpt.software_inventory ON DELETE CASCADE,status text,resolved_at timestamptz);
+CREATE TABLE endpt.patch_policies(id uuid PRIMARY KEY,company_id uuid,enabled boolean DEFAULT true,scope_type text,scope_value jsonb,reboot_mode text DEFAULT 'notify');
+CREATE TABLE endpt.patch_deployments(id uuid PRIMARY KEY,company_id uuid,policy_id uuid,status text,broad_at timestamptz,created_by uuid,encrypted_payload text);
+CREATE TABLE endpt.patch_deployment_targets(deployment_id uuid,endpoint_id uuid,ring text,status text,job_id uuid);
+CREATE TABLE endpt.jobs(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),company_id uuid,branch_id uuid,endpoint_id uuid,type text,payload text,status text,created_by uuid);
+INSERT INTO endpt.companies VALUES('00000000-0000-0000-0000-000000000001');
+INSERT INTO endpt.admin_users VALUES('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000003','branch_admin',true);
+INSERT INTO endpt.endpoints(id,company_id,branch_id) VALUES('00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000003');
+INSERT INTO endpt.refresh_tokens(admin_id) VALUES('00000000-0000-0000-0000-000000000002');
+INSERT INTO endpt.software_inventory(id,endpoint_id,name,version,publisher) VALUES('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000004','Example','1','Vendor');
+INSERT INTO endpt.vulnerability_findings(endpoint_id,software_id,status) VALUES('00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000005','accepted');
+INSERT INTO endpt.patch_policies(id,company_id,scope_type,scope_value) VALUES('00000000-0000-0000-0000-000000000006','00000000-0000-0000-0000-000000000001','branch','"00000000-0000-0000-0000-000000000003"');
+INSERT INTO endpt.patch_deployments VALUES('00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000006','pilot',now()-interval '1 hour','00000000-0000-0000-0000-000000000002','encrypted');
+INSERT INTO endpt.patch_deployment_targets VALUES('00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000004','broad','waiting',NULL);

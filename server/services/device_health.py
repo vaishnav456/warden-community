@@ -7,7 +7,7 @@ def age_seconds(value, now=None):
         seen = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
         if seen.tzinfo is None:
             seen = seen.replace(tzinfo=timezone.utc)
-        return max(0, ((now or datetime.now(timezone.utc)) - seen).total_seconds())
+        return ((now or datetime.now(timezone.utc)) - seen).total_seconds()
     except (ValueError, TypeError):
         return None
 
@@ -17,7 +17,7 @@ def findings(endpoint, latest_version=None, now=None):
     def add(code, severity, title, detail, action=None):
         result.append(dict(code=code, severity=severity, title=title, detail=detail, action=action))
     age = age_seconds(endpoint.get('last_seen'), now)
-    if endpoint.get('status') != 'online' or age is None or age > 180:
+    if endpoint.get('status') != 'online' or age is None or age > 180 or age < -300:
         add('offline', 'warning', 'Device not reporting', 'Check power and connectivity; actions wait until reconnect.')
     for field, threshold, code, title, unit in (
             ('disk_free_gb', 5, 'storage', 'Low free disk space', 'GB'),
@@ -39,7 +39,7 @@ def findings(endpoint, latest_version=None, now=None):
     inventory = capabilities.get('device_health') if isinstance(capabilities,dict) else {}
     inventory = inventory if isinstance(inventory,dict) else {}
     inventory_age = age_seconds(inventory.get('collected_at'),now)
-    if inventory_age is not None and inventory_age < 900:
+    if inventory_age is not None and -300 <= inventory_age < 900:
         for disk in inventory.get('disks') or []:
             if isinstance(disk,dict) and str(disk.get('HealthStatus','')).lower() in {'unhealthy','warning'}:
                 add('disk_health','critical','Windows reports a disk health problem',

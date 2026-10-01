@@ -1394,7 +1394,7 @@ func compliance(jobID string, p map[string]interface{}) (int, string, error) {
 	if passed == len(results) {
 		overall = "compliant"
 	}
-	payload := map[string]interface{}{"job_id": jobID, "policy_id": stringValue(p["policy_id"]), "overall_status": overall, "score": score, "results": results}
+	payload := map[string]interface{}{"job_id": jobID, "policy_id": stringValue(p["policy_id"]), "policy_fingerprint": p["policy_fingerprint"], "overall_status": overall, "score": score, "results": results}
 	b, _ := json.Marshal(payload)
 	if err := post("/api/agent/compliance-result", payload, true, nil); err != nil {
 		return 1, string(b), fmt.Errorf("report compliance result: %w", err)

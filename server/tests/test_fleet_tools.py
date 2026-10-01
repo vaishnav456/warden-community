@@ -62,12 +62,14 @@ class FleetToolsTests(unittest.TestCase):
     def test_export_never_silently_truncates(self):
         with mock.patch.object(reports.db,'_get',return_value=[dict(id='row')]*1000):
             with self.assertRaises(ValueError):reports.export('tenant','jobs')
-    def test_branch_export_filters_current_endpoint_ownership(self):
-        with mock.patch.object(reports.db,'get_endpoints',return_value=[dict(id='allowed')]),mock.patch.object(reports.db,'_get',return_value=[dict(id='a',endpoint_id='allowed',type='UPDATE_AGENT'),dict(id='b',endpoint_id='foreign',type='RUN_CMD')]) as read:
+    def test_branch_export_filters_recorded_branch_scope(self):
+        with mock.patch.object(reports.db,'get_endpoints') as current,mock.patch.object(reports.db,'_get',return_value=[dict(id='a',endpoint_id='allowed',branch_id='branch',type='UPDATE_AGENT'),dict(id='b',endpoint_id='foreign',branch_id='other',type='RUN_CMD')]) as read:
             result=reports.export('tenant','jobs','branch')
         rows=list(csv.reader(io.StringIO(result)))
         self.assertEqual(len(rows),2);self.assertNotIn('RUN_CMD',result)
         self.assertNotIn('payload',read.call_args.args[0])
+        self.assertIn('branch_id=eq.branch',read.call_args.args[0])
+        current.assert_not_called()
     def test_reports_reject_unknown_type_and_unbounded_period(self):
         for kind,days in [('payloads',30),('jobs',0),('audit',91)]:
             with self.assertRaises(ValueError):reports.export('tenant',kind,days=days)

@@ -145,8 +145,9 @@ def authenticate_warden_identity():
             return _identity_login_response("policy_denied", 403, "Sign-in is outside allowed hours", identity)
     if policy.get("require_compliant") is True:
         compliance = db.get_compliance_result(g.endpoint["id"])
-        if not compliance or compliance.get("overall_status") != "compliant":
-            return _identity_login_response("policy_denied", 403, "Endpoint is not compliant", identity)
+        from services.compliance_state import permits_sign_in
+        if not permits_sign_in(g.endpoint, compliance, db.get_compliance_policies(g.endpoint["company_id"])):
+            return _identity_login_response("policy_denied", 403, "A fresh compliant scan for the current policy is required", identity)
 
     from routes.auth import _check_password
     if not _check_password(password, identity["password_hash"]):
@@ -1192,7 +1193,6 @@ def report_software():
             "executable_path": executable_path or None,
         })
     db.replace_software_inventory(g.endpoint["id"], accepted)
-    db._patch(f"endpoints?id=eq.{db._q(g.endpoint['id'])}",{"software_inventory_at":db._now_iso()})
     return jsonify({"ok": True, "count": len(accepted)})
 
 
@@ -1595,6 +1595,11 @@ def compliance_result():
     """
     body = request.get_json(silent=True) or {}
     endpoint = g.endpoint
+    from services.compliance_state import scan_receipt
+    try:
+        policy_id, policy_fingerprint = scan_receipt(endpoint, body.get("job_id"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
 
     overall_status = body.get("overall_status", "error")
     if overall_status not in ("compliant", "non_compliant", "error"):
@@ -1603,10 +1608,11 @@ def compliance_result():
     db.upsert_compliance_result(
         endpoint_id=endpoint["id"],
         company_id=endpoint["company_id"],
-        policy_id=body.get("policy_id"),
+        policy_id=policy_id,
         overall_status=overall_status,
         score=body.get("score", 0),
         results=body.get("results", []),
+        policy_fingerprint=policy_fingerprint,
     )
 
     # Auto-create alert if non-compliant

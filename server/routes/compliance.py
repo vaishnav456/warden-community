@@ -260,6 +260,8 @@ def scan_endpoint(endpoint_id):
         "policy_id": policy_id,
         "checks": check_names,
     }
+    from services.compliance_state import fingerprint
+    payload["policy_fingerprint"] = fingerprint(endpoint, active_policy)
 
     job = db.create_job(
         company_id=company_id,
@@ -343,6 +345,8 @@ def scan_all():
             continue
 
         payload = {"policy_id": policy_id, "checks": check_names}
+        from services.compliance_state import fingerprint
+        payload["policy_fingerprint"] = fingerprint(ep, active_policy)
 
         created = db.create_job(
             company_id=company_id,
