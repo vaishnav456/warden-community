@@ -35,6 +35,7 @@ import websockets.exceptions
 import config
 import db
 import services.health_tracker as health_tracker
+from services.load_control import controller as load_controller
 
 log = logging.getLogger("warden.ws_proxy")
 
@@ -49,6 +50,22 @@ PROXY_PORT = 35021
 # user was still deciding, which made the agent's later consent report fail
 # with session_not_active. Keep a small network margin above that 110s path.
 PAIR_TIMEOUT = 135
+# Bound large 4K JPEG frames while keeping per-peer buffering small.
+MAX_RELAY_MESSAGE_BYTES = 8 * 1024 * 1024
+MAX_RELAY_QUEUE = 4
+# Emergency registry bound, not the normal workload/tenant admission policy.
+MAX_REMOTE_RELAY_PAIRS = 256
+
+
+class RelayCapacityExceeded(Exception):
+    pass
+
+
+def relay_capacity_reached(company_id=None):
+    # Advisory HTTP check; _attach_peer performs the authoritative atomic claim.
+    pairs = tuple(_pairs.values())
+    return (len(pairs) >= MAX_REMOTE_RELAY_PAIRS or
+            load_controller.reject_remote([pair.company_id for pair in pairs], company_id))
 _ready = threading.Event()
 _startup_error = None
 
@@ -56,13 +73,15 @@ _startup_error = None
 # ── Session registry ──────────────────────────────────────────────────────────
 
 class _Pair:
-    __slots__ = ("browser_ws", "agent_ws", "ready", "done")
+    __slots__ = ("browser_ws", "agent_ws", "ready", "done", "closing", "company_id")
 
     def __init__(self):
         self.browser_ws = None
         self.agent_ws   = None
         self.ready      = asyncio.Event()
         self.done       = asyncio.Event()  # fired by browser side when relay ends
+        self.closing    = False
+        self.company_id = None
 
 
 _pairs: dict[str, _Pair] = {}   # session_id → _Pair
@@ -91,9 +110,10 @@ async def _get_or_create_pair(session_id: str) -> _Pair:
         return _pairs[session_id]
 
 
-async def _cleanup_pair(session_id: str) -> None:
+async def _cleanup_pair(session_id: str, expected_pair=None) -> None:
     async with _pairs_lock:
-        _pairs.pop(session_id, None)
+        if expected_pair is None or _pairs.get(session_id) is expected_pair:
+            _pairs.pop(session_id, None)
 
 
 def _mark_session_failed(session_id: str, reason: str) -> None:
@@ -112,10 +132,18 @@ def _close_session(session_id: str) -> None:
         log.exception("Could not close remote session %s", session_id)
 
 
-async def _attach_peer(session_id: str, side: str, websocket):
+async def _attach_peer(session_id: str, side: str, websocket, company_id=None):
     """Atomically attach one peer; never overwrite a live authenticated peer."""
     async with _pairs_lock:
-        pair = _pairs.setdefault(session_id, _Pair())
+        pair = _pairs.get(session_id)
+        if pair is None:
+            if relay_capacity_reached(company_id):
+                raise RelayCapacityExceeded()
+            pair = _Pair()
+            pair.company_id = company_id
+            _pairs[session_id] = pair
+        if pair.closing:
+            return None
         attr = f"{side}_ws"
         existing = getattr(pair, attr)
         if existing is not None and not getattr(existing, "closed", False):
@@ -128,7 +156,7 @@ async def _attach_home_peer(session_id: str, side: str, websocket):
     async with _home_pairs_lock:
         pair = _home_pairs.get(session_id)
         if pair is None:
-            if len(_home_pairs) >= _MAX_HOME_RELAY_PAIRS:
+            if len(_home_pairs) >= _MAX_HOME_RELAY_PAIRS or load_controller.reject_remote([], None):
                 return None
             pair = _HomePair()
             _home_pairs[session_id] = pair
@@ -227,7 +255,7 @@ async def _measure_remote_quality(agent_ws,session,quality):
 
 async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
     # Validate vnc_token against active session
-    session = db.get_remote_session_by_token(token)
+    session = await asyncio.to_thread(db.get_remote_session_by_token, token)
     if not session or str(session.get("endpoint_id", "")) != endpoint_id:
         log.warning("Invalid vnc_token for endpoint %s", endpoint_id)
         await websocket.close(1008, "invalid token")
@@ -238,7 +266,12 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
         return
 
     session_id = str(session["id"])
-    pair = await _attach_peer(session_id, "browser", websocket)
+    try:
+        pair = await _attach_peer(session_id, "browser", websocket, session.get("company_id"))
+    except RelayCapacityExceeded:
+        await asyncio.to_thread(_mark_session_failed, session_id, "remote relay capacity reached; retry shortly")
+        await websocket.close(1013, "remote relay busy; retry shortly")
+        return
     if pair is None:
         log.warning("Rejected duplicate browser peer for session %s", session_id)
         await websocket.close(1008, "browser already connected")
@@ -255,9 +288,10 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
         # Wake an agent that attached first; otherwise it can remain parked
         # on pair.done for the full one-hour relay timeout after the browser
         # has already given up.
+        pair.closing = True
+        await asyncio.to_thread(_mark_session_failed, session_id, "agent did not connect in time")
         pair.done.set()
-        _mark_session_failed(session_id, "agent did not connect in time")
-        await _cleanup_pair(session_id)
+        await _cleanup_pair(session_id, pair)
         try:
             await websocket.close(1011, "agent did not connect in time")
         except Exception:
@@ -267,7 +301,10 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
     agent_ws = pair.agent_ws
     if not agent_ws:
         # Rare: agent connected, signalled ready, then immediately closed
-        await _cleanup_pair(session_id)
+        pair.closing = True
+        await asyncio.to_thread(_mark_session_failed, session_id, "agent disconnected before pairing")
+        pair.done.set()
+        await _cleanup_pair(session_id, pair)
         try:
             await websocket.close(1011, "agent disconnected")
         except Exception:
@@ -291,6 +328,10 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
     except (OSError, websockets.exceptions.WebSocketException) as exc:
         log.warning("Relay error (session %s): %s", session_id, exc)
     finally:
+        # Prevent reattachment during teardown and retire the token first.
+        # DB calls run off-loop so they cannot freeze other remote streams.
+        pair.closing = True
+        await asyncio.to_thread(_close_session, session_id)
         for task in relay_tasks:task.cancel()
         await asyncio.gather(*relay_tasks, return_exceptions=True)
         quality_task.cancel()
@@ -298,8 +339,7 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
         health_tracker.decrement_connections()
         # Signal agent side that relay is done before cleanup
         pair.done.set()
-        _close_session(session_id)
-        await _cleanup_pair(session_id)
+        await _cleanup_pair(session_id, pair)
         for ws in (websocket, agent_ws):
             try:
                 await ws.close(1000)
@@ -312,7 +352,7 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
 async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
     # Validate API key
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    endpoint = db.get_endpoint_by_api_key_hash(key_hash)
+    endpoint = await asyncio.to_thread(db.get_endpoint_by_api_key_hash, key_hash)
     if not endpoint:
         log.warning("Agent relay: invalid api_key for session %s", session_id)
         await websocket.close(1008, "unauthorized")
@@ -342,7 +382,7 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
     # the agent side of ANY session_id and receive the browser operator's
     # input / substitute whatever desktop it sends back, hijacking a
     # remote-support session meant for a different machine entirely.
-    session = db.get_remote_session(session_id)
+    session = await asyncio.to_thread(db.get_remote_session, session_id)
     if not session or str(session.get("endpoint_id")) != str(endpoint["id"]):
         log.warning(
             "Agent relay: endpoint %s attempted to attach to session %s "
@@ -356,11 +396,16 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
         return
     if session.get("consent_required") and session.get("consent_status") != "approved":
         log.warning("Agent relay rejected session %s without endpoint consent", session_id)
-        _mark_session_failed(session_id, "remote user consent was not approved")
+        await asyncio.to_thread(_mark_session_failed, session_id, "remote user consent was not approved")
         await websocket.close(1008, "consent required")
         return
 
-    pair = await _attach_peer(session_id, "agent", websocket)
+    try:
+        pair = await _attach_peer(session_id, "agent", websocket, session.get("company_id"))
+    except RelayCapacityExceeded:
+        await asyncio.to_thread(_mark_session_failed, session_id, "remote relay capacity reached; retry shortly")
+        await websocket.close(1013, "remote relay busy; retry shortly")
+        return
     if pair is None:
         log.warning("Rejected duplicate agent peer for session %s", session_id)
         await websocket.close(1008, "agent already connected")
@@ -376,9 +421,10 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
         await asyncio.wait_for(pair.ready.wait(), timeout=PAIR_TIMEOUT)
     except asyncio.TimeoutError:
         log.warning("Agent waiting for browser timed out (session %s)", session_id)
+        pair.closing = True
+        await asyncio.to_thread(_mark_session_failed, session_id, "browser did not connect in time")
         pair.done.set()
-        _mark_session_failed(session_id, "browser did not connect in time")
-        await _cleanup_pair(session_id)
+        await _cleanup_pair(session_id, pair)
         try:
             await websocket.close(1011, "browser did not connect in time")
         except Exception:
@@ -392,8 +438,9 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
         await asyncio.wait_for(pair.done.wait(), timeout=3600)
     except asyncio.TimeoutError:
         log.warning("Agent relay reached hard timeout (session %s)", session_id)
+        pair.closing = True
+        await asyncio.to_thread(_mark_session_failed, session_id, "remote relay reached time limit")
         pair.done.set()
-        _mark_session_failed(session_id, "remote relay reached time limit")
         for ws in (websocket, pair.browser_ws):
             if ws is not None:
                 try:
@@ -401,7 +448,7 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
                 except Exception:
                     pass
     finally:
-        await _cleanup_pair(session_id)
+        await _cleanup_pair(session_id, pair)
 
 
 def _home_session_active(session) -> bool:
@@ -415,16 +462,16 @@ def _home_session_active(session) -> bool:
 
 
 async def _handle_home_initiator(websocket, session_id: str, kind: str, key: str) -> None:
-    session = db.get_home_p2p_session(session_id)
+    session = await asyncio.to_thread(db.get_home_p2p_session, session_id)
     if not _home_session_active(session):
         await websocket.close(1008, "expired or invalid session")
         return
     key_hash = hashlib.sha256(key.encode()).hexdigest()
     if kind == "endpoint":
-        principal = db.get_endpoint_by_api_key_hash(key_hash)
+        principal = await asyncio.to_thread(db.get_endpoint_by_api_key_hash, key_hash)
         expected = session.get("endpoint_id")
     else:
-        principal = db.get_home_node_by_key_hash(key_hash)
+        principal = await asyncio.to_thread(db.get_home_node_by_key_hash, key_hash)
         expected = session.get("initiator_node_id")
     if not principal or str(principal.get("id")) != str(expected):
         await websocket.close(1008, "unauthorized")
@@ -467,11 +514,11 @@ async def _handle_home_initiator(websocket, session_id: str, kind: str, key: str
 
 
 async def _handle_home_target(websocket, session_id: str, key: str) -> None:
-    session = db.get_home_p2p_session(session_id)
+    session = await asyncio.to_thread(db.get_home_p2p_session, session_id)
     if not _home_session_active(session):
         await websocket.close(1008, "expired or invalid session")
         return
-    node = db.get_home_node_by_key_hash(hashlib.sha256(key.encode()).hexdigest())
+    node = await asyncio.to_thread(db.get_home_node_by_key_hash, hashlib.sha256(key.encode()).hexdigest())
     if not node or str(node.get("id")) != str(session.get("node_id")):
         await websocket.close(1008, "unauthorized")
         return
@@ -564,11 +611,25 @@ def start() -> None:
         asyncio.set_event_loop(loop)
 
         async def _main() -> None:
-            async with websockets.serve(_handle, PROXY_HOST, PROXY_PORT):
+            async def monitor_pressure():
+                while True:
+                    start = time.monotonic()
+                    await asyncio.sleep(1)
+                    load_controller.sample(time.monotonic() - start - 1)
+
+            async with websockets.serve(
+                _handle, PROXY_HOST, PROXY_PORT,
+                max_size=MAX_RELAY_MESSAGE_BYTES, max_queue=MAX_RELAY_QUEUE,
+            ):
                 log.info("WS relay listening on %s:%d", PROXY_HOST, PROXY_PORT)
                 _startup_error = None
                 _ready.set()
-                await asyncio.Future()
+                monitor = asyncio.create_task(monitor_pressure())
+                try:
+                    await asyncio.Future()
+                finally:
+                    monitor.cancel()
+                    await asyncio.gather(monitor, return_exceptions=True)
 
         try:
             loop.run_until_complete(_main())

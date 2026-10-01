@@ -112,6 +112,9 @@ app.register_blueprint(topology_bp)
 @app.before_request
 def setup_context():
     """Load the authenticated administrator and sole organization."""
+    if request.path != "/health":
+        from services.load_control import controller
+        g.load_started = controller.begin_request()
     # Per-request nonce for the few server-rendered inline blocks explicitly
     # authorized by the CSP. All library code and CSS are served locally.
     g.csp_nonce = secrets.token_urlsafe(16)
@@ -141,6 +144,9 @@ def setup_context():
 
 @app.after_request
 def security_headers(response):
+    if g.get("load_started") is not None:
+        from services.load_control import controller
+        controller.end_request(g.load_started)
     if request.path == "/health":
         return response
     return apply_security_headers(response)

@@ -1449,6 +1449,15 @@ def start_remote_session(endpoint_id):
         })
 
     # Create remote session record
+    from services.ws_proxy import relay_capacity_reached
+    if relay_capacity_reached(g.company["id"]):
+        response = jsonify({
+            "error": "remote_relay_busy",
+            "message": "The server is busy protecting active sessions. Please retry shortly.",
+        })
+        response.status_code = 503
+        response.headers["Retry-After"] = "15"
+        return response
     session = db.create_remote_session(
         endpoint_id=endpoint_id,
         company_id=g.company["id"],

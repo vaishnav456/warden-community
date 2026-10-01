@@ -161,10 +161,16 @@ func runAgent(stopCh <-chan struct{}) {
 		}
 	}()
 
+	// Preserve update-health startup proof above, but spread fleet restarts
+	// across one poll window instead of sending every initial heartbeat at once.
+	if !waitForHeartbeatStartup(stopCh, heartbeatStartupDelay(c.EndpointID)) {
+		close(jobQueue)
+		return
+	}
 	ticker := time.NewTicker(pollIntervalSec * time.Second)
 	defer ticker.Stop()
 
-	// Run once immediately
+	// Run once at this endpoint's staggered polling phase.
 	runHeartbeatCycle(jobQueue, &jobWorkerBusy)
 
 	for {

@@ -138,8 +138,20 @@ def healthcheck():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_company_by_id(company_id):
+    # Cache only within one HTTP request, never across tenants or requests.
+    # Heartbeat encryption/auth repeatedly needs the same tenant key metadata.
+    from flask import g, has_request_context
+    cache = None
+    if has_request_context():
+        cache = g.setdefault("_db_company_cache", {})
+        if str(company_id) in cache:
+            value = cache[str(company_id)]
+            return dict(value) if value else None
     rows = _get(f"companies?id=eq.{_q(company_id)}&limit=1")
-    return rows[0] if rows else None
+    result = rows[0] if rows else None
+    if cache is not None:
+        cache[str(company_id)] = dict(result) if result else None
+    return result
 
 
 def get_single_company():
@@ -167,6 +179,9 @@ def ensure_company_encryption(company):
 
 
 def update_company(company_id, data):
+    from flask import g, has_request_context
+    if has_request_context():
+        g.get("_db_company_cache", {}).pop(str(company_id), None)
     rows = _patch(f"companies?id=eq.{_q(company_id)}", data)
     return rows[0] if (rows and isinstance(rows, list)) else rows
 
@@ -283,6 +298,14 @@ def _decrypt_endpoint(row, company=None):
 
 
 def _endpoint_company(endpoint_id):
+    # Middleware already authenticated this exact endpoint. Reuse its tenant
+    # binding; another endpoint ID must still go through the database lookup.
+    from flask import g, has_request_context
+    if has_request_context():
+        endpoint = g.get("endpoint")
+        if (isinstance(endpoint, dict) and str(endpoint.get("id")) == str(endpoint_id)
+                and endpoint.get("company_id")):
+            return get_company_by_id(endpoint["company_id"])
     rows = _get(
         f"endpoints?id=eq.{_q(endpoint_id)}&select=company_id&limit=1"
     )

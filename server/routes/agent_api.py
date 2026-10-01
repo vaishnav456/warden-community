@@ -551,7 +551,8 @@ def heartbeat():
             current_app.logger.exception("BitLocker status update deferred for endpoint %s", endpoint["id"])
 
     # Record metrics
-    if cpu_pct is not None:
+    from services.load_control import controller as load_controller
+    if cpu_pct is not None and load_controller.allow_metric(endpoint["id"]):
         db.insert_metric(
             endpoint["id"],
             cpu_pct,

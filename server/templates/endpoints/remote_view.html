@@ -381,7 +381,12 @@
     // below signals). Labeling this "Connected" was misleading: it showed
     // even when the agent side never joined at all.
     ws.onopen  = () => { setStatus('Waiting for device…', ''); canvas.focus(); addSessionEvent('Relay connected; waiting for endpoint'); };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (event.code === 1013) {
+        setStatus('Remote relay busy — please retry shortly', 'error');
+        addSessionEvent('Remote-session capacity reached; retry shortly');
+        return;
+      }
       setStatus(relayWasPaired ? 'Connection interrupted' : 'Connection failed', 'error');
       addSessionEvent('Connection interrupted');
       // ws_proxy closes the database session and revokes its one-time token whenever an
