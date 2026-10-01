@@ -55,6 +55,7 @@ type homeSpace struct {
 	Nodes          []homeNode    `json:"nodes"`
 }
 type homeRemoteFile struct {
+	Deleted bool   `json:"deleted,omitempty"`
 	Path    string `json:"path"`
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"mtime"`
@@ -240,6 +241,7 @@ type homeFileResult struct {
 }
 
 type homeSyncReport struct {
+	Deleted         int              `json:"deleted"`
 	Kind            string           `json:"kind"`
 	Version         int              `json:"version"`
 	Username        string           `json:"username"`
@@ -262,6 +264,8 @@ const homeReportDetailLimit = 100
 
 func (report *homeSyncReport) record(space, path, action, status string, size int64, err error) {
 	switch status {
+	case "deleted":
+		report.Deleted++
 	case "folder_created":
 		report.FoldersCreated++
 	case "uploaded":
@@ -298,6 +302,7 @@ func (report *homeSyncReport) record(space, path, action, status string, size in
 }
 
 func (report *homeSyncReport) merge(other homeSyncReport) {
+	report.Deleted += other.Deleted
 	report.Uploaded += other.Uploaded
 	report.Downloaded += other.Downloaded
 	report.FoldersCreated += other.FoldersCreated
@@ -358,22 +363,49 @@ func syncHomeMapping(space homeSpace, node homeNode, m homeMapping, username str
 		return report, err
 	}
 	defer client.CloseIdleConnections()
-	return syncHomeMappingFiles(space, node, m, localRoot, client)
+	return syncHomeMappingTracked(space, node, m, username, localRoot, client)
 }
 
 // This boundary also lets transfer failures be exercised against a real HTTP
 // server and temporary folder without a signed-in Windows profile.
 func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRoot string, client *http.Client) (homeSyncReport, error) {
+	return syncHomeMappingFilesTracked(space, node, m, localRoot, client, nil, nil)
+}
+
+func syncHomeMappingFilesTracked(space homeSpace, node homeNode, m homeMapping, localRoot string, client *http.Client, state *homeSyncState, confirm func([]string) int) (homeSyncReport, error) {
 	var report homeSyncReport
 	target, err := cleanHomePart(m.Target)
 	if err != nil {
 		return report, err
 	}
 	remoteRoot := strings.Trim(space.Prefix, "/") + "/" + target
-	remote, err := listHomeFiles(client, node, remoteRoot)
+	remote, deletionSupported, err := listHomeFilesTracked(client, node, remoteRoot)
 	if err != nil {
 		return report, err
 	}
+	// During migration there is no historical baseline. Ask about missing
+	// cloud files once instead of assuming they should be resurrected. New
+	// devices can explicitly restore; only an explicit click can delete.
+	if state != nil && !state.Initialized {
+		for _, f := range remote {
+			if f.IsDir || f.Deleted || f.SHA256 == "" || !strings.HasPrefix(f.Path, remoteRoot+"/") {
+				continue
+			}
+			rel, err := cleanHomePart(strings.TrimPrefix(f.Path, remoteRoot+"/"))
+			if err != nil {
+				continue
+			}
+			local := filepath.Join(localRoot, filepath.FromSlash(rel))
+			if validateHomeLocalPath(localRoot, local) != nil {
+				continue
+			}
+			if _, err := os.Stat(local); os.IsNotExist(err) && state.Files[f.Path] == "" {
+				state.Files[f.Path] = f.SHA256
+			}
+		}
+		state.Initialized = true
+	}
+	blocked := processHomeDeletions(space, node, localRoot, remoteRoot, client, remote, state, deletionSupported, confirm, &report)
 	remoteByPath := map[string]homeRemoteFile{}
 	remoteDirs := map[string]bool{}
 	for _, f := range remote {
@@ -387,6 +419,9 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 	canUpload := space.AccessMode != "read" && space.SyncMode != "download"
 	if space.SyncMode != "upload" {
 		for _, f := range remote {
+			if blocked[f.Path] || f.Deleted {
+				continue
+			}
 			if !strings.HasPrefix(f.Path, remoteRoot+"/") {
 				report.record(space.Name, f.Path, "download", "failed", 0, errors.New("node returned a file outside the assigned folder"))
 				continue
@@ -439,6 +474,9 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 				}
 			}
 			if equal {
+				if state != nil && f.SHA256 != "" {
+					state.Files[f.Path] = f.SHA256
+				}
 				report.record(space.Name, rel, "compare", "unchanged", 0, nil)
 				handled[f.Path] = true
 				continue
@@ -465,6 +503,11 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 			}
 			report.record(space.Name, rel, "download", "downloaded", copied, nil)
 			if abs == dst {
+				if state != nil {
+					if digest, err := localHomeDigest(dst); err == nil {
+						state.Files[f.Path] = digest
+					}
+				}
 				handled[f.Path] = true
 			}
 		}
@@ -511,6 +554,9 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 			return nil
 		}
 		remotePath := remoteRoot + "/" + filepath.ToSlash(rel)
+		if blocked[remotePath] {
+			return nil
+		}
 		if handled[remotePath] {
 			return nil
 		}
@@ -521,6 +567,9 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 				return nil
 			}
 			if equal {
+				if state != nil && rf.SHA256 != "" {
+					state.Files[remotePath] = rf.SHA256
+				}
 				report.record(space.Name, rel, "compare", "unchanged", 0, nil)
 				return nil
 			}
@@ -554,6 +603,9 @@ func syncHomeMappingFiles(space homeSpace, node homeNode, m homeMapping, localRo
 		if err != nil {
 			report.record(space.Name, rel, "upload", "failed", 0, err)
 		} else {
+			if state != nil {
+				state.Files[remotePath] = hex.EncodeToString(digest.Sum(nil))
+			}
 			report.record(space.Name, rel, "upload", "uploaded", counter.n, nil)
 		}
 		return nil

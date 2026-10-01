@@ -111,6 +111,7 @@ type certificateResponse struct {
 }
 
 type fileEntry struct {
+	Deleted bool   `json:"deleted,omitempty"`
 	Path    string `json:"path"`
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"mtime"`
@@ -690,6 +691,11 @@ func storeAuthorizedFile(rel string, src io.Reader, mtime int64, g grant) (int, 
 }
 
 func storeAuthorizedFileVerified(rel string, src io.Reader, mtime int64, g grant, expectedSHA256 string) (int, error) {
+	if deletion, err := readHomeDeletion(rel); err != nil {
+		return http.StatusInternalServerError, err
+	} else if deletion != nil {
+		return http.StatusConflict, errors.New("file was intentionally deleted; stale upload refused")
+	}
 	maxBytes := g.MaxFileBytes
 	if maxBytes <= 0 || maxBytes > 5*1024*1024*1024 {
 		maxBytes = 5 * 1024 * 1024 * 1024
@@ -812,6 +818,11 @@ func listStoredEntries(prefix string, includeDirectories bool) ([]fileEntry, err
 		if err != nil {
 			return nil
 		}
+		if deletion, err := readHomeDeletion(filepath.ToSlash(rel)); err != nil {
+			return err
+		} else if deletion != nil {
+			return nil
+		}
 		m := loadMeta(path + ".meta")
 		if !m.Valid {
 			return errors.New("stored file metadata authentication failed")
@@ -847,11 +858,15 @@ func handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries, err := listStoredEntries(prefix, r.URL.Query().Get("include_directories") == "1")
+	if err == nil && r.URL.Query().Get("include_deletions") == "1" {
+		entries, err = appendHomeDeletions(prefix, entries)
+	}
 	if err != nil {
 		http.Error(w, "list failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Warden-Deletion-Tracking", "1")
 	_ = json.NewEncoder(w).Encode(entries)
 }
 
@@ -874,6 +889,13 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		if deletion, err := readHomeDeletion(rel); err != nil {
+			http.Error(w, "invalid deletion record", 500)
+			return
+		} else if deletion != nil {
+			http.NotFound(w, r)
+			return
+		}
 		f, err := os.Open(data)
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
@@ -929,11 +951,14 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "shared storage is busy", http.StatusServiceUnavailable)
 			return
 		}
-		_ = os.Remove(data)
-		_ = os.Remove(meta)
+		status, deleteErr := confirmHomeDeletion(rel, strings.Trim(r.Header.Get("If-Match"), "\""))
 		release()
 		storageMu.Unlock()
-		w.WriteHeader(204)
+		if deleteErr != nil {
+			http.Error(w, http.StatusText(status), status)
+			return
+		}
+		w.WriteHeader(status)
 	}
 }
 
@@ -1196,7 +1221,7 @@ func replicateFrom(p peer) {
 	if err != nil {
 		return
 	}
-	listURL := strings.TrimRight(base, "/") + "/v1/list?include_directories=1&path=" + url.QueryEscape(p.Prefix)
+	listURL := strings.TrimRight(base, "/") + "/v1/list?include_directories=1&include_deletions=1&path=" + url.QueryEscape(p.Prefix)
 	req, _ := http.NewRequest(http.MethodGet, listURL, nil)
 	req.Header.Set("Authorization", "Bearer "+p.Grant)
 	resp, err := client.Do(req)
@@ -1217,6 +1242,24 @@ func replicateFrom(p peer) {
 	}
 	allOK := true
 	for _, entry := range entries {
+		if entry.Path != p.Prefix && !strings.HasPrefix(entry.Path, strings.TrimRight(p.Prefix, "/")+"/") {
+			allOK = false
+			continue
+		}
+		if entry.Deleted {
+			storageMu.Lock()
+			release, err := acquireSpaceLock(p.Prefix)
+			if err != nil {
+				allOK = false
+			} else {
+				if err := writeHomeDeletion(entry.Path, homeDeletion{SHA256: entry.SHA256, Size: entry.Size, DeletedAt: entry.ModTime}); err != nil {
+					allOK = false
+				}
+				release()
+			}
+			storageMu.Unlock()
+			continue
+		}
 		if entry.IsDir {
 			if entry.Path != p.Prefix && !strings.HasPrefix(entry.Path, strings.TrimRight(p.Prefix, "/")+"/") {
 				allOK = false

@@ -331,8 +331,17 @@ func TestFileAPIEncryptedPutListGetDelete(t *testing.T) {
 	if deleteResult.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status %d", deleteResult.Code)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.Root, "homes", "identity-a", "Documents", "test.txt.whome")); !os.IsNotExist(err) {
-		t.Fatal("deleted encrypted file still exists")
+	if _, err := os.Stat(filepath.Join(cfg.Root, "homes", "identity-a", "Documents", "test.txt.whome")); err != nil {
+		t.Fatal("encrypted recovery copy was lost")
+	}
+	getAfterDelete := httptest.NewRecorder()
+	handleFile(getAfterDelete, get)
+	if getAfterDelete.Code != http.StatusNotFound {
+		t.Fatal("deleted file is still served")
+	}
+	deleted, err := readHomeDeletion("homes/identity-a/Documents/test.txt")
+	if err != nil || deleted == nil {
+		t.Fatal("deletion record missing", err)
 	}
 }
 

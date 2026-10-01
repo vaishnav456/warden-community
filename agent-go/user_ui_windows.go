@@ -66,6 +66,7 @@ type wardenUI struct {
 	window, font, headingFont uintptr
 	instruction, footer       string
 	approval, transient       bool
+	deletion                  bool
 	result                    int
 	width, height             int32
 	scale                     float64
@@ -113,6 +114,9 @@ func wardenWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uint
 			if u.approval && id == 6 && lParam != 0 {
 				u.result = 0
 			}
+			if u.deletion && id == 7 && lParam != 0 {
+				u.result = 1
+			}
 			if !u.approval {
 				u.result = 0
 			}
@@ -143,6 +147,7 @@ func runWardenWindow(title, instruction, content, footer, severity string, appro
 	defer runtime.UnlockOSThread()
 	procSetProcessDPIAware.Call()
 	u := &wardenUI{instruction: instruction, footer: footer, approval: approval, transient: transient, result: 2, scale: 1}
+	u.deletion = title == "Warden Home deletions" && approval
 	if p := user32DLL.NewProc("GetDpiForSystem"); p.Find() == nil {
 		dpi, _, _ := p.Call()
 		if dpi >= 96 {
@@ -211,6 +216,9 @@ func runWardenWindow(title, instruction, content, footer, severity string, appro
 	if approval {
 		label, buttonID = "Deny access", 7
 	}
+	if u.deletion {
+		label = "Restore files"
+	}
 	buttonWidth := u.px(150)
 	if approval {
 		buttonWidth = (u.width - u.px(72)) / 2
@@ -218,7 +226,11 @@ func runWardenWindow(title, instruction, content, footer, severity string, appro
 	deny := child("BUTTON", label, 0x00010001, u.width-u.px(24)-buttonWidth, u.height-u.px(55), buttonWidth, u.px(34), buttonID)
 	allow := uintptr(1)
 	if approval {
-		allow = child("BUTTON", "Allow this session", 0x00010000, u.px(24), u.height-u.px(55), buttonWidth, u.px(34), 6)
+		allowLabel := "Allow this session"
+		if u.deletion {
+			allowLabel = "Delete from Home"
+		}
+		allow = child("BUTTON", allowLabel, 0x00010000, u.px(24), u.height-u.px(55), buttonWidth, u.px(34), 6)
 	}
 	if edit == 0 || deny == 0 || allow == 0 {
 		uiDestroyWindow.Call(u.window)

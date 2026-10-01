@@ -40,6 +40,23 @@ func TestWardenApprovalFailsClosed(t *testing.T) {
 	}
 }
 
+func TestHomeDeletionPromptCloseDefersAndRestoreIsExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		message    uint32
+		id, source uintptr
+		want       int
+	}{
+		{0x10, 0, 0, 2}, {0x113, 0, 0, 2}, {0x111, 7, 0, 2}, {0x111, 7, 1, 1}, {0x111, 6, 1, 0},
+	} {
+		currentWardenUI = &wardenUI{approval: true, deletion: true, result: 2}
+		wardenWindowProc(0, tc.message, tc.id, tc.source)
+		if currentWardenUI.result != tc.want {
+			t.Fatal(currentWardenUI.result, tc.want)
+		}
+	}
+	currentWardenUI = nil
+}
+
 func TestWardenNativeUIABIAndText(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) == 8 {
 		if unsafe.Sizeof(uiClass{}) != 80 || unsafe.Sizeof(uiMessage{}) != 48 || unsafe.Sizeof(uiPaint{}) != 72 {
