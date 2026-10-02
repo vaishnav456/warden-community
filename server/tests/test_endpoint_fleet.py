@@ -33,6 +33,20 @@ class FleetTests(unittest.TestCase):
         self.assertTrue(row["_low_disk"])
         self.assertIn("Low disk (last report)", row["_signals"])
 
+    def test_secondary_drive_low_space_and_capacity_rendered(self):
+        details = {"local_drives": {"volumes": [
+            dict(mount_point="C:", total_gb=500, free_gb=100),
+            dict(mount_point="H:", total_gb=50, free_gb=2)]}}
+        row = fleet.prepare([dict(self.ep, disk_free_gb=100, capability_details=details)], now=NOW)[0]
+        self.assertTrue(row["_low_disk"])
+        env = Environment(loader=FileSystemLoader(pathlib.Path(__file__).parents[1] / "templates"), autoescape=True)
+        env.filters["timeago"] = lambda value: "just now"
+        html = env.get_template("partials/endpoint_row.html").render(
+            endpoint=row, current_user={"role":"company_admin"}, branch_names={})
+        self.assertIn("H:", html)
+        self.assertIn("48 GB used / 50 GB total", html)
+        self.assertIn("100 GB free", html)
+
     def test_newest_compliance_scan_wins_even_if_input_reversed(self):
         checks = [dict(endpoint_id=ID, scanned_at=NOW.isoformat(), results=[dict(check="bitlocker_enabled", status="fail")]),
                   dict(endpoint_id=ID, scanned_at=(NOW-timedelta(hours=1)).isoformat(), results=[dict(check="bitlocker_enabled", status="pass")])]

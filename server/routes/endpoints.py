@@ -282,8 +282,10 @@ def detail(endpoint_id):
             if job.get("type") == "CAPTURE_PACKETS"
         ][:10]
 
+    from services.endpoint_drives import local_drives
     return render_template(
         "endpoints/detail.html",
+        local_drives=local_drives(endpoint),
         endpoint=endpoint,
         branch=branch,
         tab=tab,

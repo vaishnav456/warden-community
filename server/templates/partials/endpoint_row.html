@@ -9,6 +9,7 @@
   </td>
   <td data-label="Branch">{{ branch_names.get(endpoint.branch_id|string, 'Unassigned') }}</td>
   <td data-label="Resources">
+    {% set drives = endpoint._local_drives %}{% include "partials/endpoint_drives.html" %}
     <div class="fleet-health">
       <span><small>CPU</small><b class="{{ 'critical' if endpoint.cpu_pct is not none and endpoint.cpu_pct > 80 }}">{{ (endpoint.cpu_pct|round|int ~ '%') if endpoint.cpu_pct is not none else 'Unknown' }}</b>{% if endpoint.cpu_pct is not none %}<meter min="0" max="100" high="80" optimum="20" value="{{ endpoint.cpu_pct }}" aria-label="Last reported CPU usage"></meter>{% endif %}</span>
       <span><small>RAM</small><b class="{{ 'critical' if endpoint.ram_used_pct is not none and endpoint.ram_used_pct > 85 }}">{{ (endpoint.ram_used_pct|round|int ~ '%') if endpoint.ram_used_pct is not none else 'Unknown' }}</b>{% if endpoint.ram_used_pct is not none %}<meter min="0" max="100" high="85" optimum="40" value="{{ endpoint.ram_used_pct }}" aria-label="Last reported RAM usage"></meter>{% endif %}</span>

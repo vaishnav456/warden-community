@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ endpoint.display_name or endpoint.hostname }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/endpoint-fleet.css?v={{ asset_v }}">
+{% endblock %}
 
 {% block breadcrumb %}
 <nav class="flex items-center gap-2 text-sm">
@@ -10,6 +13,7 @@
 {% endblock %}
 
 {% block content %}
+{% set drives = local_drives %}{% include "partials/endpoint_drives.html" %}
 <div x-data="endpointDetail" data-endpoint-id="{{ endpoint.id }}" data-tab="{{ tab }}"
      data-nickname="{{ endpoint.display_name or '' }}" data-hostname="{{ endpoint.hostname }}"
      data-platform="{{ endpoint_platform }}" data-capabilities='{{ endpoint_capabilities | list | tojson }}'

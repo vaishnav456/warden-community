@@ -364,6 +364,7 @@ func postHeartbeat(jobCapacity int) ([]json.RawMessage, error) {
 		"capability_details": map[string]interface{}{
 			"remote_control": "Native Windows desktop capture and input",
 			"device_health":  deviceHealthSnapshot(),
+			"local_drives":   localDriveSnapshot(),
 		},
 	}
 	policyInventoryMu.Lock()

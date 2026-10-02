@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from math import ceil
 import db
+from services.endpoint_drives import local_drives
 from services.dashboard_view import prepare_endpoints, timestamp
 
 HEALTH = {'agent-update', 'encryption', 'patches', 'low-disk', 'failed-jobs', 'drift'}
@@ -53,12 +54,15 @@ def prepare(endpoints, checks=(), patches=(), jobs=(), now=None):
     for job in jobs:
         by_endpoint.setdefault(str(job.get('endpoint_id')), []).append(job)
     for ep in result:
+        ep['_local_drives'] = local_drives(ep)
         related = by_endpoint.get(str(ep['id']), [])
         related.sort(key=lambda j: timestamp(j.get('created_at')) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         ep['_failed_job'] = next((j for j in related if j.get('status') == 'failed'), None)
         ep['_update_job'] = next((j for j in related if j.get('type') in {'UPDATE_AGENT', 'REINSTALL_AGENT'}), None)
         ep['_drift'] = sum(isinstance(v, dict) and v.get('drift') is True for v in (ep.get('policy_state') or {}).values())
-        ep['_low_disk'] = isinstance(ep.get('disk_free_gb'), (int, float)) and ep['disk_free_gb'] < 10
+        ep['_low_disk'] = (any(drive['free_gb'] < 10 for drive in ep['_local_drives'])
+                           if ep['_local_drives'] else
+                           isinstance(ep.get('disk_free_gb'), (int, float)) and ep['disk_free_gb'] < 10)
         ep['_signals'] = []
         for condition, label in [(not ep['_online'], 'Offline'), (ep['_low_disk'], 'Low disk (last report)'),
                                  (ep['_encryption'] == 'attention', 'Encryption check failed'),

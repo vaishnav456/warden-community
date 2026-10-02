@@ -29,3 +29,13 @@ Empty selections and changed/foreign audiences fail without dispatch.
 Supported offline devices queue normally; unsupported devices are skipped.
 Existing authorization, capability, entitlement, signing and audit gates remain.
 No endpoint action is sent by merely opening or refreshing the page.
+# Local drive capacity
+
+Agent 2.6.55 reports each accessible fixed Windows volume (C:, D:, H:, etc.)
+on heartbeat. Cards and endpoint details show used, total and free GiB (labeled
+GB consistently with existing telemetry). The low-disk filter checks every
+reported drive. Drive data remains inside encrypted capability details; no
+schema migration. Network shares/removable media and unreadable volumes are
+not probed for usage. Older agents show per-drive capacity not reported.
+Reports are snapshots, not live disk activity. Source changes alone do not
+update installed agents.

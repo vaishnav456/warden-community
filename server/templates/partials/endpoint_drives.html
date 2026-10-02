@@ -1,0 +1,14 @@
+<div class="fleet-local-drives">
+  <b>Local drives</b>
+  <small>Last reported · not live disk activity</small>
+  {% for drive in drives %}
+  <div class="fleet-drive">
+    <strong>{{ drive.mount_point }}</strong>
+    <span>{{ drive.used_gb|round(1) }} GB used / {{ drive.total_gb|round(1) }} GB total</span>
+    <meter min="0" max="100" high="90" optimum="30" value="{{ drive.used_pct }}" aria-label="{{ drive.mount_point }} used space"></meter>
+    <small>{{ drive.free_gb|round(1) }} GB free</small>
+  </div>
+  {% else %}
+  <p>Per-drive capacity not reported. Requires an updated agent.</p>
+  {% endfor %}
+</div>
