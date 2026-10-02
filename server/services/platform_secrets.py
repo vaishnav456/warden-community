@@ -39,6 +39,22 @@ def decrypt_mfa_secret(admin_id, value):
     return AESGCM(_key()).decrypt(raw[:12], raw[12:], aad).decode()
 
 
+def encrypt_platform_field(record_id, purpose: str, value: str) -> str:
+    """Encrypt application profile data with record- and purpose-bound AAD."""
+    nonce = os.urandom(12)
+    aad = f"warden:platform:{purpose}:{record_id}".encode()
+    encrypted = AESGCM(_key()).encrypt(nonce, str(value).encode(), aad)
+    return _ENC_PREFIX + base64.urlsafe_b64encode(nonce + encrypted).decode()
+
+
+def decrypt_platform_field(record_id, purpose: str, value: str) -> str:
+    if not value or not str(value).startswith(_ENC_PREFIX):
+        raise ValueError("platform field is not encrypted")
+    raw = base64.urlsafe_b64decode(str(value)[len(_ENC_PREFIX):])
+    aad = f"warden:platform:{purpose}:{record_id}".encode()
+    return AESGCM(_key()).decrypt(raw[:12], raw[12:], aad).decode()
+
+
 def hash_backup_code(code: str) -> str:
     digest = hmac.new(_key(), str(code).strip().encode(), hashlib.sha256).hexdigest()
     return _HASH_PREFIX + digest

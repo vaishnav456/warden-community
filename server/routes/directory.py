@@ -10,6 +10,7 @@ import secrets
 import struct
 import string
 import urllib.error
+import functools
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, abort, g, jsonify, make_response, render_template, request, url_for
@@ -17,6 +18,7 @@ from flask import Blueprint, Response, abort, g, jsonify, make_response, render_
 import db
 from middleware.auth import company_required, login_required, role_required
 from middleware.security import check_rate_limit
+from services.tenant_storage import admission
 
 bp = Blueprint("directory", __name__)
 ACCOUNT_TYPES = {"", "local", "domain", "entra", "microsoft", "unknown"}
@@ -59,6 +61,24 @@ def _normalize_profile_photo(value):
         return None, None, "Profile picture dimensions must be at most 512 × 512 pixels."
     canonical = PROFILE_PHOTO_PREFIX + base64.b64encode(raw).decode("ascii")
     return canonical, "image/png", None
+
+
+def _photo_upload_admission(view):
+    """Reserve row/job photo growth under the existing tenant upload lease."""
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        body = request.get_json(silent=True) or {}
+        photo = body.get("profile_photo")
+        if not photo:
+            return view(*args, **kwargs)
+        # Include the identity row, encrypted queued copies and endpoint photo
+        # mirrors. Existing database accounting charges their actual row bytes.
+        targets = body.get("endpoint_ids")
+        count = min(100, len(targets)) if isinstance(targets, list) else 1
+        budget = len(str(photo).encode()) * (1 + 3 * count) + 4096
+        with admission(g.company["id"], budget):
+            return view(*args, **kwargs)
+    return wrapped
 
 
 def _profile_photo_response(data_url, mime):
@@ -418,6 +438,7 @@ def _identity_targets(endpoint_ids):
 @login_required
 @company_required
 @role_required("company_admin")
+@_photo_upload_admission
 def create_warden_identity():
     """Create a Warden identity and provision device-only shadow accounts.
 
@@ -487,6 +508,49 @@ def create_warden_identity():
                         "message": f"Identity assigned to {queued} endpoint(s). The user signs in with {body['login_email'] or body['username']}."})
     response.headers["Cache-Control"] = "no-store"
     return response, 201
+
+
+@bp.route("/directory/identities/<identity_id>/profile", methods=["POST"])
+@login_required
+@company_required
+@role_required("company_admin")
+def update_warden_identity_profile(identity_id):
+    identity = db.get_warden_identity(identity_id, g.company["id"])
+    if not identity:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("display_name") or "").strip()
+    email = str(body.get("login_email") or "").strip().lower()
+    if not name or len(name) > 256:
+        return jsonify({"error": "Enter a display name of 1–256 characters"}), 400
+    if email and (len(email) > 254 or not LOGIN_EMAIL_RE.fullmatch(email) or "." not in email.rsplit("@", 1)[1]):
+        return jsonify({"error": "Enter a valid login email"}), 400
+    from services.entitlements import check_mutation
+    decision = check_mutation(g.company["id"])
+    if not decision.allowed:
+        return jsonify({"error": decision.code, "message": decision.message}), 403
+    fields = {"display_name": name, "login_email": email or None}
+    if "profile_photo" in body:
+        photo, mime, error = _normalize_profile_photo(body["profile_photo"])
+        if error:
+            return jsonify({"error": error}), 400
+        fields.update(profile_photo=photo or None, profile_photo_mime=mime or None)
+    try:
+        if "profile_photo" in fields:
+            def growth():
+                previous = db.get_warden_identity(identity_id, g.company["id"]) or {}
+                return max(0, len((fields.get("profile_photo") or "").encode()) -
+                           len((previous.get("profile_photo") or "").encode()))
+            with admission(g.company["id"], growth):
+                db.update_warden_identity(identity_id, g.company["id"], fields)
+        else:
+            db.update_warden_identity(identity_id, g.company["id"], fields)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            return jsonify({"error": "That login email is already used by another identity"}), 409
+        raise
+    db.audit(g.company["id"], g.admin["id"], "warden_identity_profile_updated", {"identity_id": identity_id})
+    return jsonify({"ok": True, "message": "Directory profile saved. Windows username and password are unchanged."})
 
 
 @bp.route("/directory/identities/<identity_id>/password", methods=["POST"])
@@ -716,6 +780,7 @@ def set_warden_identity_security(identity_id):
 @login_required
 @company_required
 @role_required("company_admin", "branch_admin")
+@_photo_upload_admission
 def create_local_user():
     """Provision independently secured local accounts on selected endpoints.
 

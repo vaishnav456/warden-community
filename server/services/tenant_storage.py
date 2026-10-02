@@ -48,4 +48,5 @@ def usage(company_id):
                 if file.is_file():
                     paths.add(file.resolve())
     total=sum(path.stat().st_size for path in paths if path.is_file())
-    return dict(used_bytes=total,file_bytes=total,database_bytes=None)
+    database_bytes=int(db._rpc('tenant_database_bytes', {'p_company_id':str(company_id)}))
+    return dict(used_bytes=total+database_bytes,file_bytes=total,database_bytes=database_bytes)

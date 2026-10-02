@@ -24,7 +24,7 @@
     <tbody>
       {% for a in admins %}
       <tr>
-        <td class="font-medium text-ink-100">{{ a.full_name }}</td>
+        <td class="font-medium text-ink-100"><div class="flex items-center gap-2">{% if a.profile_photo_mime %}<img src="/users/{{ a.id }}/photo" alt="" class="directory-photo-preview">{% endif %}{{ a.full_name }}</div></td>
         <td class="text-ink-500 font-mono-data">{{ a.email }}</td>
         <td><span class="badge badge-info capitalize">{{ a.role.replace('_', ' ') }}</span></td>
         <td class="text-ink-500">
@@ -44,9 +44,11 @@
           {% else %}
           <button hx-post="/users/{{ a.id }}/enable" class="text-xs text-status-online hover:underline">Enable</button>
           {% endif %}
-          <button type="button" @click="resetPassword('{{ a.id }}', {{ a.full_name | tojson }})" class="text-xs text-ink-500 hover:underline">Reset Pw</button>
-          <button type="button" data-id="{{ a.id }}" data-name="{{ a.full_name }}" data-role="{{ a.role }}" data-branch="{{ a.branch_id or '' }}" @click="openEdit($el.dataset)" class="text-xs text-ink-500 hover:underline">Edit</button>
+          <button type="button" data-id="{{ a.id }}" data-name="{{ a.full_name }}" @click="resetPassword($el.dataset.id, $el.dataset.name)" class="text-xs text-ink-500 hover:underline">Reset password</button>
+          {% else %}
+          <a href="/settings#change-password" class="text-xs text-ink-500 hover:underline">Change password</a>
           {% endif %}
+          <button type="button" data-id="{{ a.id }}" data-name="{{ a.full_name }}" data-email="{{ a.email }}" data-self="{{ '1' if a.id | string == current_user.id | string else '0' }}" data-photo="{{ '1' if a.profile_photo_mime else '0' }}" data-role="{{ a.role }}" data-branch="{{ a.branch_id or '' }}" @click="openEdit($el.dataset)" class="text-xs text-ink-500 hover:underline">Edit profile</button>
         </td>
       </tr>
       {% endfor %}
@@ -101,7 +103,10 @@
   <div @click.outside="showEdit=false" class="bg-base-850 rounded-2xl shadow-panel border border-base-600 w-full max-w-md p-6 space-y-4">
     <h3 class="text-lg font-semibold text-ink-100">Edit administrator</h3>
     <div><label class="form-label">Full name</label><input x-model="editName" class="form-input"></div>
-    <div><label class="form-label">Role</label><select x-model="editRole" class="form-input form-select"><option value="company_admin">Company Admin</option><option value="branch_admin">Branch Admin</option><option value="technician">Technician</option></select></div>
+    <div><label class="form-label">Email</label><input x-model="editEmail" type="email" class="form-input" maxlength="254"></div>
+    <div x-show="editSelf"><label class="form-label">Current password (required only to change your email)</label><input x-model="editCurrentPassword" type="password" autocomplete="current-password" class="form-input"></div>
+    <div><template x-if="editPhotoPreview"><img :src="editPhotoPreview" alt="Profile preview" class="directory-photo-preview"></template><label class="form-label">Profile photo</label><input type="file" accept="image/*" @change="selectAdminPhoto($event)" class="form-input"><button type="button" @click="removeAdminPhoto()" class="btn btn-secondary btn-sm mt-2">Remove photo</button></div>
+    <div><label class="form-label">Role</label><select x-model="editRole" :disabled="editSelf" class="form-input form-select"><option value="company_admin">Company Admin</option><option value="branch_admin">Branch Admin</option><option value="technician">Technician</option></select></div>
     <div x-show="editRole === 'branch_admin'"><label class="form-label">Branch</label><select x-model="editBranch" class="form-input form-select"><option value="">Select branch</option>{% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select></div>
     <p x-show="editError" x-text="editError" class="text-sm text-status-critical"></p>
     <div class="flex justify-end gap-2"><button @click="showEdit=false" class="btn btn-secondary">Cancel</button><button @click="saveEdit()" class="btn btn-primary">Save</button></div>

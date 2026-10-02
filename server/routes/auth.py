@@ -338,8 +338,8 @@ def change_password():
 
     if new_pw != confirm:
         return jsonify({"error": "Passwords do not match"}), 400
-    if len(new_pw) < 12:
-        return jsonify({"error": "Password must be at least 12 characters"}), 400
+    if len(new_pw) < 12 or len(new_pw.encode()) > 72:
+        return jsonify({"error": "Password must be at least 12 characters and at most 72 UTF-8 bytes"}), 400
     if not _check_password(current, g.admin["password_hash"]):
         return jsonify({"error": "Current password incorrect"}), 401
 

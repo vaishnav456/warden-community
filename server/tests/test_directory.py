@@ -3,6 +3,7 @@ import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
+from contextlib import nullcontext
 
 from flask import Flask, g
 
@@ -21,6 +22,11 @@ from routes.directory import (
 
 
 class DirectoryTests(unittest.TestCase):
+    def setUp(self):
+        lease = mock.patch('routes.directory.admission', return_value=nullcontext())
+        lease.start()
+        self.addCleanup(lease.stop)
+
     def test_warden_agent_auth_returns_bounded_offline_grant_without_hash(self):
         app = Flask(__name__)
         identity = {

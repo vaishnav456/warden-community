@@ -167,7 +167,7 @@
     <div class="px-2 py-3 border-t border-base-700">
       <div class="flex items-center gap-2.5 px-2 py-1.5">
         <div class="w-7 h-7 rounded-full bg-accent-500 flex items-center justify-center text-base-950 text-xs font-bold flex-shrink-0">
-          {{ current_user.full_name[:1].upper() if current_user and current_user.full_name else (current_user.email[:1].upper() if current_user else '?') }}
+          {% if current_user and current_user.profile_photo_mime %}<img src="/users/{{ current_user.id }}/photo" alt="Your profile" class="w-full h-full rounded-full object-cover">{% else %}{{ current_user.full_name[:1].upper() if current_user and current_user.full_name else (current_user.email[:1].upper() if current_user else '?') }}{% endif %}
         </div>
         <div class="min-w-0 flex-1">
           <div class="text-ink-100 text-xs font-medium truncate">{{ current_user.full_name or current_user.email if current_user else '' }}</div>

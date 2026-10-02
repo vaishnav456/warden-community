@@ -819,6 +819,11 @@ function usersListPage() {
     showEdit: false,
     editId: '',
     editName: '',
+    editEmail: '',
+    editSelf: false,
+    editCurrentPassword: '',
+    editPhoto: null,
+    editPhotoPreview: '',
     editRole: 'technician',
     editBranch: '',
     editError: '',
@@ -864,16 +869,30 @@ function usersListPage() {
     openEdit(data) {
       this.editId = data.id;
       this.editName = data.name;
+      this.editEmail = data.email;
+      this.editSelf = data.self === '1';
+      this.editCurrentPassword = '';
+      this.editPhoto = null;
+      this.editPhotoPreview = data.photo === '1' ? `/users/${data.id}/photo` : '';
       this.editRole = data.role;
       this.editBranch = data.branch || '';
       this.editError = '';
       this.showEdit = true;
     },
+    async selectAdminPhoto(event) {
+      try {
+        this.editPhoto = await normalizeProfilePhoto(event.target.files[0]);
+        this.editPhotoPreview = this.editPhoto;
+      } catch (error) { this.editError = error.message; event.target.value = ''; }
+    },
+    removeAdminPhoto() { this.editPhoto = ''; this.editPhotoPreview = ''; },
     async saveEdit() {
       try {
         await wardenFetchJSON(`/users/${this.editId}/update`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
-          body: JSON.stringify({ full_name: this.editName, role: this.editRole, branch_id: this.editBranch || null }),
+          body: JSON.stringify({ full_name: this.editName, email: this.editEmail,
+            current_password: this.editCurrentPassword, role: this.editRole, branch_id: this.editBranch || null,
+            ...(this.editPhoto !== null ? { profile_photo: this.editPhoto } : {}) }),
         });
         window.location.reload();
       } catch (error) { this.editError = error.message; }
@@ -1304,6 +1323,18 @@ function directoryPage() {
       this.wardenSetupUrl = '';
       this.wardenModalOpen = true;
     },
+    openWardenProfile(data) {
+      this.wardenMode = 'edit';
+      this.wardenIdentityId = data.id;
+      this.wardenLoginEmail = data.email || '';
+      this.wardenDisplayName = data.name || '';
+      this.wardenProfilePhoto = null;
+      this.wardenProfilePreview = data.photo === '1' ? `/directory/identities/${data.id}/photo` : '';
+      this.wardenError = '';
+      this.wardenSetupUrl = '';
+      this.wardenModalOpen = true;
+    },
+    removeWardenPhoto() { this.wardenProfilePhoto = ''; this.wardenProfilePreview = ''; },
     openWardenAssign(id, username, endpoints) {
       this.wardenMode = 'assign';
       this.wardenIdentityId = id;
@@ -1327,8 +1358,10 @@ function directoryPage() {
         this.wardenProfilePreview = this.wardenProfilePhoto;
         this.wardenError = '';
       } catch (error) {
-        this.wardenProfilePhoto = '';
-        this.wardenProfilePreview = '';
+        if (this.wardenMode !== 'edit') {
+          this.wardenProfilePhoto = '';
+          this.wardenProfilePreview = '';
+        }
         this.wardenError = error.message;
         event.target.value = '';
       }
@@ -1341,14 +1374,17 @@ function directoryPage() {
       try {
         const creating = this.wardenMode === 'create';
         const assigning = this.wardenMode === 'assign';
-        const url = creating ? '/directory/identities' : (assigning ? `/directory/identities/${this.wardenIdentityId}/assignments` : `/directory/identities/${this.wardenIdentityId}/password`);
+        const editing = this.wardenMode === 'edit';
+        const url = creating ? '/directory/identities' : (editing ? `/directory/identities/${this.wardenIdentityId}/profile` : (assigning ? `/directory/identities/${this.wardenIdentityId}/assignments` : `/directory/identities/${this.wardenIdentityId}/password`));
         const body = creating ? {
           login_email: this.wardenLoginEmail,
           display_name: this.wardenDisplayName,
           endpoint_ids: this.wardenEndpointIds,
           is_admin: this.wardenIsAdmin,
           profile_photo: this.wardenProfilePhoto,
-        } : (assigning ? { endpoint_ids: this.wardenEndpointIds } : {});
+        } : (editing ? { login_email: this.wardenLoginEmail, display_name: this.wardenDisplayName,
+          ...(this.wardenProfilePhoto !== null ? { profile_photo: this.wardenProfilePhoto } : {}) }
+          : (assigning ? { endpoint_ids: this.wardenEndpointIds } : {}));
         const result = await wardenFetchJSON(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
@@ -2403,6 +2439,37 @@ function securitySettingsPage() {
         this.tlsResult = data.status === 'pending_secondary' ? 'First approval recorded; a second administrator must approve.' : 'Rotation request queued for approval.';
       } catch (error) { wardenToast(error.message, 'error'); }
       finally { this.posting = false; }
+    },
+  };
+}
+
+function adminProfileForm() {
+  return {
+    name: '', email: '', currentPassword: '', photo: null, preview: '', error: '', saving: false,
+    init() {
+      this.name = this.$el.dataset.name || '';
+      this.email = this.$el.dataset.email || '';
+      this.preview = this.$el.dataset.photo || '';
+    },
+    async selectPhoto(event) {
+      try { this.photo = await normalizeProfilePhoto(event.target.files[0]); this.preview = this.photo; }
+      catch (error) { this.error = error.message; event.target.value = ''; }
+    },
+    removePhoto() { this.photo = ''; this.preview = ''; },
+    async save() {
+      if (this.saving) return;
+      this.saving = true;
+      this.error = '';
+      try {
+        const result = await wardenFetchJSON('/users/profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+          body: JSON.stringify({ full_name: this.name, email: this.email, current_password: this.currentPassword,
+            ...(this.photo !== null ? { profile_photo: this.photo } : {}) }),
+        });
+        if (result.sign_in_required) window.location.assign('/login');
+        else window.location.reload();
+      } catch (error) { this.error = error.message; }
+      finally { this.saving = false; this.currentPassword = ''; }
     },
   };
 }
@@ -3550,6 +3617,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('escalationCard', escalationCard);
   Alpine.data('usersListPage', usersListPage);
   Alpine.data('directoryPage', directoryPage);
+  Alpine.data('adminProfileForm', adminProfileForm);
   Alpine.data('alertResolveWidget', alertResolveWidget);
   Alpine.data('patchManagementPage', patchManagementPage);
   Alpine.data('firewallPolicyPage', firewallPolicyPage);

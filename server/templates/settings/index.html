@@ -9,7 +9,7 @@
   <h1 class="text-xl font-bold text-ink-100">Settings</h1>
 
   {# Profile card #}
-  <div class="bg-base-850 rounded-xl border border-base-600 p-5">
+  <div class="bg-base-850 rounded-xl border border-base-600 p-5" x-data="adminProfileForm" data-name="{{ current_user.full_name }}" data-email="{{ current_user.email }}" data-photo="{{ '/users/' ~ current_user.id ~ '/photo' if current_user.profile_photo_mime else '' }}">
     <h2 class="text-sm font-semibold text-ink-100 mb-4">Profile</h2>
     <dl class="space-y-2 text-sm">
       <div class="flex gap-3"><dt class="text-ink-500 w-28">Name</dt><dd class="text-ink-100">{{ current_user.full_name }}</dd></div>
@@ -28,10 +28,18 @@
         {% endif %}</dd>
       </div>
     </dl>
+    <form @submit.prevent="save()" class="space-y-3 mt-4">
+      <div><label class="form-label">Name</label><input x-model="name" class="form-input" maxlength="160" required></div>
+      <div><label class="form-label">Email</label><input x-model="email" type="email" class="form-input" maxlength="254" required></div>
+      <div><label class="form-label">Current password (required only to change your email)</label><input x-model="currentPassword" type="password" autocomplete="current-password" class="form-input"></div>
+      <div><template x-if="preview"><img :src="preview" class="directory-photo-preview" alt="Profile preview"></template><label class="form-label">Profile photo</label><input type="file" accept="image/*" @change="selectPhoto($event)" class="form-input"><button type="button" @click="removePhoto()" class="btn btn-secondary btn-sm mt-2">Remove photo</button></div>
+      <p x-show="error" x-text="error" class="text-sm text-status-critical"></p>
+      <button type="submit" :disabled="saving" class="btn btn-primary">Save profile</button>
+    </form>
   </div>
 
   {# Change password #}
-  <div class="bg-base-850 rounded-xl border border-base-600 p-5" x-data="passwordChangeForm">
+  <div id="change-password" class="bg-base-850 rounded-xl border border-base-600 p-5" x-data="passwordChangeForm">
     <h2 class="text-sm font-semibold text-ink-100 mb-4">Change Password</h2>
     <div x-show="done" class="mb-3 text-sm text-status-online bg-status-online/10 border border-status-online/25 rounded px-3 py-2">Password changed. You have been signed out of all other sessions.</div>
     <div x-show="error" class="mb-3 text-sm text-status-critical bg-status-critical/10 border border-status-critical/25 rounded px-3 py-2" x-text="error"></div>
