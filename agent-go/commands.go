@@ -925,92 +925,10 @@ func runInstaller(dest, expectedSHA256 string, requireSignature bool, installArg
 
 func uninstallApp(p map[string]interface{}) (int, string, error) {
 	productName, _ := p["product_name"].(string)
-	if productName == "" {
+	if strings.TrimSpace(productName) == "" {
 		return 1, "", fmt.Errorf("missing product_name")
 	}
-	uninstallStr, err := findUninstallString(productName)
-	if err != nil {
-		return 1, "", err
-	}
-	fields, err := windowsPkg.DecomposeCommandLine(uninstallStr)
-	if err != nil {
-		return 1, "", fmt.Errorf("parse UninstallString: %w", err)
-	}
-	if len(fields) == 0 {
-		return 1, "", fmt.Errorf("empty UninstallString")
-	}
-	executable := os.ExpandEnv(fields[0])
-	isMSIExec := strings.EqualFold(executable, "msiexec") ||
-		strings.EqualFold(executable, "msiexec.exe")
-	if !isMSIExec {
-		executable, err = resolveAllowedPath(executable, []string{
-			`c:\windows\`,
-			`c:\program files\`,
-			`c:\program files (x86)\`,
-		})
-		if err != nil {
-			return 1, "", fmt.Errorf("uninstall executable outside allowed locations: %w", err)
-		}
-	}
-	args := fields[1:]
-	if isMSIExec {
-		hasQuiet := false
-		for _, a := range args {
-			if strings.EqualFold(a, "/quiet") {
-				hasQuiet = true
-				break
-			}
-		}
-		if !hasQuiet {
-			args = append(args, "/quiet", "/norestart")
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), jobTimeoutSec*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, executable, args...)
-	out, err := boundedCombinedOutput(cmd)
-	if ctx.Err() == context.DeadlineExceeded {
-		return 1, string(out), fmt.Errorf("uninstall timed out after %d seconds", jobTimeoutSec)
-	}
-	if err != nil {
-		return 1, string(out), fmt.Errorf("uninstall failed: %w", err)
-	}
-	return 0, string(out), nil
-}
-
-func findUninstallString(productName string) (string, error) {
-	regPaths := []struct {
-		hive registry.Key
-		path string
-	}{
-		{registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`},
-		{registry.LOCAL_MACHINE, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`},
-		{registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`},
-	}
-	for _, rp := range regPaths {
-		k, err := registry.OpenKey(rp.hive, rp.path, registry.ENUMERATE_SUB_KEYS)
-		if err != nil {
-			continue
-		}
-		subkeys, _ := k.ReadSubKeyNames(-1)
-		k.Close()
-		for _, sub := range subkeys {
-			sk, err := registry.OpenKey(rp.hive, rp.path+`\`+sub, registry.QUERY_VALUE)
-			if err != nil {
-				continue
-			}
-			name, _, _ := sk.GetStringValue("DisplayName")
-			if strings.EqualFold(name, productName) {
-				unstr, _, _ := sk.GetStringValue("UninstallString")
-				sk.Close()
-				if unstr != "" {
-					return unstr, nil
-				}
-			}
-			sk.Close()
-		}
-	}
-	return "", fmt.Errorf("product '%s' not found in registry", productName)
+	return runAppUninstall(productName)
 }
 
 // ── User management ───────────────────────────────────────────────────────────
