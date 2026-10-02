@@ -16,6 +16,7 @@ from flask import Blueprint, render_template, request, jsonify, redirect, url_fo
 
 import config
 import db
+from services.dashboard_view import selected_branch, prepare_endpoints, report_online, scoped_url
 from middleware.auth import login_required, company_required, role_required, require_branch_scope
 from services.agent_updates import AgentBuildUnavailable, update_payload
 
@@ -92,62 +93,30 @@ def _fail_remote_session(session_id, reason):
 @login_required
 @company_required
 def list_endpoints():
-    company_id = g.company["id"]
-    branch_id = request.args.get("branch_id")
-    if g.admin.get("role") == "branch_admin":
-        branch_id = str(g.admin.get("branch_id") or "")
-    endpoints = db.get_endpoints(company_id, branch_id=branch_id)
-    branches = db.get_branches(company_id)
+    from services.endpoint_fleet import load, listing
+    branch_id = selected_branch()
+    branches = db.get_branches(g.company["id"])
     if g.admin.get("role") == "branch_admin":
         branches = [b for b in branches if str(b.get("id")) == str(branch_id)]
-    branch_names = {str(b["id"]): b["name"] for b in branches}
-    fleet_summary = {
-        "total": len(endpoints),
-        "online": sum(1 for ep in endpoints if ep.get("status") == "online"),
-        "attention": sum(
-            1 for ep in endpoints
-            if ep.get("status") != "online"
-            or any(
-                isinstance(v, dict) and v.get("drift") is True
-                for v in (ep.get("policy_state") or {}).values()
-            )
-        ),
-    }
-    query = request.args.get("q", "").strip()
-    state = request.args.get("state", "").strip()
-    if query:
-        needle = query.casefold()
-        endpoints = [
-            ep for ep in endpoints
-            if needle in " ".join(
-                str(ep.get(key) or "")
-                for key in ("display_name", "hostname", "os_name", "agent_version", "last_seen_ip")
-            ).casefold()
-        ]
-    if state == "online":
-        endpoints = [ep for ep in endpoints if ep.get("status") == "online"]
-    elif state == "offline":
-        endpoints = [ep for ep in endpoints if ep.get("status") != "online"]
-    elif state == "attention":
-        endpoints = [
-            ep for ep in endpoints
-            if ep.get("status") != "online"
-            or any(
-                isinstance(v, dict) and v.get("drift") is True
-                for v in (ep.get("policy_state") or {}).values()
-            )
-        ]
-    return render_template(
-        "endpoints/list.html",
-        endpoints=endpoints,
-        branches=branches,
-        branch_names=branch_names,
-        fleet_summary=fleet_summary,
-        query=query,
-        selected_state=state,
-        selected_branch=branch_id,
-    )
-
+    context = listing(load(g.company, branch_id), request.args)
+    filters = dict(q=context["query"], state=context["selected_state"],
+                   health=context["selected_health"], platform=context["selected_platform"],
+                   sort=context["selected_sort"], page_size=context["page_size"])
+    def fleet_url(**changes):
+        return scoped_url("/endpoints", branch_id, **{**filters, **changes})
+    context.update(branches=branches, branch_names={str(b["id"]): b["name"] for b in branches},
+                   selected_branch=branch_id, fleet_url=fleet_url,
+                   scoped_url=lambda path, **values: scoped_url(path, branch_id, **values))
+    if request.headers.get("X-Fleet-Refresh") == "1":
+        response = jsonify(
+            rows=render_template("partials/endpoint_cards.html", **context),
+            pagination=render_template("partials/endpoint_pagination.html", **context),
+            summary=context["fleet_summary"], total=context["total_matches"],
+            shown=len(context["endpoints"]), page=context["page"], pages=context["page_count"])
+    else:
+        response = make_response(render_template("endpoints/list.html", **context))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 @bp.route("/endpoints/<endpoint_id>/users/<user_id>/photo")
 @login_required
@@ -375,6 +344,11 @@ def endpoint_row(endpoint_id):
     require_branch_scope(endpoint.get("branch_id"))
     branch = db.get_branch(endpoint["branch_id"]) if endpoint.get("branch_id") else None
     branch_names = {str(endpoint.get("branch_id")): branch["name"]} if branch else {}
+    from services.endpoint_fleet import prepare, recent_jobs
+    scan = db.get_compliance_result(endpoint_id)
+    endpoint = prepare([endpoint], [scan] if scan else [],
+                       db.get_patch_inventory(g.company["id"]),
+                       recent_jobs(g.company["id"], endpoint_id=endpoint_id))[0]
     return render_template("partials/endpoint_row.html", endpoint=endpoint, branch_names=branch_names)
 
 
@@ -1040,6 +1014,16 @@ def apply_bulk_endpoint_experience():
         branch_id = g.admin.get("branch_id")
         if not branch_id:
             abort(403)
+    endpoint_ids = request.form.getlist("endpoint_ids")
+    if request.form.get("target_mode") == "selected" and not endpoint_ids:
+        return jsonify({"error": "Select at least one endpoint"}), 400
+    if len(endpoint_ids) > 1000 or any(not re.fullmatch(r"[0-9a-fA-F-]{36}", value) for value in endpoint_ids):
+        return jsonify({"error": "Invalid endpoint selection"}), 400
+    targets = db.get_endpoints_bulk(g.company["id"], branch_id=branch_id, endpoint_ids=endpoint_ids or None)
+    targets = [ep for ep in targets if str(ep.get("company_id")) == str(g.company["id"])
+               and (not branch_id or str(ep.get("branch_id")) == str(branch_id))]
+    if endpoint_ids and set(endpoint_ids) != {str(ep["id"]) for ep in targets}:
+        return jsonify({"error": "Audience changed; review again"}), 409
     try:
         payload = _experience_payload(request.form, request.files, g.company["id"])
     except ValueError as exc:
@@ -1048,7 +1032,7 @@ def apply_bulk_endpoint_experience():
         log.exception("Could not store bulk endpoint experience image")
         return jsonify({"error": "Image storage is temporarily unavailable. Please retry."}), 503
 
-    endpoints = db.get_endpoints_bulk(g.company["id"], branch_id=branch_id)
+    endpoints = targets
     expires_at = _experience_expires_at()
     dispatched = 0
     skipped = 0
@@ -1106,7 +1090,7 @@ def bulk_dispatch():
         "CHECK_POLICY_DRIFT", "COLLECT_USERS",
         "COLLECT_NETWORK_FLOWS",
     }
-    if job_type not in BULK_ALLOWED:
+    if job_type not in BULK_ALLOWED and not (body.get("preview") is True and job_type == "APPLY_DEVICE_EXPERIENCE"):
         return jsonify({"error": "operation_not_allowed_in_bulk"}), 400
 
     from services.entitlements import check_job
@@ -1124,9 +1108,27 @@ def bulk_dispatch():
         # (which would otherwise fall through to "every endpoint in the
         # company").
         branch_id = str(admin_branch_id)
-        endpoint_ids = []
+        # Preserve an explicit device selection; enforce branch below as well.
 
+    if not isinstance(endpoint_ids, list) or len(endpoint_ids) > 1000:
+        return jsonify({"error": "Select at most 1000 endpoints"}), 400
+    if body.get("target_mode") == "selected" and not endpoint_ids:
+        return jsonify({"error": "Select at least one endpoint"}), 400
+    if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", value) for value in endpoint_ids):
+        return jsonify({"error": "Invalid endpoint selection"}), 400
     endpoints = db.get_endpoints_bulk(g.company["id"], branch_id=branch_id, endpoint_ids=endpoint_ids or None)
+    endpoints = [ep for ep in endpoints if str(ep.get("company_id")) == str(g.company["id"])
+                 and (not branch_id or str(ep.get("branch_id")) == str(branch_id))]
+    if endpoint_ids and set(endpoint_ids) != {str(ep["id"]) for ep in endpoints}:
+        return jsonify({"error": "Selection changed or includes unavailable endpoints; review again"}), 409
+    if body.get("preview") is True:
+        def supported(ep):
+            return (job_type in _endpoint_capabilities(ep)
+                    and (job_type != "WINDOWS_UPDATE" or (ep.get("platform") or "windows") == "windows"))
+        return jsonify({"ok": True, "targets": [
+            {"id": ep["id"], "name": ep.get("display_name") or ep.get("hostname") or "Endpoint",
+             "online": report_online(ep), "supported": supported(ep)}
+            for ep in endpoints]})
     dispatched = 0
     skipped = 0
     for ep in endpoints:
@@ -1140,7 +1142,7 @@ def bulk_dispatch():
             skipped += 1
             continue
         capabilities = _endpoint_capabilities(ep)
-        if capabilities and job_type not in capabilities:
+        if job_type not in capabilities:
             skipped += 1
             continue
         job = db.create_job(

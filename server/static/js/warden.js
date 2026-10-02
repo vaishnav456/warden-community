@@ -1631,6 +1631,60 @@ function escalationCard() {
    one Alpine component per page, kept as a single x-data scope. */
 function installerModal() {
   return {
+    selectedEndpointIds: [],
+    bulkTargetMode: 'selected',
+    bulkReviewed: false,
+    bulkReviewTargets: [],
+    get selectionLabel() { return this.selectedEndpointIds.length + ' device(s) selected on this page'; },
+    get bulkDispatchLabel() { return this.bulkReviewed ? 'Confirm dispatch' : 'Review recipients'; },
+    get bulkReviewSummary() {
+      const supported = this.bulkReviewTargets.filter(ep => ep.supported);
+      return supported.length + ' supported · ' + supported.filter(ep => !ep.online).length + ' offline · ' + (this.bulkReviewTargets.length - supported.length) + ' unsupported (skipped)';
+    },
+    init() {
+      this.bulkBranchId = this.$el.dataset.branch || '';
+      this.selectedBranch = this.bulkBranchId;
+    },
+    toggleEndpoint(event) {
+      const id = event.target.value;
+      this.selectedEndpointIds = event.target.checked
+        ? [...new Set([...this.selectedEndpointIds, id])]
+        : this.selectedEndpointIds.filter(value => value !== id);
+      this.clearBulkReview();
+    },
+    isEndpointSelected(id) { return this.selectedEndpointIds.includes(id); },
+    selectPage() {
+      this.selectedEndpointIds = Array.from(document.querySelectorAll('.fleet-device-check')).map(input => input.value);
+      this.clearBulkReview();
+    },
+    clearSelection() { this.selectedEndpointIds = []; this.clearBulkReview(); },
+    clearBulkReview() { this.bulkReviewed = false; this.bulkReviewTargets = []; },
+    async reviewOrDispatchBulk() {
+      if (this.bulkDispatching) return;
+      if (this.bulkReviewed) return this.dispatchBulk();
+      this.bulkDispatching = true;
+      try {
+        const selected = this.bulkTargetMode === 'selected';
+        if (selected && !this.selectedEndpointIds.length) throw new Error('Select at least one device.');
+        const preview = await wardenFetchJSON('/endpoints/bulk-dispatch', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+          body: JSON.stringify({ type: this.bulkJobType, preview: true, target_mode: this.bulkTargetMode,
+            branch_id: this.bulkBranchId || null,
+            target_mode: 'selected', endpoint_ids: this.bulkReviewTargets.map(ep => ep.id), endpoint_ids: selected ? this.selectedEndpointIds : [] }),
+        });
+        this.bulkReviewTargets = preview.targets || [];
+        if (!this.bulkReviewTargets.some(ep => ep.supported)) throw new Error('No supported devices in this audience.');
+        const list = this.$refs.bulkReviewList;
+        list.replaceChildren();
+        this.bulkReviewTargets.forEach(ep => {
+          const item = document.createElement('li');
+          item.textContent = ep.name + ' — ' + (ep.supported ? (ep.online ? 'Online' : 'Offline; will queue') : 'Unsupported; skipped');
+          list.append(item);
+        });
+        this.bulkReviewed = true;
+      } catch (error) { this.bulkResult = { error: error.message }; }
+      finally { this.bulkDispatching = false; }
+    },
     showGenerateModal: false,
     selectedBranch: '',
     selectedPlatform: 'windows-amd64',
@@ -1669,15 +1723,18 @@ function installerModal() {
     bulkLockScreenName: '',
     openBulkModal() {
       this.bulkJobType = 'COLLECT_SYSINFO';
-      this.bulkBranchId = '';
+      this.bulkBranchId = this.$el.dataset.branch || '';
+      this.bulkTargetMode = this.selectedEndpointIds.length ? 'selected' : 'branch';
+      this.clearBulkReview();
       this.bulkPayload = {};
       this.bulkResult = null;
       this.bulkWallpaperName = '';
       this.bulkLockScreenName = '';
       this.showBulkModal = true;
-      document.body.style.overflow = 'hidden';
+      document.body.classList.add('fleet-dialog-open');
     },
     onBulkTypeChange() {
+      this.clearBulkReview();
       const defaults = {
         GET_EVENT_LOGS: { log_name: 'System' },
         WINDOWS_UPDATE: { action: 'check' },
@@ -1691,7 +1748,7 @@ function installerModal() {
       this.bulkResult = null;
       this.bulkWallpaperName = '';
       this.bulkLockScreenName = '';
-      document.body.style.overflow = '';
+      document.body.classList.remove('fleet-dialog-open');
     },
     onBulkFileChange(kind, event) {
       const file = event?.target?.files?.[0];
@@ -1700,7 +1757,7 @@ function installerModal() {
       if (kind === 'lockScreen') this.bulkLockScreenName = name;
     },
     async dispatchBulk() {
-      if (this.bulkDispatching) return;
+      if (this.bulkDispatching || !this.bulkReviewed) return;
       this.bulkDispatching = true;
       try {
         if (this.bulkJobType === 'APPLY_DEVICE_EXPERIENCE') {
@@ -1719,6 +1776,8 @@ function installerModal() {
           fd.append('announcement_severity', this.bulkPayload.announcement_severity || 'info');
           fd.append('announcement_require_ack', this.bulkPayload.announcement_require_ack ? '1' : '0');
           if (this.bulkBranchId) fd.append('branch_id', this.bulkBranchId);
+          this.bulkReviewTargets.forEach(ep => fd.append('endpoint_ids', ep.id));
+          fd.append('target_mode', 'selected');
           this.bulkResult = await wardenFetchJSON('/endpoints/experience/bulk', {
             method: 'POST', headers: { 'X-CSRFToken': getCsrfToken() }, body: fd,
           });

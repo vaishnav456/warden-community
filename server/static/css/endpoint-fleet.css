@@ -1,0 +1,53 @@
+/* Fleet workspace: responsive cards without hiding health or action controls. */
+.fleet-dialog-open {overflow:hidden}
+.fleet-controls,.fleet-pagination {display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:16px 0}
+.fleet-toolbar {display:flex;flex-wrap:wrap;gap:10px}
+.fleet-toolbar .fleet-search {flex:1 1 100%;min-width:0;width:100%;box-sizing:border-box}
+.fleet-toolbar .fleet-search input {min-width:0;width:100%;box-sizing:border-box}
+.fleet-toolbar .fleet-select {flex:1 1 160px;min-width:0}
+.fleet-toolbar .fleet-search svg {flex-shrink:0}
+.fleet-toolbar .fleet-select {max-width:100%}
+.fleet-evidence,.fleet-endpoint-row td>small {display:block;font-size:12px;color:var(--ink-500);margin-top:6px;line-height:1.5}
+.fleet-signal {display:inline-block;padding:3px 7px;border:1px solid var(--base-600);border-radius:6px;margin:2px;font-size:12px}
+.fleet-device-check {width:20px;height:20px;margin-bottom:8px}
+.fleet-card-grid,.fleet-card-grid tbody {display:block;width:100%;min-width:0!important}
+.fleet-card-grid thead {display:none}
+.fleet-card-grid tbody {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr));gap:16px}
+.fleet-card-grid tr {display:flex;flex-direction:column;min-width:0;border:1px solid var(--base-600);border-radius:18px;background:var(--base-850);padding:16px;box-shadow:0 4px 16px rgba(0,0,0,.04)}
+.fleet-card-grid td,.fleet-card-grid td:nth-child(3) {display:block!important;width:auto!important;padding:6px 0!important;text-align:left!important;white-space:normal;border:0;overflow-wrap:anywhere}
+.fleet-card-grid td[data-label="Investigate"] {margin-top:auto}
+.fleet-card-grid .fleet-endpoint-identity {min-width:0;align-items:flex-start}
+.fleet-card-grid .fleet-health {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.fleet-card-grid .fleet-health span {display:flex;flex-direction:column;justify-content:center;align-items:center;aspect-ratio:1;border:1px solid var(--base-600);border-radius:12px;min-width:0}
+.fleet-card-grid .fleet-health b {font-size:18px}
+.fleet-card-grid .fleet-health small {font-size:11px}
+.fleet-card-grid .fleet-health meter {width:75%;height:8px;margin-top:8px}
+.fleet-card-grid .critical {color:#b42318}
+.fleet-card-grid .fleet-evidence {line-height:1.4}
+.fleet-card-grid .fleet-device-check {float:right}
+.fleet-investigate summary {cursor:pointer;min-height:44px;padding:10px 0}
+.fleet-investigate>div {min-width:180px;max-width:100%;overflow-wrap:anywhere}
+.fleet-investigate .btn {margin:4px 0}
+.fleet-recipient-list {max-height:200px;overflow:auto;overflow-wrap:anywhere;list-style:disc;padding-left:20px}
+#endpoint-fleet .endpoint-dialog {max-height:calc(100dvh - 32px);overflow:auto}
+#endpoint-fleet .bulk-action-layout {min-height:0;overflow:hidden}
+#endpoint-fleet .bulk-action-body {min-height:0;overflow-y:auto;overscroll-behavior:contain}
+#endpoint-fleet .bulk-action-footer {position:sticky;bottom:0;flex-shrink:0;background:var(--base-850)}
+@media(max-width:700px) {
+ .fleet-table-wrap {overflow:visible;background:transparent;border:0;box-shadow:none}
+ .fleet-table,.fleet-table tbody {display:block;width:100%;min-width:0!important}
+ .fleet-table thead {display:none}
+ .fleet-table tr {display:block;border:1px solid var(--base-600);border-radius:14px;margin:12px 0;background:var(--base-850)}
+ .fleet-table td,.fleet-table td:nth-child(3) {display:block!important;text-align:left!important;width:auto!important;white-space:normal;overflow-wrap:anywhere;padding:12px}
+ .fleet-table td::before {content:attr(data-label);display:block;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--ink-500);margin-bottom:6px}
+ .fleet-endpoint-identity {min-width:0!important}
+ .fleet-card-grid td::before {display:none}
+ .fleet-card-grid .fleet-health b {font-size:16px}
+ .fleet-controls>* {max-width:100%}
+ .fleet-toolbar {display:grid;grid-template-columns:minmax(0,1fr)}
+ #endpoint-fleet .endpoint-modal-backdrop {padding:8px}
+ #endpoint-fleet .endpoint-dialog {max-height:calc(100dvh - 16px);padding:16px}
+ #endpoint-fleet .bulk-action-footer {flex-wrap:wrap}
+ #endpoint-fleet .bulk-action-footer-buttons {display:flex;flex-wrap:wrap;width:100%}
+ #endpoint-fleet .bulk-action-footer-buttons .btn {flex:1;min-height:44px}
+}

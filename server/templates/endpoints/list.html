@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Endpoints{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/endpoint-fleet.css?v={{ asset_v }}">
+<script src="/static/js/endpoint-fleet.js?v={{ asset_v }}" defer></script>
+{% endblock %}
 
 {% block breadcrumb %}
 <nav class="flex items-center gap-2 text-sm">
@@ -10,7 +14,7 @@
 {% endblock %}
 
 {% block content %}
-<div x-data="installerModal">
+<div x-data="installerModal" id="endpoint-fleet" data-branch="{{ selected_branch or '' }}" data-view-scope="{{ company.id }}:{{ current_user.id }}">
 
 {# Header #}
 <div class="fleet-page-header">
@@ -33,26 +37,26 @@
 </div>
 
 <div class="fleet-summary-strip">
-  <a href="/endpoints" class="{{ 'is-active' if not selected_state }}">
+  <a href="{{ fleet_url(state='', page=1) }}" class="{{ 'is-active' if not selected_state }}">
     <small>Managed</small><strong>{{ fleet_summary.total }}</strong><span>All endpoints</span>
   </a>
-  <a href="/endpoints?state=online" class="{{ 'is-active' if selected_state == 'online' }}">
+  <a href="{{ fleet_url(state='online', page=1) }}" class="{{ 'is-active' if selected_state == 'online' }}">
     <small>Reachable</small><strong>{{ fleet_summary.online }}</strong><span>Online now</span>
   </a>
-  <a href="/endpoints?state=offline" class="{{ 'is-active' if selected_state == 'offline' }}">
+  <a href="{{ fleet_url(state='offline', page=1) }}" class="{{ 'is-active' if selected_state == 'offline' }}">
     <small>Disconnected</small><strong>{{ fleet_summary.total - fleet_summary.online }}</strong><span>Offline</span>
   </a>
-  <a href="/endpoints?state=attention" class="attention {{ 'is-active' if selected_state == 'attention' }}">
+  <a href="{{ fleet_url(state='attention', page=1) }}" class="attention {{ 'is-active' if selected_state == 'attention' }}">
     <small>Review</small><strong>{{ fleet_summary.attention }}</strong><span>Need attention</span>
   </a>
 </div>
 
 <form method="GET" action="/endpoints" class="fleet-toolbar">
-  {% if selected_branch %}<input type="hidden" name="branch_id" value="{{ selected_branch }}">{% endif %}
+  {% if selected_branch and branches|length <= 1 %}<input type="hidden" name="branch_id" value="{{ selected_branch }}">{% endif %}
   {% if selected_state %}<input type="hidden" name="state" value="{{ selected_state }}">{% endif %}
   <div class="fleet-search">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-    <input name="q" value="{{ query }}" placeholder="Search hostname, OS, IP or agent version">
+    <input name="q" value="{{ query }}" placeholder="Search nickname, hostname, OS, IP or agent version" aria-label="Search endpoints">
   </div>
   {% if branches | length > 1 %}
   <select name="branch_id" class="fleet-select" onchange="this.form.submit()">
@@ -60,43 +64,47 @@
     {% for b in branches %}<option value="{{ b.id }}" {{ 'selected' if selected_branch == b.id | string }}>{{ b.name }}</option>{% endfor %}
   </select>
   {% endif %}
-  <button class="btn btn-secondary" type="submit">Search</button>
-  {% if query or selected_state or selected_branch %}<a class="fleet-clear" href="/endpoints">Clear</a>{% endif %}
+  <select name="health" class="fleet-select" aria-label="Health filter">
+    <option value="">All checks</option>
+    {% for value, label in [('agent-update','Outdated agent'),('encryption','Encryption failure'),('patches','Reported pending patches'),('low-disk','Less than 10 GB free'),('failed-jobs','Failed jobs · 24h'),('drift','Policy drift')] %}
+    <option value="{{ value }}" {{ 'selected' if selected_health == value }}>{{ label }}</option>{% endfor %}
+  </select>
+  <select name="platform" class="fleet-select" aria-label="Operating system">
+    <option value="">All operating systems</option>
+    {% for value,label in [('windows','Windows'),('linux','Linux'),('darwin','macOS')] %}<option value="{{ value }}" {{ 'selected' if selected_platform == value }}>{{ label }}</option>{% endfor %}
+  </select>
+  <select name="sort" class="fleet-select" aria-label="Sort endpoints">
+    {% for value,label in [('attention','Most attention first'),('name','Name'),('last-contact','Latest contact'),('disk','Least disk space')] %}<option value="{{ value }}" {{ 'selected' if selected_sort == value }}>{{ label }}</option>{% endfor %}
+  </select>
+  <select name="page_size" class="fleet-select" aria-label="Endpoints per page">{% for size in [25,50,100] %}<option value="{{ size }}" {{ 'selected' if page_size == size }}>{{ size }} per page</option>{% endfor %}</select>
+  <button class="btn btn-secondary" type="submit">Apply</button>
+  {% if query or selected_state or selected_branch or selected_health %}<a class="fleet-clear" href="/endpoints">Clear</a>{% endif %}
 </form>
 
-{% if query or selected_state or selected_branch %}
-<div class="fleet-results-note">
-  Showing {{ endpoints | length }} matching endpoint{{ '' if endpoints | length == 1 else 's' }}
-</div>
-{% endif %}
-
-{# Endpoints table #}
+<div class="fleet-results-note" role="status">Showing {{ endpoints|length }} of {{ total_matches }} matches · Page {{ page }} of {{ page_count }}. Health is based on reported evidence.</div>
 <div class="w-table-wrap fleet-table-wrap">
-  <table class="w-table fleet-table">
-    <thead>
-      <tr>
-        <th>Endpoint</th>
-        <th>Branch</th>
-        <th>Health</th>
-        <th>Attention</th>
-        <th>Last contact</th>
-        <th></th>
-      </tr>
-    </thead>
+  <table class="w-table fleet-table fleet-card-grid">
+    <thead><tr><th>Select / Endpoint</th><th>Branch</th><th>Last reported resources</th><th>Checks</th><th>Last contact</th><th>Investigate</th></tr></thead>
     <tbody id="endpoint-table-body">
-      {% for endpoint in endpoints %}
-      {% include "partials/endpoint_row.html" %}
-      {% else %}
-      <tr>
-        <td colspan="6" class="px-4 py-12 text-center text-ink-700">
-          {{ 'No endpoints match these filters.' if query or selected_state else 'No endpoints enrolled. Generate an installer to get started.' }}
-        </td>
-      </tr>
-      {% endfor %}
+    {% include "partials/endpoint_cards.html" %}
     </tbody>
   </table>
 </div>
-
+<nav class="fleet-pagination" aria-label="Endpoint pages">
+  {% if page > 1 %}<a class="btn btn-secondary" href="{{ fleet_url(page=page-1) }}">Previous</a>{% endif %}
+  <span>{{ total_matches }} matches · {{ page_size }} per page</span>
+  {% if page < page_count %}<a class="btn btn-secondary" href="{{ fleet_url(page=page+1) }}">Next</a>{% endif %}
+</nav>
+<div class="fleet-controls">
+  <button type="button" class="btn btn-secondary" @click="selectPage()">Select this page</button>
+  <button type="button" class="btn btn-secondary" @click="clearSelection()">Clear selection</button>
+  <span x-text="selectionLabel"></span>
+  <button type="button" class="btn btn-secondary" id="fleet-save-view">Save current view</button>
+  <select id="fleet-saved-views" class="fleet-select" aria-label="Saved endpoint views"><option value="">Saved views</option></select>
+  <button type="button" class="btn btn-secondary" id="fleet-delete-view">Delete saved view</button>
+  <label><input type="checkbox" id="fleet-auto-refresh" checked> Auto-refresh</label>
+  <span id="fleet-refresh-status" role="status">Refresh every 30 seconds; pauses while you interact.</span>
+</div>
 {# Generate Installer Modal #}
 <div x-show="showGenerateModal" x-cloak
      class="endpoint-modal-backdrop fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
@@ -266,20 +274,30 @@
         <section class="bulk-action-section">
           <div class="bulk-action-section-title"><span x-text="bulkJobType === 'APPLY_DEVICE_EXPERIENCE' ? '3' : '2'"></span><div><h4>Choose the audience</h4><p>Target the whole organization or limit this action to one branch.</p></div></div>
           <label class="form-label">Target</label>
-          <select x-model="bulkBranchId" class="form-input form-select">
+          <select x-model="bulkTargetMode" @change="clearBulkReview()" class="form-input form-select" aria-label="Audience mode">
+            <option value="selected">Selected devices</option><option value="branch">Branch or whole organization</option>
+          </select>
+          <p x-text="selectionLabel"></p>
+          <select x-model="bulkBranchId" @change="clearBulkReview()" class="form-input form-select" aria-label="Target branch">
             <option value="">All branches (entire company)</option>
             {% for b in branches %}
             <option value="{{ b.id }}">{{ b.name }}{% if b.city %} — {{ b.city }}{% endif %}</option>
             {% endfor %}
           </select>
         </section>
+        <section class="bulk-action-section" x-show="bulkReviewed">
+          <h4>Review recipients</h4>
+          <p x-text="bulkReviewSummary"></p>
+          <ul class="fleet-recipient-list" x-ref="bulkReviewList"></ul>
+          <p>Offline supported devices receive queued jobs when they reconnect. Availability is checked again at dispatch.</p>
+        </section>
         </main>
         <footer class="bulk-action-footer">
           <div class="bulk-action-safety"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#status"></use></svg><p x-text="bulkJobType === 'APPLY_DEVICE_EXPERIENCE' ? 'One signed deployment is queued per supported Windows endpoint. Unsupported agents are skipped.' : 'Jobs are signed, organization-scoped, and sent only to matching endpoints.'"></p></div>
           <div class="bulk-action-footer-buttons">
           <button @click="closeBulk()" class="btn btn-secondary">Cancel</button>
-          <button @click="dispatchBulk()" :disabled="bulkDispatching" class="btn btn-primary">
-            <span x-show="!bulkDispatching">Review &amp; dispatch</span>
+          <button @click="reviewOrDispatchBulk()" :disabled="bulkDispatching" class="btn btn-primary">
+            <span x-show="!bulkDispatching" x-text="bulkDispatchLabel"></span>
             <span x-show="bulkDispatching">Dispatching...</span>
           </button>
           </div>
