@@ -1,5 +1,11 @@
 # Endpoint fleet workspace
 
+Device cards and details show the reported local IP separately from the
+public/connection address observed by the server. Missing local addresses are
+not substituted with public ones. Both addresses are searchable; labels describe
+last-reported values, not guaranteed current connectivity. Existing encrypted
+local_ip telemetry is used without a schema migration or agent release.
+
 Device cards show nickname and hostname, CPU/RAM/free disk, branch, contact
 freshness, reported check warnings and expandable investigation links.
 An online label requires an online status and a heartbeat within three minutes.

@@ -1,4 +1,9 @@
 /* Fleet workspace: responsive cards without hiding health or action controls. */
+.fleet-addresses {min-width:0;margin:10px 0;font-size:12px}
+.fleet-addresses>div {display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:4px}
+.fleet-addresses span,.fleet-addresses>small {color:var(--ink-500)}
+.fleet-addresses b {font-family:monospace;overflow-wrap:anywhere;min-width:0}
+.fleet-addresses>small {display:block;margin-top:6px}
 .fleet-local-drives {min-width:0;margin:8px 0 16px;padding:12px;border:1px solid var(--base-600);border-radius:12px}
 .fleet-local-drives>small,.fleet-drive small {display:block;color:var(--ink-500);font-size:12px}
 .fleet-drive {display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px;margin-top:12px;overflow-wrap:anywhere}

@@ -82,7 +82,7 @@ def listing(endpoints, args):
     sort = args.get('sort') if args.get('sort') in SORTS else 'attention'
     rows = list(endpoints)
     if query:
-        rows = [ep for ep in rows if query.casefold() in ' '.join(str(ep.get(k) or '') for k in ('display_name', 'hostname', 'os_name', 'agent_version', 'last_seen_ip')).casefold()]
+        rows = [ep for ep in rows if query.casefold() in ' '.join(str(ep.get(k) or '') for k in ('display_name', 'hostname', 'os_name', 'agent_version', 'local_ip', 'last_seen_ip')).casefold()]
     if platform:
         rows = [ep for ep in rows if (ep.get('platform') or 'windows') == platform]
     if health:

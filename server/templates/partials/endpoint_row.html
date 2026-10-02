@@ -6,6 +6,7 @@
       <span class="fleet-device-icon platform-mark-{{ row_platform }}"><svg aria-hidden="true"><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if row_platform == 'darwin' else row_platform }}"></use></svg></span>
       <span><b>{{ endpoint.display_name or endpoint.hostname }}</b><small>{{ endpoint.hostname }} · {{ endpoint.os_name or endpoint.platform or 'Unknown OS' }}</small><small>Agent {{ endpoint.agent_version or 'unknown' }}{% if endpoint._agent_update %} · Update available{% endif %}</small></span>
     </a>
+    {% include "partials/endpoint_addresses.html" %}
   </td>
   <td data-label="Branch">{{ branch_names.get(endpoint.branch_id|string, 'Unassigned') }}</td>
   <td data-label="Resources">
@@ -23,7 +24,7 @@
   <td data-label="Last contact"><b>{{ 'Online' if endpoint._online else 'Offline / stale' }}</b><small class="fleet-evidence">{{ endpoint.last_seen|timeago }}</small></td>
   <td data-label="Investigate">
     <details class="fleet-investigate"><summary>Details &amp; actions</summary>
-      <div><p>Hostname: {{ endpoint.hostname }}</p><p>IP: {{ endpoint.last_seen_ip or 'Unknown' }}</p>
+      <div><p>Hostname: {{ endpoint.hostname }}</p>
       {% if endpoint._failed_job %}<p>Failed: {{ endpoint._failed_job.type }} · {{ endpoint._failed_job.created_at|timeago }}</p>{% endif %}
       {% if endpoint._update_job %}<p>Latest update job: {{ endpoint._update_job.status }} (reported result)</p>{% else %}<p>No update job in the last 24 hours.</p>{% endif %}
       <a class="btn btn-secondary" href="/endpoints/{{ endpoint.id }}?tab=jobs">Jobs</a>

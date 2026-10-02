@@ -33,6 +33,29 @@ class FleetTests(unittest.TestCase):
         self.assertTrue(row["_low_disk"])
         self.assertIn("Low disk (last report)", row["_signals"])
 
+    def test_local_ip_search_and_address_labels(self):
+        row = fleet.prepare([dict(self.ep, local_ip="192.168.1.11", last_seen_ip="203.0.113.8")], now=NOW)[0]
+        self.assertEqual(fleet.listing([row], {"q":"192.168.1.11"})["total_matches"], 1)
+        env = Environment(loader=FileSystemLoader(pathlib.Path(__file__).parents[1] / "templates"), autoescape=True)
+        env.filters["timeago"] = lambda value: "just now"
+        html = env.get_template("partials/endpoint_addresses.html").render(endpoint=row)
+        self.assertIn("Local IP", html)
+        self.assertIn("192.168.1.11", html)
+        self.assertIn("Public / connection IP", html)
+        self.assertIn("203.0.113.8", html)
+
+    def test_missing_local_ip_is_not_substituted_with_public_address(self):
+        env = Environment(loader=FileSystemLoader(pathlib.Path(__file__).parents[1] / "templates"), autoescape=True)
+        env.filters["timeago"] = lambda value: "just now"
+        html = env.get_template("partials/endpoint_addresses.html").render(
+            endpoint=dict(self.ep, last_seen_ip="203.0.113.8"))
+        self.assertIn("Not reported", html)
+        self.assertEqual(html.count("203.0.113.8"), 1)
+        html = env.get_template("partials/endpoint_addresses.html").render(
+            endpoint=dict(self.ep, local_ip="<script>alert(1)</script>"))
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
     def test_secondary_drive_low_space_and_capacity_rendered(self):
         details = {"local_drives": {"volumes": [
             dict(mount_point="C:", total_gb=500, free_gb=100),

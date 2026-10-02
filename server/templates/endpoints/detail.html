@@ -14,6 +14,7 @@
 
 {% block content %}
 {% set drives = local_drives %}{% include "partials/endpoint_drives.html" %}
+{% include "partials/endpoint_addresses.html" %}
 <div x-data="endpointDetail" data-endpoint-id="{{ endpoint.id }}" data-tab="{{ tab }}"
      data-nickname="{{ endpoint.display_name or '' }}" data-hostname="{{ endpoint.hostname }}"
      data-platform="{{ endpoint_platform }}" data-capabilities='{{ endpoint_capabilities | list | tojson }}'

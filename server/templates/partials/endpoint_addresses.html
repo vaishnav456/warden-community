@@ -1,0 +1,5 @@
+<div class="fleet-addresses" aria-label="Last reported network addresses">
+  <div><span>Local IP</span><b>{{ endpoint.local_ip or 'Not reported' }}</b></div>
+  <div><span>Public / connection IP</span><b>{{ endpoint.last_seen_ip or 'Not reported' }}</b></div>
+  <small>Last reported {{ endpoint.last_seen|timeago }} · Addresses may change</small>
+</div>
