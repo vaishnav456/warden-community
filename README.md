@@ -8,6 +8,25 @@ Hosted trials are separate from this self-hosted project. See [Hosted trial term
 
 > **Project status: alpha.** This repository is suitable for development and controlled pilots. Review the security model, test recovery, and use signed production artifacts before managing important endpoints.
 
+## Download and install
+
+The first public release is [Warden Community v0.1.0-alpha.1](https://github.com/vaishnav456/warden-community/releases/tag/v0.1.0-alpha.1).
+
+- [Download the source ZIP](https://github.com/vaishnav456/warden-community/releases/download/v0.1.0-alpha.1/warden-community-0.1.0-alpha.1-source.zip)
+- [Download SHA256SUMS.txt](https://github.com/vaishnav456/warden-community/releases/download/v0.1.0-alpha.1/SHA256SUMS.txt)
+- [Read the release's installation and migration guide](https://github.com/vaishnav456/warden-community/blob/v0.1.0-alpha.1/docs/INSTALLATION_AND_MIGRATION.md)
+
+Verify the ZIP against `SHA256SUMS.txt` before extracting it. You can also check out the exact release with Git:
+
+```bash
+git clone --branch v0.1.0-alpha.1 --depth 1 https://github.com/vaishnav456/warden-community.git
+cd warden-community
+```
+
+This is a **source release**, not a preconfigured server appliance or universal Windows installer. Self-hosting requires a Linux server with Docker Compose, your own HTTPS origin, and independently generated configuration and secrets; follow the installation guide before starting the stack.
+
+Generate endpoint and Warden Home installers from your own instance so they use its URL, trust configuration and enrollment settings. Community manages one organization and opens directly into the login/application flow, with no landing page. Hosted Warden is separate.
+
 ## The problem Warden solves
 
 Small businesses often face an awkward choice: pay for enterprise MDM suites priced and designed for larger IT teams, or manage devices with disconnected tools and manual effort. Keeping computers secure and consistent across Windows, Linux, and macOS can mean juggling separate systems for inventory, accounts, policy, and updates. Remote desktop and support can be another pain point: access may require a separate product, extra setup, or troubleshooting across different tools, making it difficult for a small team to help staff quickly.
@@ -19,6 +38,7 @@ Warden aims to give small organizations one self-hosted place to enroll and mana
 - A built-in directory can provision endpoint accounts and sign-in identities without Active Directory or Microsoft Entra.
 - Policy resolves predictably from organization to branch, group/tag, and endpoint, with an explanation of the effective result.
 - The console is capability-aware: Windows, Linux, and macOS endpoints show only the controls their agent supports.
+- Responsive endpoint cards show reported health, local and connection IP addresses, and Windows drive used/total/free capacity when supported by the agent.
 - Interactive topology maps place endpoints, rooms, network equipment, and links on a live floor plan.
 - Warden Home (alpha) provides organization-owned home folders and shared drives with direct peer-to-peer transfer, replicas, and failover.
 - Windows controls include enrollment lockdown, BitLocker recovery escrow, managed firewall rules, remote support, and signed agent updates.
@@ -89,10 +109,22 @@ docker compose up --build
 Run the main test suites:
 
 ```powershell
-python -m pytest server/tests
-go test ./agent-go/...
-go test ./agent-posix/...
-go test ./home-node/...
+Push-Location server
+python -m unittest discover -s tests -q
+Pop-Location
+
+# Windows agent tests require Windows.
+Push-Location agent-go
+go test ./...
+Pop-Location
+
+Push-Location agent-posix
+go test ./...
+Pop-Location
+
+Push-Location home-node
+go test ./...
+Pop-Location
 ```
 
 Self-hosting under another domain or organization name is supported; see
