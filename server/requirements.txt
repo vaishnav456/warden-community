@@ -7,5 +7,5 @@ qrcode[pil]==8.2
 cryptography==50.0.0
 python-magic==0.4.27
 gunicorn==22.0.0
-flask-limiter==3.8.0
+flask-limiter==4.1.1
 websockets==17.1
