@@ -1,5 +1,10 @@
 # Self-hosted browser assets
 
+The dependency credits and collected upstream license texts are listed in
+[Third party notices](../THIRD_PARTY_NOTICES.md). Browser licenses are also
+included under `server/static/vendor/licenses`, and font licenses beside the
+font assets, so the server image preserves these notices.
+
 Warden does not fetch JavaScript, CSS, or fonts from a public CDN at runtime.
 The application serves these files from `server/static` under its own origin:
 

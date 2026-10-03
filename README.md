@@ -135,6 +135,12 @@ The enforced boundary and retained compatibility identifiers are documented in
 
 The included Compose configuration is a development starting point, not a hardened production deployment.
 
+## Third party software
+
+Warden uses third-party Go and Python libraries, browser assets, fonts and Unicode data. See [Third party notices](THIRD_PARTY_NOTICES.md), the [dependency inventory](third_party/inventory.json) and the collected [upstream license texts](third_party/licenses). These components retain their own licenses; their notices do not change Warden's edition-specific licensing in [LICENSING.md](LICENSING.md).
+
+Run `python tools/check_third_party.py` when dependencies change. Release packages also need the relevant notices; repository credits alone are not a compliance certification.
+
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Security vulnerabilities must be reported privately according to [SECURITY.md](SECURITY.md), not in public issues.

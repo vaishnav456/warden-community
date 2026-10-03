@@ -14,3 +14,9 @@
 *.dll binary
 *.exe binary
 *.zip binary
+
+# Preserve upstream legal texts, including their whitespace and RST headings.
+# Application source remains subject to normal diff/merge-marker checks.
+third_party/licenses/** -whitespace conflict-marker-size=32
+server/static/vendor/licenses/** -whitespace conflict-marker-size=32
+server/static/fonts/*/LICENSE.txt -whitespace conflict-marker-size=32

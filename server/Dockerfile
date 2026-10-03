@@ -14,7 +14,9 @@ RUN tailwindcss -i ./static/css/tailwind-src.css -o ./static/css/tailwind.css --
 FROM python:3.12-slim
 
 # System deps for bcrypt (libffi) and python-magic
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Refresh inherited base packages, not just newly installed dependencies.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     libffi-dev libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 

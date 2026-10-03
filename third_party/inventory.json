@@ -1,0 +1,1170 @@
+{
+  "schema": 1,
+  "reviewed_on": "2026-10-03",
+  "scope": "Declared Go dependencies and installed development Python distributions; bundled frontend asset licenses. Not a complete image SBOM or legal certification.",
+  "hash_note": "upstream_sha256 values describe original license files before line-ending normalization.",
+  "dependencies": [
+    {
+      "ecosystem": "go",
+      "name": "github.com/gorilla/websocket",
+      "version": "v1.5.3",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_gorilla_websocket@v1.5.3/LICENSE",
+          "upstream_sha256": "2be1b548b0387ca8948e1bb9434e709126904d15f622cc2d0d8e7f186e4d122d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/netbirdio/go-nat",
+      "version": "v0.0.0-20260821095157-6b2c8c5c74e8",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_netbirdio_go-nat@v0.0.0-20260821095157-6b2c8c5c74e8/LICENSE",
+          "upstream_sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/ice/v4",
+      "version": "v4.4.4",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_ice_v4@v4.4.4/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_ice_v4@v4.4.4/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/webrtc/v4",
+      "version": "v4.2.22",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_webrtc_v4@v4.2.22/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_webrtc_v4@v4.2.22/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/shirou/gopsutil/v3",
+      "version": "v3.24.5",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_shirou_gopsutil_v3@v3.24.5/LICENSE",
+          "upstream_sha256": "ad1e64b82c04fb2ee6bfe521bff01266971ffaa70500024d4ac767c6033aafb9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/sys",
+      "version": "v0.48.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/golang.org_x_sys@v0.48.0/LICENSE",
+          "upstream_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/go-ole/go-ole",
+      "version": "v1.2.6",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_go-ole_go-ole@v1.2.6/LICENSE",
+          "upstream_sha256": "d883dbca28769ff23dd4368a8edb7ad9f9f23a8f86adde2875c6e41a828aac62"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/google/gopacket",
+      "version": "v1.1.19",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_google_gopacket@v1.1.19/LICENSE",
+          "upstream_sha256": "8025b28cd71e0a486b173d4a29a05478c003d197a907f99b61a05e181e90b92d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_google_uuid@v1.6.0/LICENSE",
+          "upstream_sha256": "0a8d61ed3cbfd5312326e8126c31ce9c627a283adc99131b56896d29ada04b2d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/huin/goupnp",
+      "version": "v1.2.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_huin_goupnp@v1.2.0/LICENSE",
+          "upstream_sha256": "440688406aeb546bad566031c8a01531a01a683166f7010380fcc0f68d830311"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/jackpal/go-nat-pmp",
+      "version": "v1.0.2",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_jackpal_go-nat-pmp@v1.0.2/LICENSE",
+          "upstream_sha256": "1596ea320a3d9e5180576b2c6dd28aa34b9edcef27693fcd0474e24bda3fdcab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/koron/go-ssdp",
+      "version": "v0.0.4",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_koron_go-ssdp@v0.0.4/LICENSE",
+          "upstream_sha256": "19bf6375dd79e92e109f5f2603f824a14056d051a5f9ef77ea02c573668fd0d1"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/libp2p/go-netroute",
+      "version": "v0.2.1",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_libp2p_go-netroute@v0.2.1/LICENSE",
+          "upstream_sha256": "84a049e0389f2118af2538e74523a7f76967f94bbfc93e43688cd4dfd4b89e95"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/lufia/plan9stats",
+      "version": "v0.0.0-20211012122336-39d0f177ccd0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_lufia_plan9stats@v0.0.0-20211012122336-39d0f177ccd0/LICENSE",
+          "upstream_sha256": "879acfe02d3790e0bcdd1ee2299fd8576995eaa94c7e14d1a94ee3e018ad7bc2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/datachannel",
+      "version": "v1.6.3",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_datachannel@v1.6.3/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_datachannel@v1.6.3/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/dtls/v3",
+      "version": "v3.1.9",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_dtls_v3@v3.1.9/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_dtls_v3@v3.1.9/LICENSES/CC0-1.0.txt",
+          "upstream_sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_dtls_v3@v3.1.9/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/interceptor",
+      "version": "v0.1.49",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_interceptor@v0.1.49/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_interceptor@v0.1.49/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/logging",
+      "version": "v0.2.4",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_logging@v0.2.4/LICENSE",
+          "upstream_sha256": "87272dba8c4fcf57101a3195f4f53f7b010b6e153b9b0977bb1a3f91acddf691"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_logging@v0.2.4/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/mdns/v2",
+      "version": "v2.2.1",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_mdns_v2@v2.2.1/LICENSE",
+          "upstream_sha256": "83e4dd21429a91fb7cea67a476032a9641425e5355df2e0f589a738b6ec9fd2c"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_mdns_v2@v2.2.1/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/randutil",
+      "version": "v0.1.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_randutil@v0.1.0/LICENSE",
+          "upstream_sha256": "badaf9bc72e71d5a70e7604c636b5b7adf79b9cafc188688438105d2b1e54722"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/rtcp",
+      "version": "v1.2.18",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_rtcp@v1.2.18/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_rtcp@v1.2.18/LICENSES/CC0-1.0.txt",
+          "upstream_sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_rtcp@v1.2.18/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/rtp",
+      "version": "v1.10.5",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_rtp@v1.10.5/LICENSE",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_rtp@v1.10.5/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/sctp",
+      "version": "v1.11.3",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_sctp@v1.11.3/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_sctp@v1.11.3/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/sdp/v3",
+      "version": "v3.0.20",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_sdp_v3@v3.0.20/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_sdp_v3@v3.0.20/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/srtp/v3",
+      "version": "v3.1.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_srtp_v3@v3.1.0/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_srtp_v3@v3.1.0/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/stun/v4",
+      "version": "v4.0.1",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_stun_v4@v4.0.1/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_stun_v4@v4.0.1/LICENSES/BSD-3-Clause.txt",
+          "upstream_sha256": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_stun_v4@v4.0.1/LICENSES/CC0-1.0.txt",
+          "upstream_sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_stun_v4@v4.0.1/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/transport/v5",
+      "version": "v5.1.1",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_transport_v5@v5.1.1/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_transport_v5@v5.1.1/LICENSES/BSD-3-Clause.txt",
+          "upstream_sha256": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_transport_v5@v5.1.1/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pion/turn/v5",
+      "version": "v5.1.2",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_pion_turn_v5@v5.1.2/LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_turn_v5@v5.1.2/LICENSES/CC0-1.0.txt",
+          "upstream_sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "path": "third_party/licenses/go/github.com_pion_turn_v5@v5.1.2/LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/power-devops/perfstat",
+      "version": "v0.0.0-20210106213030-5aafc221ea8c",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_power-devops_perfstat@v0.0.0-20210106213030-5aafc221ea8c/LICENSE",
+          "upstream_sha256": "d2568033889c7eb3666ef1cb1f47f84bd49d25847aaad5dd87f18df384238079"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/shoenig/go-m1cpu",
+      "version": "v0.1.6",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_shoenig_go-m1cpu@v0.1.6/LICENSE",
+          "upstream_sha256": "60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/tklauser/go-sysconf",
+      "version": "v0.3.12",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_tklauser_go-sysconf@v0.3.12/LICENSE",
+          "upstream_sha256": "fdaaa923d83d44f8b2ed1185600c5aa8c10673f11fba9feb78bd2816786fd6be"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/tklauser/numcpus",
+      "version": "v0.6.1",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_tklauser_numcpus@v0.6.1/LICENSE",
+          "upstream_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/wlynxg/anet",
+      "version": "v0.0.5",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_wlynxg_anet@v0.0.5/LICENSE",
+          "upstream_sha256": "6b8970dbe36fe214fd02b438c06daee19897708e435d761ecd18adc9ef7e7a05"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/yusufpapurcu/wmi",
+      "version": "v1.2.4",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/github.com_yusufpapurcu_wmi@v1.2.4/LICENSE",
+          "upstream_sha256": "66e24ffb77bdafac86bd5c47ea1c3d44e2d7546ca9caa219ee66a110584864e7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/crypto",
+      "version": "v0.57.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/golang.org_x_crypto@v0.57.0/LICENSE",
+          "upstream_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/net",
+      "version": "v0.59.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/golang.org_x_net@v0.59.0/LICENSE",
+          "upstream_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/sync",
+      "version": "v0.2.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/golang.org_x_sync@v0.2.0/LICENSE",
+          "upstream_sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/time",
+      "version": "v0.14.0",
+      "scope": "GoLicenses",
+      "license": "See collected upstream license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/golang.org_x_time@v0.14.0/LICENSE",
+          "upstream_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "bcrypt",
+      "version": "4.2.0",
+      "scope": "PythonLicenses",
+      "license": "Apache-2.0",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/bcrypt@4.2.0/bcrypt-4.2.0.dist-info/LICENSE",
+          "upstream_sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "blinker",
+      "version": "1.9.0",
+      "scope": "PythonLicenses",
+      "license": "See license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/blinker@1.9.0/blinker-1.9.0.dist-info/LICENSE.txt",
+          "upstream_sha256": "9eb73a1f38597a4aa17025d2ae1be3839624c795e985d4f0e9769ce29faca467"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "cffi",
+      "version": "2.1.1",
+      "scope": "PythonLicenses",
+      "license": "MIT-0",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/cffi@2.1.1/cffi-2.1.1.dist-info/licenses/LICENSE",
+          "upstream_sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "click",
+      "version": "8.5.0",
+      "scope": "PythonLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/click@8.5.0/click-8.5.0.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "cryptography",
+      "version": "50.0.0",
+      "scope": "PythonLicenses",
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/cryptography@50.0.0/cryptography-50.0.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "path": "third_party/licenses/python/cryptography@50.0.0/cryptography-50.0.0.dist-info/licenses/LICENSE.APACHE",
+          "upstream_sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "path": "third_party/licenses/python/cryptography@50.0.0/cryptography-50.0.0.dist-info/licenses/LICENSE.BSD",
+          "upstream_sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "Deprecated",
+      "version": "3.0.0",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/Deprecated@3.0.0/deprecated-3.0.0.dist-info/licenses/LICENSE.md",
+          "upstream_sha256": "a210fe0b9e9f2c0123e873f5347e9091f51cfd12863aebbe8da71f24cf804fd2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "Flask",
+      "version": "3.1.3",
+      "scope": "PythonLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/Flask@3.1.3/flask-3.1.3.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "Flask-Limiter",
+      "version": "3.8.0",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/Flask-Limiter@3.8.0/Flask_Limiter-3.8.0.dist-info/LICENSE.txt",
+          "upstream_sha256": "4fa8bb92aec5e6020f7dc9e8f450b15391dcc26db6063ab4b87655dc495c8ec4"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "gunicorn",
+      "version": "22.0.0",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/gunicorn@22.0.0/gunicorn-22.0.0.dist-info/LICENSE",
+          "upstream_sha256": "6646cdbba2e99e3421dd18c22173579a1fde347e831dae6adee80eefe331e951"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "itsdangerous",
+      "version": "2.2.0",
+      "scope": "PythonLicenses",
+      "license": "See license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/itsdangerous@2.2.0/itsdangerous-2.2.0.dist-info/LICENSE.txt",
+          "upstream_sha256": "63af09891b6be8ad1a4252ed43af0f4efba7fc948e228367bed7f3c5ae0b09d7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "Jinja2",
+      "version": "3.1.6",
+      "scope": "PythonLicenses",
+      "license": "See license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/Jinja2@3.1.6/jinja2-3.1.6.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "limits",
+      "version": "5.8.0",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/limits@5.8.0/limits-5.8.0.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "4fa8bb92aec5e6020f7dc9e8f450b15391dcc26db6063ab4b87655dc495c8ec4"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "scope": "PythonLicenses",
+      "license": "See license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/markdown-it-py@4.2.0/markdown_it_py-4.2.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "4a2260d6e2cd0f5a151a1e86dbfe7d3ed552b1e2beabf9941c1ba5c49cbce484"
+        },
+        {
+          "path": "third_party/licenses/python/markdown-it-py@4.2.0/markdown_it_py-4.2.0.dist-info/licenses/LICENSE.markdown-it",
+          "upstream_sha256": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "MarkupSafe",
+      "version": "3.0.4",
+      "scope": "PythonLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/MarkupSafe@3.0.4/markupsafe-3.0.4.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "mdurl",
+      "version": "0.1.2",
+      "scope": "PythonLicenses",
+      "license": "See license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/mdurl@0.1.2/mdurl-0.1.2.dist-info/LICENSE",
+          "upstream_sha256": "7c605df6e28667a9603118e98274f64a49ce3eed0d26fccce9534a345e0ef955"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "ordered-set",
+      "version": "4.1.0",
+      "scope": "PythonLicenses",
+      "license": "See license files",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/ordered-set@4.1.0/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/rspeer/ordered-set/master/MIT-LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "packaging",
+      "version": "26.3",
+      "scope": "PythonLicenses",
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/packaging@26.3/packaging-26.3.dist-info/licenses/LICENSE",
+          "upstream_sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "path": "third_party/licenses/python/packaging@26.3/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "upstream_sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "third_party/licenses/python/packaging@26.3/packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "upstream_sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "pillow",
+      "version": "12.3.0",
+      "scope": "PythonLicenses",
+      "license": "MIT-CMU",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/pillow@12.3.0/pillow-12.3.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "dda12a98c1979cf3d94df1cff45d27a4cb3f04a60c76f76902ac54cac03ec0ce"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "pip",
+      "version": "25.0.1",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/pip@25.0.1/pip-25.0.1.dist-info/LICENSE.txt",
+          "upstream_sha256": "634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "psycopg2-binary",
+      "version": "2.9.9",
+      "scope": "PythonLicenses",
+      "license": "LGPL with exceptions",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/psycopg2-binary@2.9.9/psycopg2_binary-2.9.9.dist-info/LICENSE",
+          "upstream_sha256": "9614b85dfc9a72c5b2ca33144c1d7e1ed3b1c297459d9fb28a6a5762c2e8d71b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "pycparser",
+      "version": "3.0",
+      "scope": "PythonLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/pycparser@3.0/pycparser-3.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "0c846399369ea76ddd7b5c44fe6d16497415fcf015f5cbb508c24bf98b81c5b1"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "Pygments",
+      "version": "2.21.0",
+      "scope": "PythonLicenses",
+      "license": "BSD-2-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/Pygments@2.21.0/pygments-2.21.0.dist-info/licenses/AUTHORS",
+          "upstream_sha256": "71a83872ad82f57be692cf827e048e2cd51d45169cfa1ea3f28706d97a872c0f"
+        },
+        {
+          "path": "third_party/licenses/python/Pygments@2.21.0/pygments-2.21.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "PyJWT",
+      "version": "2.15.1",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/PyJWT@2.15.1/pyjwt-2.15.1.dist-info/licenses/AUTHORS.rst",
+          "upstream_sha256": "925ce43461029eedbf558ec0b7cf7fc4b045def5120ebb97937c70814071cf07"
+        },
+        {
+          "path": "third_party/licenses/python/PyJWT@2.15.1/pyjwt-2.15.1.dist-info/licenses/LICENSE",
+          "upstream_sha256": "797a7a20231d4c433e9f1911db1731d06b5828b98f499819a034f7c0f56f5ce5"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "pyotp",
+      "version": "2.9.0",
+      "scope": "PythonLicenses",
+      "license": "MIT License",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/pyotp@2.9.0/pyotp-2.9.0.dist-info/LICENSE",
+          "upstream_sha256": "795885123341458172aad6ebfab31b071cc7b40524929e6901662d5dbbf57ea3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "python-magic",
+      "version": "0.4.27",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/python-magic@0.4.27/python_magic-0.4.27.dist-info/LICENSE",
+          "upstream_sha256": "5081053ad3adb0423dc0c581cb1155a60e4e2a0571d5a641d3083cb65b1f4bb2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "qrcode",
+      "version": "8.2",
+      "scope": "PythonLicenses",
+      "license": "BSD",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/qrcode@8.2/qrcode-8.2.dist-info/LICENSE",
+          "upstream_sha256": "40dfb903c94ee3f789500131311186548ecba5cefd3557623d7700e2522ab994"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "rich",
+      "version": "13.9.4",
+      "scope": "PythonLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/rich@13.9.4/rich-13.9.4.dist-info/LICENSE",
+          "upstream_sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "scope": "PythonLicenses",
+      "license": "PSF-2.0",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/typing_extensions@4.16.0/typing_extensions-4.16.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "websockets",
+      "version": "17.1",
+      "scope": "PythonLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/websockets@17.1/websockets-17.1.dist-info/licenses/LICENSE",
+          "upstream_sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "Werkzeug",
+      "version": "3.1.9",
+      "scope": "PythonLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/Werkzeug@3.1.9/werkzeug-3.1.9.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "wrapt",
+      "version": "2.5.0",
+      "scope": "PythonLicenses",
+      "license": "BSD-2-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/wrapt@2.5.0/wrapt-2.5.0.dist-info/licenses/LICENSE",
+          "upstream_sha256": "d4f66854a24dda2f2a5282912aedebe6b18186b86284510a433d78fadcd88e5d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "certifi",
+      "version": "2026.7.22",
+      "scope": "BuilderLicenses",
+      "license": "MPL-2.0",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/certifi@2026.7.22/certifi-2026.7.22.dist-info/licenses/LICENSE",
+          "upstream_sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "charset-normalizer",
+      "version": "3.5.2",
+      "scope": "BuilderLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/charset-normalizer@3.5.2/charset_normalizer-3.5.2.dist-info/licenses/LICENSE",
+          "upstream_sha256": "6d0d41bfe170ac6c7dc248c9a63e254d0fb45a60d50a8257d0af92c6e249b887"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "idna",
+      "version": "3.20",
+      "scope": "BuilderLicenses",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/idna@3.20/idna-3.20.dist-info/licenses/LICENSE.md",
+          "upstream_sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "requests",
+      "version": "2.34.2",
+      "scope": "BuilderLicenses",
+      "license": "Apache-2.0",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/requests@2.34.2/requests-2.34.2.dist-info/licenses/LICENSE",
+          "upstream_sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b"
+        },
+        {
+          "path": "third_party/licenses/python/requests@2.34.2/requests-2.34.2.dist-info/licenses/NOTICE",
+          "upstream_sha256": "f5110972dedad2b4e9d314518daf3b7d72d6e02e499acd802181de6f74571dcc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "urllib3",
+      "version": "2.8.0",
+      "scope": "BuilderLicenses",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/python/urllib3@2.8.0/urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
+          "upstream_sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        }
+      ]
+    },
+    {
+      "ecosystem": "frontend",
+      "name": "alpine",
+      "version": "3.17.4",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/frontend/alpine/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/alpinejs/alpine/v3.17.4/LICENSE.md"
+        }
+      ]
+    },
+    {
+      "ecosystem": "frontend",
+      "name": "htmx",
+      "version": "1.9.12",
+      "license": "0BSD",
+      "license_files": [
+        {
+          "path": "third_party/licenses/frontend/htmx/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/bigskysoftware/htmx/v1.9.12/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "frontend",
+      "name": "chartjs",
+      "version": "4.4.4",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/frontend/chartjs/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/chartjs/Chart.js/v4.4.4/LICENSE.md"
+        }
+      ]
+    },
+    {
+      "ecosystem": "frontend",
+      "name": "tailwindcss",
+      "version": "3.4.17",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/frontend/tailwindcss/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "frontend",
+      "name": "inter",
+      "version": "vendored font assets",
+      "license": "OFL-1.1",
+      "license_files": [
+        {
+          "path": "third_party/licenses/frontend/inter/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/rsms/inter/master/LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "frontend",
+      "name": "jetbrains-mono",
+      "version": "vendored font assets",
+      "license": "OFL-1.1",
+      "license_files": [
+        {
+          "path": "third_party/licenses/frontend/jetbrains-mono/LICENSE.txt",
+          "source_url": "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/OFL.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/sys",
+      "version": "v0.44.0",
+      "scope": "POSIX agent",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        {
+          "path": "third_party/licenses/go/golang.org_x_sys@v0.44.0/LICENSE"
+        }
+      ]
+    }
+  ]
+}

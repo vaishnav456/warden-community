@@ -83,6 +83,10 @@ CREDENTIAL_PROVIDER_BINARY = _pathlib.Path(
     )
 )
 GO_BINARY = _os.environ.get("GO_BINARY", "/usr/local/go/bin/go").strip()
+NOTICE_SOURCE_DIR = _pathlib.Path(_os.environ.get(
+    "NOTICE_SOURCE_DIR", str(_pathlib.Path(__file__).resolve().parents[1])
+))
+GO_LICENSE_PATH = _pathlib.Path(_os.environ.get("GO_LICENSE_PATH", "/usr/local/go/LICENSE"))
 OUTPUT_DIR         = _pathlib.Path(_require("OUTPUT_DIR"))
 WARDEN_SERVER_URL  = _require("WARDEN_SERVER_URL")
 BUILD_SERVICE_KEY  = _require("BUILD_SERVICE_KEY")

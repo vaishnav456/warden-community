@@ -37,6 +37,7 @@ import requests   # OK here — build service machine, not agent
 
 import config
 import db
+from notices import agent_notice_bundle
 
 log = logging.getLogger("builder")
 
@@ -331,12 +332,15 @@ def package_zip(build_request: dict, exe_path: pathlib.Path, config_json_path: p
     cfg = build_request.get("config_json") or {}
     company_slug = cfg.get("company_slug", "unknown")
     branch_slug  = cfg.get("branch_slug", "unknown")
-    date_str = datetime.datetime.utcnow().strftime("%Y%m%d")
+    date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
     target = build_request.get("target_platform") or "windows-amd64"
     zip_name = f"warden-{company_slug}-{branch_slug}-{target}-{date_str}.zip"
     zip_path = config.OUTPUT_DIR / zip_name
 
+    notices = agent_notice_bundle(config.NOTICE_SOURCE_DIR, config.GO_LICENSE_PATH)
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, raw in notices.items():
+            zf.writestr(name, raw)
         binary_name = "warden-agent.exe" if target.startswith("windows-") else "warden-agent"
         zf.write(str(exe_path), binary_name)
         zf.write(str(config_json_path), "config.json")
@@ -400,6 +404,8 @@ _MSI_WXS_TEMPLATE = r"""<?xml version="1.0" encoding="UTF-8"?>
             <File Id="AgentExe" Source="warden-agent.exe" KeyPath="yes" />
             <File Id="ConfigJson" Source="config.json" />
             <File Id="CredentialProviderDll" Source="WardenCredentialProvider.dll" />
+            <File Id="ThirdPartyNotices" Source="THIRD_PARTY_NOTICES.md" />
+            <File Id="ThirdPartyLicenses" Source="THIRD_PARTY_LICENSES.txt" />
           </Component>
         </Directory>
       </Directory>
@@ -501,13 +507,15 @@ def build_msi(build_request: dict, exe_path: pathlib.Path, config_json_path: pat
     cfg = build_request.get("config_json") or {}
     company_slug = cfg.get("company_slug", "unknown")
     branch_slug = cfg.get("branch_slug", "unknown")
-    date_str = datetime.datetime.utcnow().strftime("%Y%m%d")
+    date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
 
     staging_dir = dist_dir / "msi-staging"
     staging_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(str(exe_path), str(staging_dir / "warden-agent.exe"))
     shutil.copy(str(config_json_path), str(staging_dir / "config.json"))
     shutil.copy(str(credential_provider_path), str(staging_dir / "WardenCredentialProvider.dll"))
+    for name, raw in agent_notice_bundle(config.NOTICE_SOURCE_DIR, config.GO_LICENSE_PATH).items():
+        (staging_dir / name).write_bytes(raw)
 
     wxs_path = dist_dir / "warden-agent.wxs"
     wxs_path.write_text(

@@ -159,11 +159,15 @@ services:
       # no image rebuild needed after an agent-go code change.
       - ./agent-go:/agent-go:ro
       - ./agent-posix:/agent-posix:ro
+      - ./third_party:/notices/third_party:ro
+      - ./THIRD_PARTY_NOTICES.md:/notices/THIRD_PARTY_NOTICES.md:ro
       - ./windows-credential-provider:/windows-credential-provider:ro
       - warden-build-output:/build-output
       # Code-signing cert (see build-service/.env.example's SIGN_PFX_PATH).
       # ./certs is gitignored — never commit a real cert here.
       - ./certs:/certs:ro
+    environment:
+      NOTICE_SOURCE_DIR: /notices
     read_only: true
     tmpfs:
       - /tmp:size=1g,mode=1777,uid=10002,gid=10002
