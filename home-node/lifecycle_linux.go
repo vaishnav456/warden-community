@@ -120,6 +120,9 @@ func installSystemService(sourceConfig string) error {
 	if err != nil {
 		return err
 	}
+	if err := initializeManagedUpdateTrust(installed); err != nil {
+		return err
+	}
 	unit := fmt.Sprintf("[Unit]\nDescription=Warden Home Node\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=warden-home\nGroup=warden-home\nUMask=0077\nExecStart=/usr/local/bin/warden-home-node serve -config /etc/warden-home/warden-home.json\nRestart=on-failure\nRestartSec=5\nNoNewPrivileges=true\nPrivateTmp=true\nPrivateDevices=true\nProtectSystem=strict\nProtectHome=true\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nProtectClock=true\nRestrictSUIDSGID=true\nLockPersonality=true\nMemoryDenyWriteExecute=true\nCapabilityBoundingSet=\nAmbientCapabilities=\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nReadWritePaths=/etc/warden-home /var/lib/warden-home-update %q\n\n[Install]\nWantedBy=multi-user.target\n", installed.Root)
 	if err := os.WriteFile(systemdUnit, []byte(unit), 0644); err != nil {
 		return err

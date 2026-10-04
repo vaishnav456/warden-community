@@ -510,6 +510,9 @@ def incident_response(endpoint_id):
                 payload = {"log_name": "System", "max_events": 500} if operation == "GET_EVENT_LOGS" else {}
                 jobs.append((operation, payload))
     elif action in {"contain", "release"}:
+        # Alternate entry points must preserve dispatch_job's role boundary.
+        if g.admin.get("role") == "technician":
+            return jsonify({"error": "administrator_approval_required"}), 403
         if str(endpoint.get("platform") or "windows").lower() != "windows" or "PUSH_LOCAL_POLICY" not in capabilities:
             return jsonify({"error": "Windows policy capability is required"}), 409
         rules = [] if action == "release" else [

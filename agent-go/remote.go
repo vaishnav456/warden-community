@@ -986,6 +986,16 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 
 	headers := http.Header{}
 	headers.Set("X-Agent-Key", relayAPIKey)
+	proofRequest, proofErr := http.NewRequest(http.MethodGet, relayURL, nil)
+	if proofErr == nil {
+		proofRequest.Header = headers
+		proofErr = addDeviceRequestProof(proofRequest, nil)
+	}
+	if proofErr != nil {
+		bridge.close()
+		reportRelayFailure(sessionID, "device request proof unavailable")
+		return
+	}
 	conn, _, err := websocket.DefaultDialer.Dial(relayURL, headers)
 	if err != nil {
 		bridge.close()

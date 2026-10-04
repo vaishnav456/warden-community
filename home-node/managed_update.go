@@ -237,16 +237,29 @@ func applyManagedUpdateManifest(manifest string) error {
 	if err != nil {
 		return err
 	}
+	defer handle.Close()
+	// Snapshot once into a private directory. Never verify one pathname and
+	// reopen a service-writable pathname later with elevated privileges.
+	privateDir, err := os.MkdirTemp("", "warden-home-verified-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(privateDir)
+	snapshot := filepath.Join(privateDir, "verified-update")
+	output, err := os.OpenFile(snapshot, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	if err != nil {
+		return err
+	}
 	digest := sha256.New()
-	_, copyErr := io.Copy(digest, io.LimitReader(handle, 128*1024*1024+1))
-	handle.Close()
-	if copyErr != nil || !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), update.SHA256) {
+	written, copyErr := io.Copy(io.MultiWriter(output, digest), io.LimitReader(handle, 128*1024*1024+1))
+	closeErr := output.Close()
+	if copyErr != nil || closeErr != nil || written <= 0 || written > 128*1024*1024 || !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), update.SHA256) {
 		return errors.New("staged managed update failed SHA-256 verification")
 	}
 	defer os.Remove(manifest)
 	defer os.Remove(staged)
 	defer os.Remove(filepath.Join(filepath.Dir(manifest), "ready"))
-	return installManagedUpdate(staged)
+	return installManagedUpdate(snapshot)
 }
 
 func copyFileExact(source, destination string, mode os.FileMode) error {
@@ -255,8 +268,14 @@ func copyFileExact(source, destination string, mode os.FileMode) error {
 		return err
 	}
 	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	// Rename a new file over the destination: do not follow a planted symlink.
+	output, err := os.CreateTemp(filepath.Dir(destination), ".warden-copy-")
 	if err != nil {
+		return err
+	}
+	defer os.Remove(output.Name())
+	if err := output.Chmod(mode); err != nil {
+		output.Close()
 		return err
 	}
 	if _, err = io.Copy(output, input); err != nil {
@@ -267,5 +286,8 @@ func copyFileExact(source, destination string, mode os.FileMode) error {
 		output.Close()
 		return err
 	}
-	return output.Close()
+	if err := output.Close(); err != nil {
+		return err
+	}
+	return os.Rename(output.Name(), destination)
 }

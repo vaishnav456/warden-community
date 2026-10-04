@@ -3304,12 +3304,24 @@ def create_remote_session(endpoint_id, admin_id, company_id):
 
 
 def update_remote_session_controls(session_id, access_mode, capabilities, reason, consent_required):
+    remote = get_remote_session(session_id)
+    owner = get_admin_by_id(remote.get("admin_id")) if remote and remote.get("admin_id") else None
+    if not owner or not owner.get("is_active"):
+        raise ValueError("Remote session owner is not active")
+    from flask import g, has_request_context
+    authenticated = getattr(g, "admin", None) if has_request_context() else None
+    if authenticated:
+        if str(authenticated.get("id")) != str(remote.get("admin_id")):
+            raise ValueError("Remote session owner does not match requester")
+        if int(authenticated.get("access_token_version") or 0) != int(owner.get("access_token_version") or 0):
+            raise ValueError("Remote requester was revoked during session creation")
     rows = _patch(f"remote_sessions?id=eq.{_q(session_id)}", {
         "access_mode": access_mode,
         "capabilities": capabilities,
         "reason": reason or None,
         "consent_required": bool(consent_required),
         "consent_status": "pending" if consent_required else "not_required",
+        "owner_access_token_version": int(owner.get("access_token_version") or 0),
     })
     return rows[0] if isinstance(rows, list) and rows else None
 

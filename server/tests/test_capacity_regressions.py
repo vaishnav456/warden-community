@@ -63,6 +63,7 @@ class CapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_transport_accepts_4k_sized_frame(self):
         import websockets
         session = dict(id='capacity-session', endpoint_id='capacity-endpoint', company_id='tenant',
+                       admin_id='synthetic-admin', owner_access_token_version=0,
                        status='active', consent_required=True, consent_status='approved',
                        capabilities={'view':True,'control':False})
         payload = b'JPEG-fixture' + bytes(1988742)
@@ -70,6 +71,7 @@ class CapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
         with (
              patch.object(ws_proxy.db,'get_remote_session_by_token',return_value=session),
              patch.object(ws_proxy.db,'get_remote_session',return_value=session),
+             patch.object(ws_proxy.db,'get_admin_by_id',return_value=dict(id='synthetic-admin',company_id='tenant',role='technician',is_active=True,access_token_version=0)),
              patch.object(ws_proxy.db,'get_endpoint_by_api_key_hash',return_value={'id':'capacity-endpoint'}),
              patch.object(ws_proxy.config,'REQUIRE_CLIENT_CERT',False),
              patch.object(ws_proxy.db,'close_remote_session'), patch.object(ws_proxy.db,'_patch')

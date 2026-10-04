@@ -240,7 +240,7 @@ func nodeControlPost(path string, body interface{}, result interface{}) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Warden-Home-Key", cfg.NodeKey)
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := homeControlClient().Do(req)
 	if err != nil {
 		return err
 	}

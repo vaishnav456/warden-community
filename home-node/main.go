@@ -1446,7 +1446,7 @@ func replicateFrom(p peer) {
 }
 
 func heartbeatLoop(stop <-chan struct{}) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := homeControlClient()
 	for {
 		if err := ensureNodeCertificate(configPathInUse, 48*time.Hour); err != nil {
 			log.Printf("Warden Home certificate renewal deferred: %v", err)
@@ -1488,6 +1488,9 @@ func loadConfig(path string) error {
 		return err
 	}
 	if err = json.Unmarshal(raw, &cfg); err != nil {
+		return err
+	}
+	if err := validateHomeServerURL(cfg.WardenURL); err != nil {
 		return err
 	}
 	configPathInUse = path
@@ -1613,7 +1616,7 @@ func main() {
 		return
 	}
 	command, args := "serve", os.Args[1:]
-	if len(args) > 0 && (args[0] == "serve" || args[0] == "install" || args[0] == "upgrade" || args[0] == "uninstall" || args[0] == "apply-update" || args[0] == "backup" || args[0] == "verify-backup" || args[0] == "restore-backup") {
+	if len(args) > 0 && (args[0] == "serve" || args[0] == "install" || args[0] == "upgrade" || args[0] == "uninstall" || args[0] == "apply-update" || args[0] == "trust-updates" || args[0] == "backup" || args[0] == "verify-backup" || args[0] == "restore-backup") {
 		command, args = args[0], args[1:]
 	}
 	flags := flag.NewFlagSet(command, flag.ExitOnError)
@@ -1661,13 +1664,18 @@ func main() {
 		if *manifest == "" {
 			log.Fatal("managed update manifest is required")
 		}
-		if err := loadConfig(*path); err != nil {
+		if err := loadManagedUpdateConfig(*path); err != nil {
 			log.Fatal(err)
 		}
 		if err := applyManagedUpdateManifest(*manifest); err != nil {
 			log.Fatal(err)
 		}
 		log.Print("Signed managed Warden Home update applied")
+	case "trust-updates":
+		if err := configureManagedUpdateTrust(*path); err != nil {
+			log.Fatal(err)
+		}
+		log.Print("Root-owned Home update identity configured")
 	default:
 		stop := make(chan struct{})
 		signals := make(chan os.Signal, 1)

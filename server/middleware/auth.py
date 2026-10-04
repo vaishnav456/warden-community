@@ -238,9 +238,22 @@ def agent_auth_required(f):
             # (request didn't actually go through Cloudflare's mTLS check,
             # or client_certificate_forwarding isn't enabled on the zone)
             # both fail closed rather than silently skipping the check.
-            if not expected_fp or not presented_fp or expected_fp != presented_fp:
+            from services.device_proof import certificate_fingerprint_matches
+            if not expected_fp or not certificate_fingerprint_matches(endpoint, presented_fp):
                 abort(401)
 
+        supplied = bool(request.headers.get("X-Warden-Device-Signature"))
+        if endpoint.get("request_device_proof_required") or supplied:
+            from services.device_proof import verify_agent_request
+            try:
+                target = request.path + ("?" + request.query_string.decode("ascii") if request.query_string else "")
+                verify_agent_request(endpoint, request.headers, request.method, target, request.get_data(cache=True))
+            except Exception:
+                abort(401)
+            if not endpoint.get("request_device_proof_required"):
+                # Opt in only after the upgraded agent proves possession.
+                # Old devices remain on their existing boundary until rollout.
+                db._patch(f"endpoints?id=eq.{db._q(endpoint['id'])}", {"request_device_proof_required": True})
         g.endpoint = endpoint
         return f(*args, **kwargs)
     return decorated

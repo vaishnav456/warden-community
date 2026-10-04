@@ -248,6 +248,9 @@ func downloadExperienceAsset(assetID, label string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("X-Agent-Key", apiKey)
+	if err := addDeviceRequestProof(req, nil); err != nil {
+		return "", err
+	}
 	clientMu.Lock()
 	if httpClient == nil {
 		clientMu.Unlock()
@@ -756,6 +759,9 @@ func downloadFile(rawURL, dest, sha256hex string) error {
 		return fmt.Errorf("invalid download URL: %w", err)
 	}
 	req.Header.Set("X-Agent-Key", apiKey)
+	if err := addDeviceRequestProof(req, nil); err != nil {
+		return err
+	}
 
 	clientMu.Lock()
 	client := httpClient

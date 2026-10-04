@@ -157,6 +157,11 @@ func managedUpdateDirectory() string {
 	return filepath.Join(os.Getenv("ProgramData"), "WardenHome", "update")
 }
 
+func loadManagedUpdateConfig(path string) error { return loadConfig(path) }
+func configureManagedUpdateTrust(string) error {
+	return fmt.Errorf("trust-updates is a Linux administrator migration command")
+}
+
 func scheduleManagedUpdate(manifest string) error {
 	staged := filepath.Join(filepath.Dir(manifest), "warden-home-node.new")
 	command := exec.Command(staged, "apply-update", "-config", configPathInUse, "-manifest", manifest)

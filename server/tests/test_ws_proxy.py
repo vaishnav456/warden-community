@@ -119,6 +119,7 @@ class RelayLifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def failed_probe(*args):raise RuntimeError('probe failed')
         async def relay(*args):await asyncio.sleep(0.01)
         session=dict(id='session',endpoint_id='endpoint',company_id='tenant',status='active')
+        self.enterContext(patch.object(ws_proxy, "_remote_authority_current", return_value=True))
         with patch.object(ws_proxy.db,'get_remote_session_by_token',return_value=session),patch.object(ws_proxy,'_attach_peer',new=AsyncMock(return_value=pair)),patch.object(ws_proxy,'_measure_remote_quality',new=failed_probe),patch.object(ws_proxy,'_relay_browser_to_agent',new=relay),patch.object(ws_proxy,'_relay',new=relay),patch.object(ws_proxy,'_close_session'),patch.object(ws_proxy,'_cleanup_pair',new=AsyncMock()):
             await ws_proxy._handle_browser(browser,'endpoint','token')
         self.assertTrue(pair.done.is_set())

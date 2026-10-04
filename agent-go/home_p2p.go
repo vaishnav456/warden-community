@@ -178,6 +178,14 @@ func dialHomeRelay(sessionID string) (net.Conn, error) {
 	base.RawQuery = ""
 	headers := http.Header{}
 	headers.Set("X-Agent-Key", apiKey)
+	proofRequest, err := http.NewRequest(http.MethodGet, base.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	proofRequest.Header = headers
+	if err := addDeviceRequestProof(proofRequest, nil); err != nil {
+		return nil, err
+	}
 	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second, Proxy: http.ProxyFromEnvironment}
 	if httpClient != nil {
 		if transport, ok := httpClient.Transport.(*http.Transport); ok && transport.TLSClientConfig != nil {

@@ -204,6 +204,7 @@ CREATE TABLE endpt.endpoints (
     device_identity_encrypted TEXT,
     private_data_encryption_version SMALLINT NOT NULL DEFAULT 0,
     client_cert_fingerprint TEXT,
+    request_device_proof_required BOOLEAN NOT NULL DEFAULT false,
     cloudflare_cert_id      TEXT,
     -- Last-known-applied value of each individually-addressable
     -- PUSH_LOCAL_POLICY setting (see server/policy_settings.py), keyed by
@@ -1125,6 +1126,7 @@ CREATE TABLE endpt.remote_sessions (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     endpoint_id  UUID NOT NULL REFERENCES endpt.endpoints(id) ON DELETE CASCADE,
     admin_id     UUID REFERENCES endpt.admin_users(id) ON DELETE SET NULL,
+    owner_access_token_version INTEGER NOT NULL DEFAULT 0,
     company_id   UUID NOT NULL REFERENCES endpt.companies(id) ON DELETE CASCADE,
     status       TEXT NOT NULL DEFAULT 'active'
                      CHECK (status IN ('active', 'closed')),

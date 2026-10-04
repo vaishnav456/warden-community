@@ -53,6 +53,7 @@ PAIR_TIMEOUT = 135
 # Bound large 4K JPEG frames while keeping per-peer buffering small.
 MAX_RELAY_MESSAGE_BYTES = 8 * 1024 * 1024
 MAX_RELAY_QUEUE = 4
+REMOTE_AUTH_CHECK_SECONDS = 2
 # Emergency registry bound, not the normal workload/tenant admission policy.
 MAX_REMOTE_RELAY_PAIRS = 256
 
@@ -231,6 +232,43 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
         await dst.send(msg)
 
 
+def _remote_authority_current(session, require_consent=False):
+    current = db.get_remote_session(session["id"])
+    if not current or current.get("status") != "active":
+        return False
+    if any(str(current.get(key)) != str(session.get(key)) for key in ("endpoint_id", "company_id", "admin_id")):
+        return False
+    admin_id = current.get("admin_id")
+    if not admin_id:
+        return False
+    admin = db.get_admin_by_id(admin_id)
+    if not admin or not admin.get("is_active"):
+        return False
+    if admin.get("role") != "superadmin" and str(admin.get("company_id")) != str(current.get("company_id")):
+        return False
+    if admin.get("role") not in {"superadmin", "company_admin", "branch_admin", "technician"}:
+        return False
+    if int(current.get("owner_access_token_version") or 0) != int(admin.get("access_token_version") or 0):
+        return False
+    if require_consent and current.get("consent_required") and current.get("consent_status") != "approved":
+        return False
+    return True
+
+
+async def _watch_remote_authority(session):
+    # This is part of FIRST_COMPLETED, not a best-effort telemetry task:
+    # a revoked row or unavailable authorization store closes both sockets.
+    while True:
+        try:
+            allowed = await asyncio.wait_for(asyncio.to_thread(_remote_authority_current, session, True), timeout=5)
+        except Exception:
+            log.warning("Remote authorization could not be revalidated for %s", session["id"])
+            return
+        if not allowed:
+            return
+        await asyncio.sleep(REMOTE_AUTH_CHECK_SECONDS)
+
+
 # ── Browser-side handler ──────────────────────────────────────────────────────
 
 async def _measure_remote_quality(agent_ws,session,quality):
@@ -263,6 +301,14 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
 
     if session.get("status") != "active":
         await websocket.close(1008, "session not active")
+        return
+
+    try:
+        allowed = await asyncio.to_thread(_remote_authority_current, session)
+    except Exception:
+        allowed = False
+    if not allowed:
+        await websocket.close(1008, "remote authority revoked")
         return
 
     session_id = str(session["id"])
@@ -311,13 +357,31 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
             pass
         return
 
+    # Consent and administrator authority can change while the browser waits
+    # for the agent. Recheck before forwarding the first privileged frame.
+    try:
+        allowed = await asyncio.wait_for(asyncio.to_thread(_remote_authority_current, session, True), timeout=5)
+    except Exception:
+        allowed = False
+    if not allowed:
+        pair.closing = True
+        pair.done.set()
+        await _cleanup_pair(session_id, pair)
+        for peer in (websocket, agent_ws):
+            try:
+                await peer.close(1008, "remote authority revoked")
+            except Exception:
+                pass
+        return
+
     log.info("Relay active: browser ↔ agent (session %s)", session_id)
 
     health_tracker.increment_connections()
     quality={'transport':'server_relay','bytes_to_browser':0,'agent_rtt_ms':None}
     quality_task=asyncio.create_task(_measure_remote_quality(agent_ws,session,quality))
     relay_tasks=[asyncio.create_task(_relay_browser_to_agent(websocket, agent_ws, session)),
-                 asyncio.create_task(_relay(agent_ws, websocket,quality))]
+                 asyncio.create_task(_relay(agent_ws, websocket,quality)),
+                 asyncio.create_task(_watch_remote_authority(session))]
     try:
         done, pending = await asyncio.wait(
             relay_tasks,
@@ -349,6 +413,18 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
 
 # ── Agent-side handler ────────────────────────────────────────────────────────
 
+async def _agent_socket_proof(websocket, endpoint):
+    headers = websocket.request.headers
+    if not endpoint.get("request_device_proof_required") and not headers.get("X-Warden-Device-Signature"):
+        return True  # Legacy endpoint, until its verified agent upgrade.
+    try:
+        from services.device_proof import verify_agent_request
+        await asyncio.to_thread(verify_agent_request, endpoint, headers, "GET", websocket.request.path, b"")
+        return True
+    except Exception:
+        await websocket.close(1008, "device proof required")
+        return False
+
 async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
     # Validate API key
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
@@ -358,6 +434,8 @@ async def _handle_agent(websocket, session_id: str, api_key: str) -> None:
         await websocket.close(1008, "unauthorized")
         return
 
+    if not await _agent_socket_proof(websocket, endpoint):
+        return
     # Match agent_auth_required's certificate boundary. Without this, turning
     # on REQUIRE_CLIENT_CERT protected HTTP agent APIs but left the privileged
     # remote-control WebSocket authenticating with the API key alone.
@@ -475,6 +553,8 @@ async def _handle_home_initiator(websocket, session_id: str, kind: str, key: str
         expected = session.get("initiator_node_id")
     if not principal or str(principal.get("id")) != str(expected):
         await websocket.close(1008, "unauthorized")
+        return
+    if kind == "endpoint" and not await _agent_socket_proof(websocket, principal):
         return
     pair = await _attach_home_peer(session_id, "initiator", websocket)
     if pair is None:

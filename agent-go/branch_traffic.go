@@ -63,6 +63,9 @@ func agentConfigGET(path string, target interface{}) error {
 		return err
 	}
 	request.Header.Set("X-Agent-Key", apiKey)
+	if err := addDeviceRequestProof(request, nil); err != nil {
+		return err
+	}
 	copyClient := *client
 	copyClient.Timeout = 10 * time.Second
 	copyClient.CheckRedirect = rejectRedirect

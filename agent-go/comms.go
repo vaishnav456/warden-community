@@ -213,6 +213,9 @@ func apiPostRaw(path string, body map[string]interface{}, auth bool, timeoutSec 
 	req.Header.Set("Accept", "application/json")
 	if auth {
 		req.Header.Set("X-Agent-Key", apiKey)
+		if err := addDeviceRequestProof(req, data); err != nil {
+			return nil, err
+		}
 	}
 
 	clientMu.Lock()
