@@ -8,3 +8,14 @@ paths = [
   '''(^|/)server/policy_catalog\.json$''',
   '''(^|/)server/services/signing\.py$'''
 ]
+
+[[allowlists]]
+description = "Deterministic Python/Go wire test: two public keys and HKDF output from fixed test seeds; never installation credentials"
+condition = "AND"
+paths = ['''(^|/)agent-go/testdata/heartbeat-crypto-v1\.json$''']
+regexTarget = "secret"
+regexes = [
+  '''^4ff2d7348166ea7d5c599a72d38b46044fd2e1b5ec43f3734989e8e718ee7b930e99be98f4ba9980dc7245ddb0fbf414fc54e6529b44db6d04d2e0d1475ccb76$''',
+  '''^NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ=$''',
+  '''^A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=$'''
+]
