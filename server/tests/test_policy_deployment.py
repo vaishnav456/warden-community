@@ -120,10 +120,10 @@ class ScheduledJobRaceTests(unittest.TestCase):
                mock.patch("services.agent_rollouts.campaigns", return_value=[]), \
                mock.patch.object(scheduler.db, "get_active_remote_session", return_value=None), \
              mock.patch.object(scheduler, "update_payload", return_value={"version": "2.6.37"}), \
-             mock.patch.object(scheduler.db, "has_recent_job", return_value=True) as recent, \
+             mock.patch("services.fleet_reads.update_blockers", return_value={"endpoint-1"}) as recent, \
              mock.patch.object(scheduler.db, "create_system_job_once") as create_once:
             scheduler._check_auto_updates()
-        recent.assert_called_once_with("endpoint-1", "UPDATE_AGENT", minutes=15)
+        recent.assert_called_once_with("company-1")
         create_once.assert_not_called()
 
 

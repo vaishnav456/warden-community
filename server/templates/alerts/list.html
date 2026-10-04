@@ -3,11 +3,11 @@
 {% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Alerts</span>{% endblock %}
 {% block content %}
 <div class="flex items-center justify-between mb-6">
-  <h1 class="text-xl font-bold text-ink-100">Alerts</h1>
+  <h1 class="text-xl font-bold text-ink-100">Alerts{% if severity_filter %} · {{ severity_filter|title }}{% endif %}</h1>
   <div class="flex gap-2">
-    <a href="/alerts" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if not show_resolved and not show_snoozed %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Open</a>
-    <a href="/alerts?snoozed=true" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if show_snoozed %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Snoozed</a>
-    <a href="/alerts?resolved=true" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if show_resolved %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Resolved</a>
+    <a href="{{ scoped_url('/alerts', severity=severity_filter, endpoint_id=endpoint_filter) }}" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if not show_resolved and not show_snoozed %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Open</a>
+    <a href="{{ scoped_url('/alerts', snoozed='true', severity=severity_filter, endpoint_id=endpoint_filter) }}" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if show_snoozed %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Snoozed</a>
+    <a href="{{ scoped_url('/alerts', resolved='true', severity=severity_filter, endpoint_id=endpoint_filter) }}" class="px-3 py-1.5 text-sm rounded-lg font-medium {% if show_resolved %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">Resolved</a>
   </div>
 </div>
 <div class="space-y-2">
@@ -62,7 +62,7 @@
 </div>
 {% if has_more %}
 <div class="mt-4 text-center">
-  <a href="/alerts?page={{ page + 1 }}{% if show_resolved %}&resolved=true{% elif show_snoozed %}&snoozed=true{% endif %}" class="text-sm text-accent-400 hover:underline">Load more →</a>
+  <a href="{{ scoped_url('/alerts', page=page+1, resolved='true' if show_resolved else '', snoozed='true' if show_snoozed else '', severity=severity_filter, endpoint_id=endpoint_filter) }}" class="text-sm text-accent-400 hover:underline">Load more →</a>
 </div>
 {% endif %}
 {% endblock %}

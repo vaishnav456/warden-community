@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, render_template, request, jsonify, g, abort
 
 import db
+from services.dashboard_view import selected_branch, scoped_url
 from middleware.auth import login_required, company_required, require_branch_scope
 
 bp = Blueprint("alerts", __name__)
@@ -15,9 +16,7 @@ bp = Blueprint("alerts", __name__)
 @company_required
 def list_alerts():
     company_id = g.company["id"]
-    branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
-    if g.admin.get("role") == "branch_admin" and not branch_id:
-        abort(403)
+    branch_id = selected_branch()
     show_resolved = request.args.get("resolved", "false").lower() == "true"
     show_snoozed = request.args.get("snoozed", "false").lower() == "true" and not show_resolved
     try:
@@ -29,6 +28,8 @@ def list_alerts():
     alerts = db.get_alerts(
         company_id, resolved=show_resolved, branch_id=branch_id,
         limit=limit, offset=offset, snoozed=show_snoozed,
+        severity=request.args.get("severity") if request.args.get("severity") in ("critical", "warning", "info") else None,
+        endpoint_id=request.args.get("endpoint_id") or None,
     )
 
     endpoint_cache = {}
@@ -46,6 +47,8 @@ def list_alerts():
         page=page,
         has_more=len(alerts) == limit,
         admins=db.get_admins_for_company(company_id),
+        scoped_url=lambda path, **filters: scoped_url(path, branch_id, **filters),
+        severity_filter=request.args.get("severity", ""), endpoint_filter=request.args.get("endpoint_id", ""),
     )
 
 

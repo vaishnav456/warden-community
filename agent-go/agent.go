@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -118,6 +119,8 @@ func runAgent(stopCh <-chan struct{}) {
 	lastTamperRepair = time.Now()
 	go runIdentityBroker(stopCh)
 	go runSupportBroker(stopCh)
+	startOptionalModules(stopCh)
+	go runWorkspaceLauncher(stopCh)
 	go ensureSupportShortcut()
 	go runBitLockerStatusCollector(stopCh)
 
@@ -246,9 +249,11 @@ func renewDeviceCertificate() error {
 			return fmt.Errorf("generate replacement device identity: %w", err)
 		}
 	}
-	result, err := apiPost("/api/agent/certificate/renew", map[string]interface{}{
-		"csr_pem": string(csr),
-	}, true, 30)
+	payload := map[string]interface{}{"csr_pem": string(csr)}
+	if certificate, ok, certErr := loadClientCertificate(); certErr == nil && ok && len(certificate.Certificate) > 0 {
+		payload["device_certificate"] = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]}))
+	}
+	result, err := apiPost("/api/agent/certificate/renew", payload, true, 30)
 	if err != nil {
 		return err
 	}
@@ -377,6 +382,9 @@ func postHeartbeat(jobCapacity int) ([]json.RawMessage, error) {
 	bitLockerStatus := pendingBitLockerStatus()
 	if bitLockerStatus != nil {
 		body["bitlocker_status"] = bitLockerStatus
+	}
+	if integrity := installedAgentIntegrity(); integrity != nil {
+		body["agent_integrity"] = integrity
 	}
 	rawResp, err := apiPostRaw(
 		"/api/agent/heartbeat", body, true, heartbeatTimeoutSec,
@@ -581,15 +589,17 @@ func doEnroll(token string) error {
 		serverURLVal = "https://warden.example.com"
 	}
 	c := AgentConfig{
-		ServerURL:           serverURLVal,
-		ServerEd25519Pubkey: pinned.ServerEd25519Pubkey,
-		CertFingerprint:     pinned.CertFingerprint,
-		CertFingerprints:    effectiveCertFingerprints(pinned),
-		TLSTrustMode:        normalizeTLSTrustMode(pinned.TLSTrustMode),
-		InstallationID:      pinned.InstallationID,
-		CompanyID:           strVal(resp["company_id"]),
-		BranchID:            strVal(resp["branch_id"]),
-		EndpointID:          strVal(resp["endpoint_id"]),
+		HeartbeatEncryptionRequired: pinned.HeartbeatEncryptionRequired,
+		AgentIntegrityVerification:  pinned.AgentIntegrityVerification,
+		ServerURL:                   serverURLVal,
+		ServerEd25519Pubkey:         pinned.ServerEd25519Pubkey,
+		CertFingerprint:             pinned.CertFingerprint,
+		CertFingerprints:            effectiveCertFingerprints(pinned),
+		TLSTrustMode:                normalizeTLSTrustMode(pinned.TLSTrustMode),
+		InstallationID:              pinned.InstallationID,
+		CompanyID:                   strVal(resp["company_id"]),
+		BranchID:                    strVal(resp["branch_id"]),
+		EndpointID:                  strVal(resp["endpoint_id"]),
 	}
 	// mTLS material must be durable before the API credential/config commit.
 	// Otherwise a disk/ACL failure here would leave isEnrolled() true while

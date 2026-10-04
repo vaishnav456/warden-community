@@ -1,0 +1,34 @@
+name: Fleet read optimization
+
+on:
+  pull_request:
+  push:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Start isolated synthetic database
+        run: |
+          docker run -d --name warden-fleet-ci --network none --tmpfs /var/lib/postgresql/data:rw,size=256m -e POSTGRES_PASSWORD=isolated-test-only -e POSTGRES_DB=fleet_read postgres:16-alpine
+          for attempt in $(seq 1 30); do
+            if docker exec warden-fleet-ci pg_isready -U postgres -d fleet_read; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Migration, isolation, sample-bound and aggregate regressions
+        run: |
+          docker exec -i warden-fleet-ci psql -U postgres -d fleet_read -v ON_ERROR_STOP=1 < server/tests/fleet_read_fixture.sql
+          docker exec -i warden-fleet-ci psql -U postgres -d fleet_read -v ON_ERROR_STOP=1 < migrations/2026-10-04-fleet-read-optimization.sql
+          docker exec -i warden-fleet-ci psql -U postgres -d fleet_read -v ON_ERROR_STOP=1 < migrations/2026-10-04-fleet-read-optimization.sql
+          docker exec -i warden-fleet-ci psql -U postgres -d fleet_read -v ON_ERROR_STOP=1 < server/tests/fleet_read_assertions.sql
+          docker exec -i warden-fleet-ci psql -U postgres -d fleet_read -v ON_ERROR_STOP=1 < server/tests/fleet_read_benchmark.sql
+      - name: Remove owned disposable database
+        if: always()
+        run: docker rm -f warden-fleet-ci

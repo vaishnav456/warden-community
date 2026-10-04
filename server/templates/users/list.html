@@ -44,6 +44,8 @@
           {% else %}
           <button hx-post="/users/{{ a.id }}/enable" class="text-xs text-status-online hover:underline">Enable</button>
           {% endif %}
+          <button type="button" data-id="{{ a.id }}" @click="sendWelcome($el.dataset.id)" class="text-xs text-accent-400 hover:underline">Send welcome</button>
+          <button type="button" data-id="{{ a.id }}" @click="sendResetLink($el.dataset.id)" class="text-xs text-accent-400 hover:underline">Email reset link</button>
           <button type="button" data-id="{{ a.id }}" data-name="{{ a.full_name }}" @click="resetPassword($el.dataset.id, $el.dataset.name)" class="text-xs text-ink-500 hover:underline">Reset password</button>
           {% else %}
           <a href="/settings#change-password" class="text-xs text-ink-500 hover:underline">Change password</a>

@@ -2,62 +2,30 @@
 {% block title %}Dashboard{% endblock %}
 {% block breadcrumb %}<span class="text-sm font-medium text-ink-100">Overview</span>{% endblock %}
 {% block content %}
-<section class="page-hero">
-  <div>
-    <span class="page-eyebrow">Live operations</span>
+<section class="page-hero dashboard-hero">
+  <div><span class="page-eyebrow">Operations overview</span>
     <h1>Good to see you, {{ (current_user.full_name or current_user.email).split(' ')[0] if current_user else 'Administrator' }}</h1>
-    <p>Monitor device health, respond to risks, and keep your fleet moving from one workspace.</p>
+    <p>Resolve what's urgent, follow work in progress and check the latest device reports.</p>
   </div>
   <div class="page-hero-actions">
-    <a href="/endpoints" class="btn btn-secondary">View fleet</a>
-    <a href="/endpoints" class="btn btn-primary"><svg class="button-glyph"><use href="/static/warden-icons.svg?v={{ asset_v }}#endpoint"></use></svg>Add endpoint</a>
+    <form action="/dashboard" method="get" class="dashboard-scope">
+      <label for="dashboard-branch">Branch</label>
+      <select id="dashboard-branch" name="branch_id" class="form-input">
+        {% if current_user.role != 'branch_admin' %}<option value="">All branches</option>{% endif %}
+        {% for b in branches %}<option value="{{ b.id }}" {{ 'selected' if b.id|string == selected_branch }}>{{ b.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="btn btn-secondary">Apply</button>
+    </form>
+    <a href="{{ scoped_url('/endpoints') }}" class="btn btn-primary">View fleet</a>
   </div>
 </section>
-<div id="stats-container" class="dashboard-stats" hx-get="/partials/stats" hx-trigger="every 30s" hx-swap="innerHTML" hx-sync="this:drop">{% include "partials/dashboard_stats.html" %}</div>
-<div class="dashboard-layout">
-  <section class="surface-panel dashboard-fleet">
-    <header class="surface-header">
-      <div><span class="surface-eyebrow">Fleet health</span><h2>Managed endpoints</h2></div>
-      <a href="/endpoints" class="text-link">View all <span>→</span></a>
-    </header>
-    <div class="dashboard-endpoint-list">
-      {% for e in endpoints[:10] %}
-      {% set dashboard_platform = e.platform or 'windows' %}
-      <a href="/endpoints/{{ e.id }}" class="dashboard-endpoint">
-        <div class="device-glyph platform-mark-{{ dashboard_platform }}"><svg><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if dashboard_platform == 'darwin' else dashboard_platform }}"></use></svg><i class="{{ 'online' if e.status == 'online' else '' }}"></i></div>
-        <div class="dashboard-endpoint-name"><b>{{ e.display_name or e.hostname }}</b><span>{{ e.hostname }} · {{ e.os_name or 'Windows endpoint' }}</span></div>
-        <div class="endpoint-mini-metrics">
-          <span><small>CPU</small><b>{{ (e.cpu_pct | round(0) | int ~ '%') if e.cpu_pct is not none else '—' }}</b></span>
-          <span><small>MEM</small><b>{{ (e.ram_used_pct | round(0) | int ~ '%') if e.ram_used_pct is not none else '—' }}</b></span>
-        </div>
-        <div class="dashboard-endpoint-seen {{ 'is-online' if e.status == 'online' else '' }}"><b>{{ e.status | title }}</b><span>{{ e.last_seen | timeago }}</span></div>
-        <svg class="row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-width="2" d="m9 6 6 6-6 6"/></svg>
-      </a>
-      {% else %}
-      <div class="modern-empty-state"><div class="empty-state-symbol">+</div><h3>Connect your first endpoint</h3><p>Generate an installer to start receiving live health and inventory data.</p><a href="/endpoints" class="btn btn-primary">Generate installer</a></div>
-      {% endfor %}
-    </div>
-  </section>
-  <aside class="dashboard-rail">
-    {% if pending_escalations > 0 %}
-    <a href="/escalations" class="action-callout warning"><span class="callout-icon">{{ pending_escalations }}</span><span><b>Approval{{ 's' if pending_escalations != 1 }} waiting</b><small>Review privileged actions</small></span><span class="callout-arrow">→</span></a>
-    {% endif %}
-    <section class="surface-panel">
-      <header class="surface-header compact"><div><span class="surface-eyebrow">Attention</span><h2>Recent alerts</h2></div><a href="/alerts" class="text-link">All</a></header>
-      <div class="rail-list">
-        {% for a in recent_alerts %}
-        <a href="/alerts" class="rail-row"><i class="severity-{{ a.severity }}"></i><span><b>{{ a.title }}</b><small>{{ a.severity | title }} · {{ a.created_at | timeago }}</small></span></a>
-        {% else %}<div class="rail-clear"><span>✓</span><div><b>All clear</b><small>No open alerts</small></div></div>{% endfor %}
-      </div>
-    </section>
-    <section class="surface-panel">
-      <header class="surface-header compact"><div><span class="surface-eyebrow">Automation</span><h2>Recent jobs</h2></div><a href="/jobs" class="text-link">All</a></header>
-      <div class="rail-list">
-        {% for j in recent_jobs %}
-        <a href="/jobs/{{ j.id }}" class="rail-row job-row"><span class="badge badge-{{ j.status }}">{{ j.status }}</span><span><b>{{ j.type.replace('_', ' ').title() }}</b><small>{{ j.created_at | timeago }}</small></span></a>
-        {% else %}<div class="rail-clear"><span>—</span><div><b>No recent jobs</b><small>Actions will appear here</small></div></div>{% endfor %}
-      </div>
-    </section>
-  </aside>
+<div id="stats-container" class="dashboard-stats" hx-get="/partials/stats" hx-vals='{{ {"branch_id": selected_branch or ""}|tojson }}' hx-trigger="every 30s" hx-swap="innerHTML" hx-sync="this:drop">
+  {% include "partials/dashboard_content.html" %}
 </div>
+{% if current_user.role in ('company_admin',) %}
+<section class="surface-panel dashboard-storage" aria-label="Organization server storage">
+  <header class="surface-header compact"><div><span class="surface-eyebrow">Organization-wide · not branch-specific</span><h2>Server storage</h2></div><a href="/apps" class="text-link">Manage packages →</a></header>
+  <div hx-get="/partials/dashboard-storage" hx-trigger="load" hx-swap="innerHTML" class="dashboard-storage-body"><p>Loading storage usage…</p></div>
+</section>
+{% endif %}
 {% endblock %}

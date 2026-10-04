@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Email notifications{% endblock %}
+{% block content %}
+{% set settings_section = 'email_notifications' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+{% if company %}{% include "settings/_navigation.html" %}{% endif %}
+<section class="flex-1 min-w-0 max-w-lg space-y-4">
+<h1 class="text-xl font-bold">Email notifications</h1>
+<p class="text-sm text-ink-500">Choose emails for your own account. Critical alerts and failed jobs start on; other categories start off. Branch access still applies; email never grants access to a device or approval.</p>
+<form method="post" class="bg-base-850 border border-base-600 rounded-xl p-5 space-y-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% for key,label in categories.items() %}<label class="flex items-start gap-3"><input type="checkbox" name="{{ key }}" value="1" {% if email_prefs.get(key) %}checked{% endif %}><span>{{ label }}</span></label>{% endfor %}
+<button type="submit" class="btn btn-primary">Save preferences</button>
+</form>
+<p class="text-sm text-ink-500">Password recovery, identity password setup and account-security notices are separate from optional notifications. SMTP must be configured by your administrator. Emails link to Warden rather than include sensitive logs or filenames. In-app notification settings remain independent.</p>
+</section></div>
+{% endblock %}

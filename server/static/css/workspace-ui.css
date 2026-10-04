@@ -145,3 +145,57 @@
   .device-glyph {width:30px;height:30px}
 }
 @media(prefers-reduced-motion:reduce) {.metric-card {transition:none}}
+
+/* Dashboard: actionable overview, native disclosure controls and small screens. */
+.dashboard-action-grid {grid-template-columns:repeat(5,minmax(0,1fr))}
+.dashboard-action-grid .metric-card {min-width:0;min-height:142px}
+.dashboard-action-grid .metric-card p {overflow-wrap:anywhere}
+.dashboard-scope {display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:100%}
+.dashboard-scope label {font-size:12px;color:var(--ink-500)}
+.dashboard-scope select {width:auto;min-width:120px;max-width:230px}
+.dashboard-snapshot {display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin:12px 0 18px;font-size:11px;line-height:1.6;color:var(--ink-500)}
+.dashboard-health-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.dashboard-health-card {display:grid;gap:8px;background:var(--surface-0,#fff);border:1px solid var(--line-200,#e2e7ee);padding:18px;border-radius:16px;min-width:0}
+.dashboard-health-card small {color:var(--ink-100);font-weight:600}
+.dashboard-health-card strong {font:600 26px var(--font-sans);color:var(--ink-100)}
+.dashboard-health-card span {font-size:11px;line-height:1.6;color:var(--ink-500)}
+.dashboard-endpoint-name,.dashboard-endpoint-seen {min-width:0}
+.dashboard-endpoint-name b,.dashboard-endpoint-name span {overflow-wrap:anywhere;white-space:normal}
+.dashboard-endpoint-name>small,.dashboard-endpoint-seen>small {display:block;font-size:10px;line-height:1.5;color:var(--ink-500);margin-top:5px}
+.dashboard-endpoint-seen span {white-space:normal;line-height:1.5}
+.dashboard-alert-group {border-bottom:1px solid var(--line-200,#e2e7ee)}
+.dashboard-alert-group summary {cursor:pointer;display:flex;gap:12px;align-items:flex-start;padding:16px 20px;list-style:none}
+.dashboard-alert-group summary::-webkit-details-marker {display:none}
+.dashboard-alert-group summary::after {content:"+";margin-left:auto;color:var(--ink-500)}
+.dashboard-alert-group[open] summary::after {content:"−"}
+.dashboard-alert-group summary>i {width:7px;height:7px;flex:0 0 7px;border-radius:50%;margin-top:7px;background:var(--accent-500)}
+.dashboard-alert-group summary>i.severity-critical {background:#dc3545}
+.dashboard-alert-group summary>i.severity-warning {background:#c98112}
+.dashboard-alert-group summary b {font-size:13px;line-height:1.5;overflow-wrap:anywhere;color:var(--ink-100)}
+.dashboard-alert-group summary small {display:block;font-size:11px;color:var(--ink-500);margin-top:6px}
+.dashboard-alert-group>div {padding:0 20px 16px;display:grid;gap:10px;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.dashboard-job-counts {display:flex;flex-wrap:wrap;gap:8px;padding:0 20px 12px}
+.dashboard-job-counts a {border:1px solid var(--line-200,#e2e7ee);border-radius:8px;padding:8px 10px;font-size:11px}
+.dashboard-storage {margin-top:20px}
+.dashboard-storage-body {padding:0 20px 20px;font-size:13px;color:var(--ink-500)}
+.dashboard-storage-total {font-size:24px;font-weight:600;color:var(--ink-100);margin-bottom:12px}
+.dashboard-storage progress {display:block;width:100%;height:10px;accent-color:var(--accent-500)}
+.dashboard-storage-breakdown {display:flex;flex-wrap:wrap;gap:20px;margin:16px 0}
+.dashboard-storage-breakdown dd {font-weight:600;color:var(--ink-100);margin-top:5px}
+.dashboard-note {padding:12px 20px;font-size:11px;line-height:1.6;color:var(--ink-500)}
+.dashboard-storage-body .dashboard-note {padding:0}
+.dashboard-scope button,.dashboard-alert-group summary,.dashboard-job-counts a {min-height:44px}
+.dashboard-health-card:focus-visible,.dashboard-alert-group summary:focus-visible {outline:2px solid var(--accent-500);outline-offset:3px}
+@media(max-width:1200px) {.dashboard-action-grid {grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px) {
+  .dashboard-action-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dashboard-health-grid {grid-template-columns:1fr}
+  .dashboard-scope {width:100%}
+  .dashboard-scope select {flex:1;min-width:0;max-width:none;width:100px}
+  .dashboard-action-grid .metric-card {min-height:120px;padding:14px}
+  .dashboard-alert-group summary,.dashboard-alert-group>div {padding-left:16px;padding-right:16px}
+  .dashboard-storage-body {padding:0 16px 16px}
+  .dashboard-rail,.dashboard-fleet,.dashboard-storage {min-width:0}
+  .dashboard-job-counts {padding-left:16px;padding-right:16px}
+  .dashboard-endpoint-seen {text-align:right}
+}

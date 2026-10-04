@@ -1,0 +1,45 @@
+{% include "partials/dashboard_stats.html" %}
+<div class="dashboard-snapshot"><span>Updated {{ refreshed_at | timeago }} · refreshes every 30 seconds; pauses while reading expanded alerts</span><span>Online requires a heartbeat within 3 minutes. Device metrics are last reported, not live measurements.</span></div>
+<div class="dashboard-health-grid">
+  <a class="dashboard-health-card" href="{{ scoped_url('/endpoints', health='agent-update') }}"><small>Agent updates available</small><strong>{{ (fleet_health|default({})).get('agent_updates', (endpoints | selectattr('_agent_update') | list | length)) }}</strong><span>Compared with published builds · {{ (fleet_health|default({})).get('agent_unknown', (endpoints | selectattr('_agent_unknown') | list | length)) }} unknown</span></a>
+  <a class="dashboard-health-card" href="{{ scoped_url('/endpoints', health='encryption') }}"><small>Encryption checks needing attention</small><strong>{{ (fleet_health|default({})).get('encryption_attention', (endpoints | selectattr('_encryption', 'equalto', 'attention') | list | length)) }}</strong><span>Latest compliance scans · {{ (fleet_health|default({})).get('encryption_unknown', (endpoints | selectattr('_encryption', 'equalto', 'unknown') | list | length)) }} unverified or older than 24h</span></a>
+  <a class="dashboard-health-card" href="{{ scoped_url('/endpoints', health='patches') }}"><small>Devices with reported pending patches</small><strong>{{ (fleet_health|default({})).get('patch_attention', (endpoints | selectattr('_patch_attention') | list | length)) }}</strong><span>Last collected inventory; zero does not mean fully patched</span></a>
+</div>
+<div class="dashboard-layout">
+  <section class="surface-panel dashboard-fleet">
+    <header class="surface-header"><div><span class="surface-eyebrow">Attention first</span><h2>Device reports</h2></div><a href="{{ scoped_url('/endpoints') }}" class="text-link">View all →</a></header>
+    <div class="dashboard-endpoint-list">
+      {% for e in endpoints[:10] %}
+      {% set dashboard_platform = e.platform or 'windows' %}
+      <a href="/endpoints/{{ e.id }}" class="dashboard-endpoint">
+        <div class="device-glyph platform-mark-{{ dashboard_platform }}"><svg aria-hidden="true"><use href="/static/warden-icons.svg?v={{ asset_v }}#platform-{{ 'macos' if dashboard_platform == 'darwin' else dashboard_platform }}"></use></svg><i class="{{ 'online' if e._online else '' }}"></i></div>
+        <div class="dashboard-endpoint-name"><b>{{ e.display_name or e.hostname }}</b><span>{{ e.hostname }} · {{ e.os_name or 'Endpoint' }}</span>{% if e._agent_update %}<small>Agent update available</small>{% endif %}</div>
+        <div class="endpoint-mini-metrics"><span><small>Last CPU</small><b>{{ (e.cpu_pct | round(0) | int ~ '%') if e.cpu_pct is not none else '—' }}</b></span><span><small>Last MEM</small><b>{{ (e.ram_used_pct | round(0) | int ~ '%') if e.ram_used_pct is not none else '—' }}</b></span></div>
+        <div class="dashboard-endpoint-seen {{ 'is-online' if e._online else '' }}"><b>{{ 'Online' if e._online else ('Stale report' if e.status == 'online' else 'Offline') }}</b><span>Last reported {{ e.last_seen | timeago if e.last_seen else 'never' }}</span>{% if not e._online %}<small>{{ 'Offline for 24h+' if e._offline_age == 'days' else ('No heartbeat yet' if e._offline_age == 'never' else 'Recently disconnected') }}</small>{% endif %}</div>
+      </a>
+      {% else %}
+      <div class="modern-empty-state"><h3>No endpoints in this scope</h3><p>Select another branch or connect a device.</p><a href="{{ scoped_url('/endpoints') }}" class="btn btn-primary">Manage endpoints</a></div>
+      {% endfor %}
+    </div>
+  </section>
+  <aside class="dashboard-rail">
+    <section class="surface-panel">
+      <header class="surface-header compact"><div><span class="surface-eyebrow">Unresolved · not snoozed</span><h2>Needs attention</h2></div><a href="{{ scoped_url('/alerts') }}" class="text-link">All alerts →</a></header>
+      <div class="rail-list">
+        {% for a in recent_alerts %}
+        <details class="dashboard-alert-group"><summary><i class="severity-{{ a.severity }}"></i><span><b>{{ a.title }}</b><small>{{ a.severity | title }} · {{ a.created_at | timeago }}{% if a.repeats > 1 %} · {{ a.repeats }} occurrences{% endif %}</small></span></summary><div><p>{{ a.message or 'No additional details reported.' }}</p>{% if a._label %}<small>{{ a._label }}</small>{% endif %}<a class="text-link" href="{{ scoped_url('/alerts', endpoint_id=a.endpoint_id, severity='critical' if a.severity == 'critical' else '') }}">Review matching alerts →</a></div></details>
+        {% else %}<div class="rail-clear"><span>✓</span><div><b>All clear</b><small>No open alerts in this scope</small></div></div>{% endfor %}
+      </div>
+      {% if alert_sample >= 50 %}<p class="dashboard-note">Grouped from the 50 latest open alerts. Open the alert list for the full history.</p>{% endif %}
+    </section>
+    <section class="surface-panel">
+      <header class="surface-header compact"><div><span class="surface-eyebrow">Deployments · updates · transfers</span><h2>Work in progress</h2></div><a href="{{ scoped_url('/jobs') }}" class="text-link">All jobs →</a></header>
+      <div class="dashboard-job-counts"><a href="{{ scoped_url('/jobs', status='pending') }}">{{ pending_jobs }} queued</a><a href="{{ scoped_url('/jobs', status='running') }}">{{ running_jobs }} running</a><a href="{{ scoped_url('/jobs', status='failed', window='24h') }}">{{ failed_jobs }} failed / 24h</a></div>
+      <div class="rail-list">
+        {% for j in recent_jobs %}
+        <a href="/jobs/{{ j.id }}" class="rail-row job-row"><span class="badge badge-{{ j.status }}">{{ 'queued' if j.status == 'pending' else j.status }}</span><span><b>{{ j.type.replace('_', ' ').title() }}</b><small>{{ j._label }} · {{ j.created_at | timeago }}</small>{% if j.exit_code is not none %}<small>Reported exit code: {{ j.exit_code }}</small>{% endif %}</span></a>
+        {% else %}<div class="rail-clear"><span>—</span><div><b>No recent work</b><small>Reported task results will appear here</small></div></div>{% endfor %}
+      </div>
+    </section>
+  </aside>
+</div>

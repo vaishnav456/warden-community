@@ -5,6 +5,7 @@ Pending queue, approve/deny, saved policies, dual approval.
 from flask import Blueprint, render_template, request, jsonify, g, abort
 
 import db
+from services.dashboard_view import selected_branch, scoped_url
 from middleware.auth import login_required, company_required, role_required, require_branch_scope
 
 bp = Blueprint("escalations", __name__)
@@ -22,9 +23,7 @@ def queue():
         page = 1
     limit = 20
     offset = (page - 1) * limit
-    branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
-    if g.admin.get("role") == "branch_admin" and not branch_id:
-        abort(403)
+    branch_id = selected_branch()
 
     db.expire_stale_escalations()
 
@@ -48,6 +47,7 @@ def queue():
         status_filter=status_filter,
         page=page,
         has_more=len(requests_list) == limit,
+        scoped_url=lambda path, **filters: scoped_url(path, branch_id, **filters),
     )
 
 
@@ -268,9 +268,7 @@ def badge():
 def cards_partial():
     """HTMX partial — pending escalation cards for live polling."""
     db.expire_stale_escalations()
-    branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
-    if g.admin.get("role") == "branch_admin" and not branch_id:
-        abort(403)
+    branch_id = selected_branch()
     requests_list = db.get_escalation_requests(
         g.company["id"], status="pending", branch_id=branch_id, limit=20,
     )

@@ -1,0 +1,56 @@
+name: Operational foundations
+
+on:
+  pull_request:
+  push:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: server
+      SUPABASE_URL: http://127.0.0.1:9
+      SUPABASE_SERVICE_KEY: isolated-test
+      BUILD_SERVICE_KEY: isolated-test-build-key
+      SECRET_KEY: isolated-test-only-key-32-characters-minimum
+      ED25519_PRIVATE_KEY_B64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install candidate dependencies in isolated runner environment
+        run: |
+          python3 -m venv /tmp/warden-test-env
+          /tmp/warden-test-env/bin/pip install -r server/requirements.txt
+      - name: Full regressions, migration consistency and license inventory
+        run: |
+          /tmp/warden-test-env/bin/python tools/release_preflight.py
+          /tmp/warden-test-env/bin/python -m unittest discover -s server/tests -q
+          /tmp/warden-test-env/bin/python tools/check_third_party.py
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Start disposable PostgreSQL
+        run: |
+          docker run -d --name warden-foundations-ci --label com.warden.test=operational-foundations --network none --tmpfs /var/lib/postgresql/data:rw,size=256m -e POSTGRES_PASSWORD=isolated-test-only -e POSTGRES_DB=foundation_test postgres:16-alpine
+          for attempt in $(seq 1 30); do
+            if docker exec warden-foundations-ci pg_isready -U postgres -d foundation_test; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Retry/crash/migration and restore checks
+        run: |
+          docker exec -i warden-foundations-ci psql -U postgres -d foundation_test -v ON_ERROR_STOP=1 < server/tests/operational_foundations_fixture.sql
+          docker exec -i warden-foundations-ci psql -U postgres -d foundation_test -v ON_ERROR_STOP=1 < migrations/2026-10-04-operational-foundations.sql
+          docker exec -i warden-foundations-ci psql -U postgres -d foundation_test -v ON_ERROR_STOP=1 < migrations/2026-10-04-operational-foundations.sql
+          docker exec -i warden-foundations-ci psql -U postgres -d foundation_test -v ON_ERROR_STOP=1 < server/tests/operational_foundations_assertions.sql
+          python3 tools/verify_development_restore.py --container warden-foundations-ci
+      - name: Remove owned disposable database
+        if: always()
+        run: docker rm -f warden-foundations-ci

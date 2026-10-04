@@ -850,6 +850,20 @@ function usersListPage() {
         this.creating = false;
       }
     },
+    async sendWelcome(id) {
+      if (!await window.wardenConfirm({ title: 'Send welcome email?', message: 'Send sign-in guidance to this administrator’s login email?', detail: 'No password will be included.', confirmLabel: 'Send welcome' })) return;
+      try {
+        const data = await wardenFetchJSON(`/users/${id}/welcome-email`, { method: 'POST', headers: { 'X-CSRFToken': getCsrfToken() } });
+        wardenToast(data.message, 'success');
+      } catch (error) { wardenToast(error.message, 'error'); }
+    },
+    async sendResetLink(id) {
+      if (!await window.wardenConfirm({ title: 'Email password reset link?', message: 'Send a single-use link to this administrator’s login email?', detail: 'The current password remains valid until the owner uses the link.', confirmLabel: 'Send link' })) return;
+      try {
+        const data = await wardenFetchJSON(`/users/${id}/reset-link`, { method: 'POST', headers: { 'X-CSRFToken': getCsrfToken() } });
+        wardenToast(data.message, 'success');
+      } catch (error) { wardenToast(error.message, 'error'); }
+    },
     async resetPassword(id, name) {
       if (!await window.wardenConfirm({
         title: 'Reset administrator password?',
@@ -3691,6 +3705,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const startProgress = () => routeProgress?.classList.add('is-active');
   const stopProgress = () => routeProgress?.classList.remove('is-active');
   document.body.addEventListener('htmx:beforeRequest', startProgress);
+  // Keep expanded alert details and keyboard focus stable while reading.
+  document.body.addEventListener('htmx:beforeRequest', (event) => {
+    const snapshot = document.getElementById('stats-container');
+    if (snapshot && event.detail.elt === snapshot &&
+        (snapshot.querySelector('details[open]') || snapshot.contains(document.activeElement))) {
+      event.preventDefault();
+      stopProgress();
+    }
+  });
+  document.body.addEventListener('htmx:beforeSwap', (event) => {
+    const snapshot = event.detail.target;
+    if (snapshot?.id === 'stats-container' &&
+        (snapshot.querySelector('details[open]') || snapshot.contains(document.activeElement))) {
+      event.detail.shouldSwap = false;
+    }
+  });
   // Polling must not replace a focused confirmation form or close a receipt.
   document.body.addEventListener('htmx:beforeRequest', (event) => {
     const activity = document.getElementById('home-live-activity');

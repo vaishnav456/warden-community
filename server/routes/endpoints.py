@@ -186,7 +186,7 @@ def detail(endpoint_id):
 
     if tab == "overview":
         events = db.get_endpoint_events(endpoint_id, limit=20)
-        metrics = db.get_metrics(endpoint_id, hours=24)
+        metrics = db.get_metrics(endpoint_id, hours=24, max_points=240)
         alerts = db.get_alerts(g.company["id"], resolved=False, limit=5)
         alerts = [a for a in alerts if str(a.get("endpoint_id")) == endpoint_id]
     elif tab == "users":
@@ -228,7 +228,7 @@ def detail(endpoint_id):
     elif tab == "compliance":
         compliance_result = db.get_compliance_result(endpoint_id)
     elif tab == "metrics":
-        metrics = db.get_metrics(endpoint_id, hours=24)
+        metrics = db.get_metrics(endpoint_id, hours=24, max_points=240)
     elif tab == "encryption":
         from services.bitlocker_status import display_status
         recovery_keys = display_status(endpoint)
@@ -1266,6 +1266,9 @@ def generate_installer():
     config_json = {
         "server_url": config.SERVER_URL,
         "server_ed25519_pubkey": get_server_pubkey_b64(),
+        "heartbeat_encryption_required": config.HEARTBEAT_MESSAGE_ENCRYPTION,
+        "agent_core_modules": config.AGENT_CORE_MODULES_ENABLED,
+        "agent_integrity_verification": config.ENCRYPT_HEARTBEAT_TELEMETRY,
         "cert_fingerprint": fingerprint,
         "tls_trust_mode": "webpki",
         "company_id": str(company["id"]),

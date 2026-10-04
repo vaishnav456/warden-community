@@ -19,6 +19,9 @@ import db
 from middleware.auth import agent_auth_required
 from middleware.security import check_rate_limit, get_client_ip
 from services.signing import sign_job
+from services.agent_modules import helpdesk_access
+from services.heartbeat_crypto import heartbeat_messages, descriptor as heartbeat_descriptor
+from services.agent_integrity import manifest as agent_integrity_manifest, record_report as record_agent_integrity
 from services.timezones import windows_timezone
 from services.bitlocker_status import record_status as record_bitlocker_status
 from services.agent_updates import AgentBuildUnavailable, as_download, build_for_endpoint
@@ -30,6 +33,52 @@ from services.home_sync import (
 )
 
 bp = Blueprint("agent_api", __name__)
+
+
+@bp.get('/api/agent/modules/helpdesk/manifest')
+@agent_auth_required
+def helpdesk_module_manifest():
+    from services import agent_modules
+    if not check_rate_limit('module-manifest:'+str(g.endpoint['id']), 12, fail_closed=True):
+        return jsonify(error='rate_limited'), 429
+    try:
+        agent_modules.verify_request_proof(g.endpoint, request)
+    except Exception:
+        return jsonify(error='invalid_module_device_proof'), 401
+    if not agent_modules.allowed(g.endpoint['company_id']):
+        return jsonify(error='module_not_allowed'), 403
+    try:
+        value, _ = agent_modules.release()
+        response = jsonify(agent_modules.grant(g.endpoint, value))
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except (ValueError, OSError):
+        return jsonify(error='module_release_unavailable'), 503
+
+
+@bp.get('/api/agent/modules/helpdesk/package/<release_id>')
+@agent_auth_required
+def helpdesk_module_package(release_id):
+    from services import agent_modules
+    if not check_rate_limit('module-package:'+str(g.endpoint['id']), 4, fail_closed=True):
+        return jsonify(error='rate_limited'), 429
+    try:
+        agent_modules.verify_request_proof(g.endpoint, request)
+    except Exception:
+        return jsonify(error='invalid_module_device_proof'), 401
+    if not agent_modules.allowed(g.endpoint['company_id']):
+        return jsonify(error='module_not_allowed'), 403
+    try:
+        value, path = agent_modules.release()
+        if release_id != value['release_id']:
+            return jsonify(error='module_release_unavailable'), 404
+        response = send_file(path, mimetype='application/octet-stream', conditional=False,
+                             as_attachment=True, download_name='warden-helpdesk.exe')
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except (ValueError, OSError):
+        return jsonify(error='module_release_unavailable'), 503
+
 _IDENTITY_LOGIN_RE = re.compile(
     r"^(?:[A-Za-z0-9._-]{1,20}|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+)$"
 )
@@ -44,10 +93,17 @@ def renew_device_certificate():
     if not check_rate_limit(f"device-cert:{g.endpoint['id']}", 4):
         return jsonify({"error": "rate_limited"}), 429
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "invalid_request"}), 400
     csr_pem = str(body.get("csr_pem") or "").strip()
     if not csr_pem:
         return jsonify({"error": "client_cert_required"}), 400
     try:
+        from services.device_proof import validate_renewal_identity
+        certificate = body.get("device_certificate")
+        presented_fingerprint = None
+        if certificate or g.endpoint.get("heartbeat_device_proof_required"):
+            presented_fingerprint = validate_renewal_identity(g.endpoint, certificate, csr_pem)
         from services.agent_ca import ca_bundle_pem, sign_agent_csr
         cert_pem, fingerprint, reference = sign_agent_csr(
             csr_pem, str(g.endpoint["id"]), company_id=str(g.endpoint["company_id"]),
@@ -55,7 +111,8 @@ def renew_device_certificate():
     except (ValueError, RuntimeError) as exc:
         current_app.logger.warning("Endpoint certificate renewal rejected for %s: %s", g.endpoint["id"], exc)
         return jsonify({"error": "client_cert_issuance_failed"}), 400
-    db.set_endpoint_client_cert(g.endpoint["id"], fingerprint, reference)
+    if not db.rotate_endpoint_client_cert(g.endpoint, fingerprint, reference, presented_fingerprint):
+        return jsonify({"error": "device_certificate_changed_retry"}), 409
     db.log_endpoint_event(g.endpoint["id"], "device_certificate_renewed", {
         "fingerprint": fingerprint, "issuer": "warden-private-ca",
     })
@@ -420,8 +477,47 @@ def _queue_profile_device_identity(endpoint, body, capabilities, platform):
     return job
 
 
+@bp.post("/api/agent/heartbeat/crypto")
+@agent_auth_required
+def heartbeat_crypto_descriptor():
+    if not config.HEARTBEAT_MESSAGE_ENCRYPTION:
+        return jsonify(error="heartbeat_encryption_unavailable"), 503
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error="invalid_challenge"), 400
+    try:
+        return jsonify(heartbeat_descriptor(g.endpoint["id"], body.get("challenge")))
+    except ValueError:
+        return jsonify(error="invalid_challenge"), 400
+
+
+@bp.post("/api/agent/integrity/manifest")
+@agent_auth_required
+def installed_agent_integrity_manifest():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error="invalid_integrity_request"), 400
+    try:
+        from services.device_proof import verify_device_signature
+        challenge, version, digest = body.get("challenge"), body.get("agent_version"), body.get("sha256")
+        message = f"warden-agent-integrity-proof-v1|{g.endpoint['id']}|{version}|{digest}|{challenge}".encode()
+        verify_device_signature(g.endpoint, body.get("device_certificate"), body.get("device_signature"), message)
+        proof = agent_integrity_manifest(g.endpoint, body.get("challenge"),
+                                        body.get("agent_version"), body.get("sha256"))
+    except ValueError:
+        return jsonify(error="invalid_integrity_request"), 400
+    except Exception:
+        return jsonify(error="invalid_device_proof"), 401
+    if not proof:
+        return jsonify(error="agent_hash_not_approved"), 409
+    response = jsonify(proof)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.route("/api/agent/heartbeat", methods=["POST"])
 @agent_auth_required
+@heartbeat_messages
 def heartbeat():
     """
     Agent posts heartbeat every 30s with live metrics.
@@ -436,8 +532,10 @@ def heartbeat():
         "commands": [...]       <- signed command envelopes
     }
     """
-    body = request.get_json(silent=True) or {}
+    body = g.get("heartbeat_body", request.get_json(silent=True) or {})
     endpoint = g.endpoint
+    if config.ENCRYPT_HEARTBEAT_TELEMETRY:
+        record_agent_integrity(endpoint, body)
 
     reported_platform = str(body.get("platform") or "").strip().lower()
     if reported_platform not in {"windows", "linux", "darwin"}:
@@ -1206,31 +1304,149 @@ def report_software():
     return jsonify({"ok": True, "count": len(accepted)})
 
 
+@bp.route('/api/agent/support-form',methods=['GET','POST'])
+@agent_auth_required
+@helpdesk_access
+def support_form():
+    from services import helpdesk
+    return jsonify(ok=True,form=helpdesk.load_form(db.get_company_by_id(g.endpoint['company_id'])),
+        context=dict(branch=str(g.endpoint.get('branch_id') or '')))
+
+
 @bp.post('/api/agent/support-request')
 @agent_auth_required
+@helpdesk_access
 def request_support():
+    import uuid
+    from services import helpdesk
     if not check_rate_limit('support:'+str(g.endpoint['id']),5,fail_closed=True):
         return jsonify(error='rate_limited'),429
-    body=request.get_json(silent=True) or {}
+    body=request.get_json(silent=True)
     if not isinstance(body,dict):return jsonify(error='invalid_request'),400
-    username=str(body.get('username') or '').strip()
-    message=str(body.get('message') or '').strip()
-    if not 1<=len(username)<=256 or not 1<=len(message)<=2000 or any(ord(c)<32 and c not in '\n\t' for c in username+message):
-        return jsonify(error='invalid_request'),400
-    endpoint=g.endpoint
-    path=f"support_requests?endpoint_id=eq.{db._q(endpoint['id'])}&company_id=eq.{db._q(endpoint['company_id'])}&status=in.(open,claimed)&limit=1"
-    existing=db._get(path)
-    if existing:return jsonify(ok=True,request_id=existing[0]['id'],existing=True)
-    company=db.get_company_by_id(endpoint['company_id'])
-    encrypted=db.encrypt_field(company,dict(username=username,message=message),'support.request')
     try:
-        row=db._post('support_requests',dict(company_id=endpoint['company_id'],endpoint_id=endpoint['id'],request_encrypted=encrypted))[0]
-    except Exception:
-        existing=db._get(path)
-        if existing:return jsonify(ok=True,request_id=existing[0]['id'],existing=True)
-        raise
-    db.audit(endpoint['company_id'],None,'support_requested',dict(request_id=row['id']),branch_id=endpoint.get('branch_id'),endpoint_id=endpoint['id'])
+        username=helpdesk.short(body.get('username'),256)
+        helpdesk.workflow.text(body.get('message'))
+    except ValueError as exc:return jsonify(error=str(exc)),400
+    endpoint=g.endpoint
+    company=db.get_company_by_id(endpoint['company_id'])
+    try:
+        username=helpdesk.short(body.get('username'),256)
+        content=helpdesk.ticket_content(body,helpdesk.load_form(company),username,endpoint.get('branch_id'))
+        ticket_id=helpdesk.identifier(body.get('request_id') or uuid.uuid4())
+        result=helpdesk.action(company,endpoint,ticket_id,'create',username=username,body=content)
+    except ValueError as exc:return jsonify(error=str(exc)),400
+    if result.get('error'):return jsonify(error=result['error']),409
+    db.audit(endpoint['company_id'],None,'support_requested',dict(request_id=result['id']),
+        branch_id=endpoint.get('branch_id'),endpoint_id=endpoint['id'])
+    return jsonify(ok=True,request_id=result['id'],status=result['status'])
+
+
+def owned_support_ticket(company, endpoint, username, request_id):
+    from services import helpdesk
+    try:request_id=helpdesk.identifier(request_id)
+    except ValueError:return None
+    rows=db._get(f"support_requests?id=eq.{db._q(request_id)}&endpoint_id=eq.{db._q(endpoint['id'])}"
+                 f"&company_id=eq.{db._q(company['id'])}&limit=1")
+    if not rows:return None
+    original=db.decrypt_field(company,rows[0]['request_encrypted'],'support.request') or {}
+    if str(original.get('username','')).strip().casefold()!=username.strip().casefold():return None
+    return rows[0]
+
+
+@bp.post('/api/agent/support-reply')
+@agent_auth_required
+@helpdesk_access
+def support_reply():
+    import uuid
+    from services import helpdesk
+    if not check_rate_limit('support:'+str(g.endpoint['id']),10,fail_closed=True):
+        return jsonify(error='rate_limited'),429
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict):return jsonify(error='invalid_request'),400
+    endpoint=g.endpoint
+    company=db.get_company_by_id(endpoint['company_id'])
+    try:
+        username=helpdesk.short(body.get('username'),256)
+        message=helpdesk.workflow.text(body.get('message'))
+        message_id=helpdesk.identifier(body.get('message_id') or uuid.uuid4())
+    except ValueError as exc:return jsonify(error=str(exc)),400
+    row=owned_support_ticket(company,endpoint,username,body.get('request_id'))
+    if not row:return jsonify(error='not_found'),404
+    result=helpdesk.action(company,endpoint,row['id'],'reply',username=username,message_id=message_id,
+        body=dict(author=username,message=message,kind='reply'))
+    if result.get('error'):return jsonify(error=result['error']),409
+    return jsonify(ok=True,request_id=row['id'],message_id=message_id)
+
+
+@bp.post('/api/agent/support-reopen')
+@agent_auth_required
+@helpdesk_access
+def support_reopen():
+    from services import helpdesk
+    if not check_rate_limit('support:'+str(g.endpoint['id']),5,fail_closed=True):
+        return jsonify(error='rate_limited'),429
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict):return jsonify(error='invalid_request'),400
+    endpoint=g.endpoint
+    company=db.get_company_by_id(endpoint['company_id'])
+    try:username=helpdesk.short(body.get('username'),256)
+    except ValueError as exc:return jsonify(error=str(exc)),400
+    row=owned_support_ticket(company,endpoint,username,body.get('request_id'))
+    if not row:return jsonify(error='not_found'),404
+    result=helpdesk.action(company,endpoint,row['id'],'reopen',username=username,
+        body=dict(author=username,message='User reopened this ticket.',kind='event'))
+    if result.get('error'):return jsonify(error=result['error']),409
     return jsonify(ok=True,request_id=row['id'])
+
+
+@bp.post('/api/agent/support-status')
+@agent_auth_required
+@helpdesk_access
+def support_status():
+    from services import helpdesk
+    if not check_rate_limit('support-status:'+str(g.endpoint['id']),30,fail_closed=True):
+        return jsonify(error='rate_limited'),429
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict):return jsonify(error='invalid_request'),400
+    try:username=helpdesk.short(body.get('username'),256)
+    except ValueError:return jsonify(error='invalid_request'),400
+    endpoint=g.endpoint
+    company=db.get_company_by_id(endpoint['company_id'])
+    key=helpdesk.workflow.requester_key(username)
+    if body.get('request_id'):
+        row=owned_support_ticket(company,endpoint,username,body['request_id'])
+        if not row:return jsonify(error='not_found'),404
+        rows=[row]
+    else:
+        rows=db._get(f"support_requests?endpoint_id=eq.{db._q(endpoint['id'])}&company_id=eq.{db._q(company['id'])}"
+            f"&or=(requester_key.eq.{key},requester_key.is.null)&order=created_at.desc&limit=20")
+    tickets=[]
+    originals={}
+    for row in rows:
+        original=db.decrypt_field(company,row['request_encrypted'],'support.request') or {}
+        if str(original.get('username','')).strip().casefold()!=username.casefold():continue
+        originals[str(row['id'])]=original
+        tickets.append(dict(request_id=row['id'],number=str(row['id'])[:8].upper(),status=row['status'],
+            subject=original.get('subject','Support request'),priority=original.get('priority','normal'),
+            service_mode=row.get('service_mode','queued'),visit_at=row.get('visit_at'),
+            created_at=row['created_at'],updated_at=row.get('updated_at',row['created_at'])))
+    if not tickets:return jsonify(ok=True,status='none',replies=[],tickets=[])
+    ticket_ids=','.join(db._q(ticket['request_id']) for ticket in tickets)
+    notices=db._get(f"support_messages?company_id=eq.{db._q(company['id'])}&request_id=in.({ticket_ids})"
+        "&author_admin_id=not.is.null&order=created_at.desc&limit=1&select=id,created_at")
+    latest_reply=notices[0] if notices else None
+    selected=tickets[0]
+    # Each page is intentionally bounded for the local privilege-separated pipe.
+    try:page=max(0,min(10000,int(body.get('page',0))))
+    except (ValueError,TypeError):return jsonify(error='invalid_page'),400
+    messages=db._get(f"support_messages?request_id=eq.{db._q(selected['request_id'])}&company_id=eq.{db._q(company['id'])}"
+                     f"&order=created_at.desc,id.desc&limit=6&offset={page*5}")
+    thread=[dict(message_id=m['id'],created_at=m['created_at'],
+        **(db.decrypt_field(company,m['message_encrypted'],'support.message') or {})) for m in reversed(messages[:5])]
+    original=originals[str(selected['request_id'])]
+    return jsonify(ok=True,**selected,replies=[m.get('message','') for m in thread],tickets=tickets,
+        thread=thread,description=original.get('message',''),fields=original.get('fields',{}),
+        page=page,has_more=len(messages)>5,latest_reply_id=latest_reply['id'] if latest_reply else None)
 
 
 @bp.get('/api/agent/traffic-config')

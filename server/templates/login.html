@@ -66,6 +66,7 @@
     </div>
     {% endif %}
 
+    <p class="mb-3"><a href="/auth/forgot-password" class="text-accent-400 underline">Forgot password?</a></p>
     <form action="/login" method="POST" class="login-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="login-field">

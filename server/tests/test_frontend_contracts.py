@@ -400,7 +400,7 @@ class FrontendContractTests(unittest.TestCase):
         sprites = (SERVER_DIR / "static" / "warden-icons.svg").read_text(encoding="utf-8")
         detail = (TEMPLATES_DIR / "endpoints" / "detail.html").read_text(encoding="utf-8")
         endpoint_row = (TEMPLATES_DIR / "partials" / "endpoint_row.html").read_text(encoding="utf-8")
-        dashboard = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+        dashboard = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8") + (TEMPLATES_DIR / "partials/dashboard_content.html").read_text(encoding="utf-8")
         for platform in ("windows", "macos", "linux"):
             self.assertIn(f'id="platform-{platform}"', sprites)
         self.assertIn("#platform-", detail)

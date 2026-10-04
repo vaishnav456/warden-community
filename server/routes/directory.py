@@ -500,11 +500,14 @@ def create_warden_identity():
         "login_email": body["login_email"],
         "endpoint_ids": body["endpoint_ids"], "is_admin": body["is_admin"],
     })
+    from services import mail
+    email_queued = mail.identity_link({"id": result["identity_id"], "company_id": g.company["id"],
+                                      "login_email": body["login_email"]}, setup_token, setup_expires.isoformat())
     queued = int(result.get("queued") or 0)
     setup_url = url_for("directory.setup_warden_identity_password",
                         token=setup_token, _external=True)
     response = jsonify({"ok": True, "identity_id": result["identity_id"], "queued_count": queued,
-                        "setup_url": setup_url,
+                        "setup_url": setup_url, "email_queued": email_queued,
                         "message": f"Identity assigned to {queued} endpoint(s). The user signs in with {body['login_email'] or body['username']}."})
     response.headers["Cache-Control"] = "no-store"
     return response, 201
@@ -576,7 +579,9 @@ def reset_warden_identity_password(identity_id):
     db.audit(g.company["id"], g.admin["id"], "warden_identity_password_reset", {
         "identity_id": identity_id, "setup_expires_at": setup_expires.isoformat(),
     })
-    response = jsonify({"ok": True, "queued_count": 0, "setup_url": setup_url,
+    from services import mail
+    email_queued = mail.identity_link(identity, setup_token, setup_expires.isoformat())
+    response = jsonify({"ok": True, "queued_count": 0, "setup_url": setup_url, "email_queued": email_queued,
                         "message": "A one-time password setup link was created. The current password remains valid until the user completes it."})
     response.headers["Cache-Control"] = "no-store"
     return response

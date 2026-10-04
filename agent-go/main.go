@@ -15,6 +15,20 @@ func main() {
 	// If a command-line argument is given, handle service management
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "--ui-preview":
+			// Harmless visual preview: no approval, network request or job.
+			os.Exit(runWardenUserDialog("Warden design preview", "A calmer workspace. The same control.",
+				"WINDOWS UI PREVIEW ONLY\n\nTry the mouse wheel, scrollbar thumb and keyboard navigation.\n\n"+
+					strings.Repeat("Sample detail: this is design-preview text, not a real endpoint event.\n", 18)+
+					"\nEND OF PREVIEW. No access, support request or device setting has been changed.",
+				"Preview only. Real approvals still require an explicit choice; closing them denies access.", "info", false))
+			return
+		case "--support-status":
+			os.Exit(runSupportStatusCLI())
+			return
+		case "--workspace":
+			os.Exit(runFloatingWorkspace())
+			return
 		case "--request-support":
 			message := ""
 			if len(os.Args) > 2 {

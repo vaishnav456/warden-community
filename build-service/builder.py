@@ -94,6 +94,10 @@ def run_go_build(build_request: dict, dist_dir: pathlib.Path,
         f"-X main.buildTLSTrustMode={trust_mode}"
     )
     if goos == "windows":
+        if cfg.get("heartbeat_encryption_required") is True:
+            ldflags += " -X main.buildHeartbeatEncryption=true"
+        if cfg.get("agent_integrity_verification") is True:
+            ldflags += " -X main.buildAgentIntegrityVerification=true"
         display_name_b64 = base64.urlsafe_b64encode(
             config.AGENT_DISPLAY_NAME.encode("utf-8")
         ).decode("ascii").rstrip("=")
@@ -113,6 +117,8 @@ def run_go_build(build_request: dict, dist_dir: pathlib.Path,
         "GOARCH": goarch,
         "CGO_ENABLED": "0",
     }
+    if goos == "windows" and cfg.get("agent_core_modules") is True:
+        cmd[3:3] = ["-tags", "warden_core"]
     log.info("Cross-compiling agent for %s: %s", target, " ".join(cmd))
     result = subprocess.run(
         cmd,
@@ -182,6 +188,12 @@ def read_agent_version(build_request: dict) -> str:
         else config.AGENT_POSIX_SOURCE_DIR / "main.go"
     )
     text = config_go.read_text(encoding="utf-8")
+    if target.startswith("windows-"):
+        filename = ("version_core_windows.go" if build_request.get("config_json", {}).get("agent_core_modules") is True
+                    else "version_legacy_windows.go")
+        version_file = config.AGENT_GO_SOURCE_DIR / filename
+        if version_file.is_file():
+            text = version_file.read_text(encoding="utf-8")
     m = _VERSION_RE.search(text)
     if not m:
         raise ValueError(f"Could not find agentVersion constant in {config_go}")

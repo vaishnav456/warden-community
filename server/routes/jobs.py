@@ -3,12 +3,18 @@ Warden — Jobs routes
 Job list, detail with live log streaming, retry, cancel.
 """
 import json
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, render_template, request, jsonify, g, abort, Response
 
 import db
+from services.dashboard_view import selected_branch, scoped_url
 from middleware.auth import login_required, company_required, require_branch_scope
 
 bp = Blueprint("jobs", __name__)
+
+
+def _since():
+    return (datetime.now(timezone.utc) - timedelta(days=1)).isoformat() if request.args.get("window") == "24h" else None
 
 
 @bp.route("/jobs")
@@ -18,9 +24,7 @@ def list_jobs():
     company_id = g.company["id"]
     endpoint_id = request.args.get("endpoint_id")
     status = request.args.get("status")
-    branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
-    if g.admin.get("role") == "branch_admin" and not branch_id:
-        abort(403)
+    branch_id = selected_branch()
     try:
         page = max(1, int(request.args.get("page", 1)))
     except (TypeError, ValueError):
@@ -29,7 +33,7 @@ def list_jobs():
     offset = (page - 1) * limit
 
     jobs = db.get_jobs(company_id, endpoint_id=endpoint_id, status=status, branch_id=branch_id,
-                       limit=limit, offset=offset)
+                       limit=limit, offset=offset, created_since=_since())
 
     # Enrich with endpoint info
     endpoint_cache = {}
@@ -46,6 +50,8 @@ def list_jobs():
         endpoint_id=endpoint_id,
         page=page,
         has_more=len(jobs) == limit,
+        scoped_url=lambda path, **filters: scoped_url(path, branch_id, **filters),
+        selected_branch=branch_id, time_window=request.args.get("window", ""),
     )
 
 
@@ -55,11 +61,9 @@ def list_jobs():
 def jobs_table_partial():
     endpoint_id = request.args.get("endpoint_id")
     status = request.args.get("status") or None
-    branch_id = g.admin.get("branch_id") if g.admin.get("role") == "branch_admin" else None
-    if g.admin.get("role") == "branch_admin" and not branch_id:
-        abort(403)
+    branch_id = selected_branch()
     jobs = db.get_jobs(g.company["id"], endpoint_id=endpoint_id, status=status,
-                       branch_id=branch_id, limit=30)
+                       branch_id=branch_id, limit=30, created_since=_since())
     endpoint_cache = {}
     for job in jobs:
         endpoint_key = job.get("endpoint_id")

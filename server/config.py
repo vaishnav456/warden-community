@@ -98,7 +98,12 @@ MAX_CONCURRENT_SESSIONS = int(_os.environ.get("MAX_CONCURRENT_SESSIONS", "3"))
 # ── Ed25519 command signing ───────────────────────────────────────────────────
 # Generate a keypair once: python -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; import base64; k=Ed25519PrivateKey.generate(); print(base64.b64encode(k.private_bytes_raw()).decode())"
 ED25519_PRIVATE_KEY_B64 = _os.environ.get("ED25519_PRIVATE_KEY_B64", "")
+AGENT_MODULE_PACKAGE_DIR = _os.environ.get("AGENT_MODULE_PACKAGE_DIR", str(_pathlib.Path(__file__).resolve().parent.parent / "uploads" / "agent-modules"))
+AGENT_CORE_MODULES_ENABLED = _os.environ.get("AGENT_CORE_MODULES_ENABLED", "false").lower() == "true"
 COMMAND_MAX_AGE_SEC = int(_os.environ.get("COMMAND_MAX_AGE_SEC", "60"))
+HEARTBEAT_MESSAGE_ENCRYPTION = _os.environ.get("HEARTBEAT_MESSAGE_ENCRYPTION", "false").lower() == "true"
+HEARTBEAT_DEVICE_PROOF_REQUIRED = _os.environ.get("HEARTBEAT_DEVICE_PROOF_REQUIRED", "false").lower() == "true"
+ENCRYPT_HEARTBEAT_TELEMETRY = _os.environ.get("ENCRYPT_HEARTBEAT_TELEMETRY", "false").lower() == "true"
 REQUIRE_SIGNED_WINDOWS_APPS = _os.environ.get(
     "REQUIRE_SIGNED_WINDOWS_APPS", "true"
 ).lower() == "true"

@@ -135,6 +135,10 @@ The enforced boundary and retained compatibility identifiers are documented in
 
 The included Compose configuration is a development starting point, not a hardened production deployment.
 
+## Optional agent modules
+
+See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release. Community remains application-only, with no landing page or hosted subscriptions.
+
 ## Third party software
 
 Warden uses third-party Go and Python libraries, browser assets, fonts and Unicode data. See [Third party notices](THIRD_PARTY_NOTICES.md), the [dependency inventory](third_party/inventory.json) and the collected [upstream license texts](third_party/licenses). These components retain their own licenses; their notices do not change Warden's edition-specific licensing in [LICENSING.md](LICENSING.md).

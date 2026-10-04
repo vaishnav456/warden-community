@@ -17,6 +17,7 @@ class LoadController:
         self.active_http = 0
         self.http_latency = 0.0
         self.loop_lag = 0.0
+        self.cpu = self.memory = 0.0
         self.last_cpu = None
         self.metric_times = collections.OrderedDict()
 
@@ -41,6 +42,7 @@ class LoadController:
         with self.lock:
             was_busy = self.busy
             self.loop_lag = lag
+            self.cpu, self.memory = cpu, memory
             http = self.http_latency / 1.0
             self.http_latency *= .8  # stale slow requests must decay
             self.pressure = max(*values, http)
@@ -108,6 +110,11 @@ class LoadController:
             while len(self.metric_times) > 10000:
                 self.metric_times.popitem(last=False)
             return True
+
+    def snapshot(self):
+        with self.lock:
+            return dict(pressure=self.pressure, busy=self.busy, active_http=self.active_http,
+                        cpu_ratio=self.cpu, memory_ratio=self.memory, loop_lag_seconds=self.loop_lag)
 
 
 controller = LoadController()

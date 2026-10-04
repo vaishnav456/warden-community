@@ -22,15 +22,17 @@ func TestWardenApprovalFailsClosed(t *testing.T) {
 		id, source uintptr
 		want       int
 	}{
-		{"deny", 0x111, 7, 1, 2},
+		{"deny", 0x111, 7, 2, 2},
 		{"close", 0x10, 0, 0, 2},
 		{"timeout", 0x113, 0, 0, 2},
 		{"default enter", 0x111, 1, 0, 2},
 		{"no affirmative control", 0x111, 6, 0, 2},
+		{"wrong affirmative control", 0x111, 6, 2, 2},
+		{"non-click notification", 0x111, 6 | (1 << 16), 1, 2},
 		{"explicit allow", 0x111, 6, 1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			currentWardenUI = &wardenUI{approval: true, result: 2}
+			currentWardenUI = &wardenUI{approval: true, result: 2, allow: 1, deny: 2}
 			defer func() { currentWardenUI = nil }()
 			wardenWindowProc(0, tc.message, tc.id, tc.source)
 			if currentWardenUI.result != tc.want {
@@ -46,9 +48,9 @@ func TestHomeDeletionPromptCloseDefersAndRestoreIsExplicit(t *testing.T) {
 		id, source uintptr
 		want       int
 	}{
-		{0x10, 0, 0, 2}, {0x113, 0, 0, 2}, {0x111, 7, 0, 2}, {0x111, 7, 1, 1}, {0x111, 6, 1, 0},
+		{0x10, 0, 0, 2}, {0x113, 0, 0, 2}, {0x111, 7, 0, 2}, {0x111, 7, 2, 1}, {0x111, 6, 1, 0},
 	} {
-		currentWardenUI = &wardenUI{approval: true, deletion: true, result: 2}
+		currentWardenUI = &wardenUI{approval: true, deletion: true, result: 2, allow: 1, deny: 2}
 		wardenWindowProc(0, tc.message, tc.id, tc.source)
 		if currentWardenUI.result != tc.want {
 			t.Fatal(currentWardenUI.result, tc.want)

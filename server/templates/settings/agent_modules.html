@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block title %}Settings — Agent modules{% endblock %}
+{% block content %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+  {% include 'settings/_navigation.html' %}
+  <section class="flex-1 min-w-0 bg-base-850 border border-base-600 rounded-xl p-5 space-y-4">
+    <h2 class="text-base font-semibold text-ink-100">Agent modules</h2>
+    <p class="text-sm text-ink-400">Core stays installed. Optional applications are separate verified downloads, not executable plugins loaded into the service.</p>
+    <h3 class="text-sm font-semibold text-ink-100">Helpdesk</h3>
+    <p class="text-sm text-ink-400">Ticket creation, conversations and conditional organization forms. Remote access permissions remain separate.</p>
+    {% if not module_policy %}<p class="text-sm text-ink-400">Existing bundled installations are unchanged until you save a choice. New Core module downloads are disabled by default.</p>{% endif %}
+    <form method="POST" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="form-label" for="helpdesk-enabled">Organization permission</label>
+      <select class="form-input" id="helpdesk-enabled" name="enabled">
+        <option value="false" {% if not module_policy or not module_policy.enabled %}selected{% endif %}>Disabled</option>
+        <option value="true" {% if module_policy and module_policy.enabled %}selected{% endif %}>Enabled</option>
+      </select>
+      <p class="text-xs text-ink-500">Disabling blocks new downloads and ticket API actions. It does not terminate a remote session or discard an open form.</p>
+      <button class="btn btn-primary" type="submit">Save module permission</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -37,15 +37,16 @@ class WorkspaceUITests(unittest.TestCase):
         self.assertIn('href="/endpoints?state=online"', html)
         self.assertIn('href="/alerts"', html)
         source = (SERVER / "routes/dashboard.py").read_text(encoding="utf-8")
-        self.assertIn("total_count=len(endpoints)", source)
+        self.assertIn("total_count=fleet['total_count'] if fleet is not None else len(endpoints)", source)
 
     def test_dashboard_preserves_live_identity_and_refresh_controls(self):
         source = (SERVER / "templates/dashboard.html").read_text(encoding="utf-8")
-        self.assertIn("e.display_name or e.hostname", source)
-        self.assertIn("{{ e.hostname }} ·", source)
+        panels = (SERVER / "templates/partials/dashboard_content.html").read_text(encoding="utf-8")
+        self.assertIn("e.display_name or e.hostname", panels)
+        self.assertIn("{{ e.hostname }} ·", panels)
         self.assertIn('hx-get="/partials/stats"', source)
         self.assertIn("every 30s", source)
-        self.assertIn('href="/endpoints/{{ e.id }}"', source)
+        self.assertIn('href="/endpoints/{{ e.id }}"', panels)
 
     def test_shared_styling_does_not_add_a_community_landing_page(self):
         landing = SERVER / "templates/landing.html"
@@ -58,3 +59,9 @@ class WorkspaceUITests(unittest.TestCase):
         else:
             self.assertFalse((SERVER / "routes/marketing.py").exists())
             self.assertFalse((SERVER / "static/js/landing-console.js").exists())
+
+    def test_dashboard_refresh_does_not_close_expanded_details(self):
+        source = (SERVER / "static/js/warden.js").read_text(encoding="utf-8")
+        self.assertIn("snapshot.querySelector('details[open]')", source)
+        self.assertIn("snapshot.contains(document.activeElement)", source)
+        self.assertIn("event.detail.shouldSwap = false", source)

@@ -26,10 +26,11 @@ const (
 	pollIntervalSec     = 30
 	heartbeatTimeoutSec = 10
 	jobTimeoutSec       = 300
-	agentVersion        = "2.6.55"
 )
 
 type AgentConfig struct {
+	AgentIntegrityVerification bool `json:"agent_integrity_verification,omitempty"`
+	HeartbeatEncryptionRequired bool `json:"heartbeat_encryption_required,omitempty"`
 	ServerURL           string   `json:"server_url"`
 	ServerEd25519Pubkey string   `json:"server_ed25519_pubkey"`
 	CertFingerprint     string   `json:"cert_fingerprint"`

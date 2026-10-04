@@ -95,6 +95,7 @@ services:
     cap_drop: [ALL]
 
   warden-server:
+    stop_grace_period: 45s
     build:
       context: ./server
       dockerfile: Dockerfile

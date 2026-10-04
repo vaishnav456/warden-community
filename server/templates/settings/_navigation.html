@@ -1,5 +1,8 @@
 <nav class="settings-navigation w-full lg:w-48 flex-shrink-0 flex lg:block gap-1 overflow-x-auto lg:overflow-visible lg:space-y-0.5 pb-2 lg:pb-0" aria-label="Settings navigation">
+  <a href="/settings/email-notifications" class="nav-item text-sm {{ 'active' if settings_section == 'email_notifications' }}">Email notifications</a>
+  {% if current_user.role == 'company_admin' %}<a href="/settings/mail" class="nav-item text-sm {{ 'active' if settings_section == 'mail' }}">SMTP delivery</a>{% endif %}
   <a href="{{ url_for('settings.index') }}" class="nav-item text-sm {{ 'active' if settings_section == 'account' }}">Account</a>
+  {% if current_user.role in ['superadmin','company_admin'] %}<a href="{{ url_for('settings.agent_modules') }}" class="nav-item text-sm {{ 'active' if settings_section == 'agent_modules' }}">Agent modules</a>{% endif %}
   <a href="{{ url_for('settings.branches') }}" class="nav-item text-sm {{ 'active' if settings_section == 'branches' }}">Branches</a>
   <a href="{{ url_for('users.list_users') }}" class="nav-item text-sm {{ 'active' if settings_section == 'users' }}">Admin Users</a>
   <a href="{{ url_for('settings.tokens') }}" class="nav-item text-sm {{ 'active' if settings_section == 'tokens' }}">Zero-touch Enrollment</a>

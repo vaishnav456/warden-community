@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"golang.org/x/sys/windows"
 	"os"
 	"os/exec"
@@ -24,11 +23,24 @@ const supportPipeName = `\\.\pipe\WardenSupport.v1`
 var supportMessageFromUI string
 
 type supportRequest struct {
-	Message string `json:"message"`
+	Action    string            `json:"action,omitempty"`
+	Message   string            `json:"message"`
+	RequestID string            `json:"request_id,omitempty"`
+	MessageID string            `json:"message_id,omitempty"`
+	Subject   string            `json:"subject,omitempty"`
+	Category  string            `json:"category,omitempty"`
+	Priority  string            `json:"priority,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	Page      int               `json:"page,omitempty"`
 }
 type supportResponse struct {
-	OK      bool   `json:"ok"`
-	Message string `json:"message"`
+	OK        bool               `json:"ok"`
+	Message   string             `json:"message"`
+	Activity  *workspaceActivity `json:"activity,omitempty"`
+	Data      *helpdeskData      `json:"data,omitempty"`
+	RequestID string             `json:"request_id,omitempty"`
+	ModulePath string            `json:"module_path,omitempty"`
+	ModuleSHA256 string          `json:"module_sha256,omitempty"`
 }
 
 func validateSupportMessage(message string) error {
@@ -73,7 +85,7 @@ func namedPipeUser(h windows.Handle, server bool) (string, string, error) {
 	return domain + "\\" + account, user.User.Sid.String(), nil
 }
 func createSupportPipe() (windows.Handle, error) {
-	descriptor, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GRGW;;;IU)")
+	descriptor, err := windows.SecurityDescriptorFromString("O:SYD:P(A;;GA;;;SY)(A;;GRGW;;;IU)")
 	if err != nil {
 		return 0, err
 	}
@@ -114,22 +126,35 @@ func runSupportBroker(stop <-chan struct{}) {
 		username, sid, err := namedPipeUser(h, false)
 		response := supportResponse{Message: "Support request could not be sent. Please try again."}
 		if err == nil && sid != "S-1-5-18" {
-			raw, readErr := readIdentityBrokerFrame(pipeFile{h})
+			raw, readErr := readSupportFrame(pipeFile{h})
 			var request supportRequest
-			if readErr == nil && json.Unmarshal(raw, &request) == nil && validateSupportMessage(request.Message) == nil {
-				if time.Since(last[sid]) < time.Minute {
+			if readErr == nil && json.Unmarshal(raw, &request) == nil && supportActionValid(request) {
+				if request.Action == "activity" {
+					state := currentWorkspaceActivity()
+					response = supportResponse{OK: true, Message: "Local activity status", Activity: &state}
+				} else if request.Action == "module-launch" {
+					response = helpdeskModuleLaunchResponse()
+				} else if !supportReadOnly(request.Action) && time.Since(last[sid]) < 3*time.Second {
 					response.Message = "A request was just submitted. Wait a minute before retrying."
 				} else {
-					last[sid] = time.Now()
-					result, postErr := apiPost("/api/agent/support-request", map[string]interface{}{"username": username, "message": request.Message}, true, 10)
-					if postErr == nil && result["ok"] == true {
-						response = supportResponse{OK: true, Message: "Your support request is in the queue. Remote access still requires your approval."}
+					if !supportReadOnly(request.Action) {
+						last[sid] = time.Now()
 					}
+					response = supportServerRequest(request, username)
 				}
 			}
 		}
+		// Keep JSON within the broker's 8 KiB frame even with Unicode and
+		// escaped punctuation. The complete conversation remains on the server.
+		runes := []rune(response.Message)
+		if len(runes) > 1000 {
+			response.Message = string(runes[:1000]) + "\n[More replies available from IT]"
+		}
 		encoded, _ := json.Marshal(response)
-		_ = writeIdentityBrokerFrame(pipeFile{h}, encoded)
+		if len(encoded) > supportMaxFrame {
+			encoded, _ = json.Marshal(supportResponse{Message: "Ticket data exceeded the safe response size. Contact IT support."})
+		}
+		_ = writeSupportFrame(pipeFile{h}, encoded)
 		timeout.Stop()
 		closePipe()
 		for sid, at := range last {
@@ -139,55 +164,60 @@ func runSupportBroker(stop <-chan struct{}) {
 		}
 	}
 }
-func runSupportCLI(message string) int {
-	supportMessageFromUI = ""
-	if message == "" {
-		message = "Please describe the problem and click Send request."
-	}
-	if runWardenUserDialog("Warden Support", "Ask your IT team for help", message, "This sends your description and Windows account name to your organization's Warden console. It does not grant remote access.", "info", true) != 0 {
-		return 2
-	}
-	message = supportMessageFromUI
-	if err := validateSupportMessage(message); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
+func runSupportCLI(message string) int { return runHelpdeskCreate(message) }
+func runSupportStatusCLI() int         { return runHelpdeskTickets() }
+
+func exchangeSupportRequest(request supportRequest) (supportResponse, error) {
 	name, _ := windows.UTF16PtrFromString(supportPipeName)
-	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
+	// Identification-only SQOS: even a privileged pipe server must not
+	// impersonate the signed-in user through this helpdesk connection.
+	const identificationOnly = 0x00100000 | 0x00010000
+	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, identificationOnly, 0)
+	deadline := time.Now().Add(15 * time.Second)
+	for supportConnectionRetryable(err) && time.Now().Before(deadline) {
+		// Retry connection only; never resend a ticket mutation.
+		time.Sleep(50 * time.Millisecond)
+		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, identificationOnly, 0)
+	}
 	if err != nil {
-		runWardenUserDialog("Warden Support unavailable", "Could not reach the Warden service", "Your request was not sent. Ask your IT team to check the agent.", "", "warning", false)
-		return 1
+		return supportResponse{}, err
 	}
 	var once sync.Once
 	closePipe := func() { once.Do(func() { windows.CloseHandle(h) }) }
 	defer closePipe()
 	timeout := time.AfterFunc(25*time.Second, closePipe)
 	defer timeout.Stop()
-	_, sid, err := namedPipeUser(h, true)
-	if err != nil || sid != "S-1-5-18" {
-		return 1
+	// Normal users cannot query a SYSTEM process token. Check ownership on
+	// this connected pipe handle instead: normal users cannot assign SYSTEM.
+	descriptor, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil || !supportServerOwnerTrusted(descriptor) {
+		return supportResponse{}, errors.New("untrusted support service")
 	}
-	encoded, _ := json.Marshal(supportRequest{Message: message})
-	if err = writeIdentityBrokerFrame(pipeFile{h}, encoded); err != nil {
-		return 1
+	encoded, _ := json.Marshal(request)
+	if err = writeSupportFrame(pipeFile{h}, encoded); err != nil {
+		return supportResponse{}, err
 	}
-	raw, err := readIdentityBrokerFrame(pipeFile{h})
+	raw, err := readSupportFrame(pipeFile{h})
 	if err != nil {
-		return 1
+		return supportResponse{}, err
 	}
 	var result supportResponse
 	if json.Unmarshal(raw, &result) != nil {
-		return 1
+		return supportResponse{}, errors.New("invalid support response")
 	}
-	severity := "warning"
-	if result.OK {
-		severity = "info"
+	return result, nil
+}
+
+func supportConnectionRetryable(err error) bool {
+	return errors.Is(err, windows.ERROR_PIPE_BUSY) || errors.Is(err, windows.ERROR_FILE_NOT_FOUND)
+}
+
+func supportServerOwnerTrusted(descriptor *windows.SECURITY_DESCRIPTOR) bool {
+	if descriptor == nil {
+		return false
 	}
-	runWardenUserDialog("Warden Support", "Request status", result.Message, "No remote access has been granted.", severity, false)
-	if !result.OK {
-		return 1
-	}
-	return 0
+	owner, _, err := descriptor.Owner()
+	return err == nil && owner != nil && owner.String() == "S-1-5-18"
 }
 func ensureSupportShortcut() {
 	exe, err := os.Executable()

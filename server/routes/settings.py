@@ -19,6 +19,30 @@ from middleware.auth import login_required, company_required, role_required, req
 bp = Blueprint("settings", __name__)
 
 
+@bp.route('/settings/agent-modules', methods=['GET', 'POST'])
+@login_required
+@company_required
+@role_required('company_admin')
+def agent_modules():
+    from services import agent_modules as modules
+    if request.method == 'POST':
+        enabled = request.form.get('enabled', 'false')
+        if enabled not in ('true', 'false'):
+            abort(400)
+        db._post('agent_module_policies?on_conflict=company_id,module_id',
+                 dict(company_id=g.company['id'], module_id='helpdesk', enabled=enabled == 'true',
+                      updated_by=g.admin['id'], updated_at=db._now_iso()),
+                 prefer='resolution=merge-duplicates,return=representation')
+        db.audit(g.company['id'], g.admin['id'], 'agent_module_policy_changed',
+                 dict(module_id='helpdesk', enabled=enabled == 'true'))
+        flash('Helpdesk module settings saved.', 'success')
+        return redirect(url_for('settings.agent_modules'))
+    return render_template('settings/agent_modules.html', settings_section='agent_modules',
+                           module_policy=modules.policy(g.company['id']),
+                           module_entitled=modules.entitled(g.company['id']))
+
+
+
 def _parse_dt(dt_str):
     if not dt_str:
         return None
@@ -1298,12 +1322,13 @@ def agent_recovery_script():
 @bp.route("/settings/notifications", methods=["POST"])
 @login_required
 def update_notifications():
-    prefs = {
+    prefs = dict(g.admin.get("notification_prefs") or {})
+    prefs.update({
         "in_app": request.form.get("in_app") == "1",
         "escalation": request.form.get("escalation") == "1",
         "alerts": request.form.get("alerts") == "1",
         "email": request.form.get("email") == "1",
-    }
+    })
     db.update_admin(g.admin["id"], {"notification_prefs": prefs})
     return jsonify({"ok": True})
 

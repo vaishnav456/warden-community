@@ -41,8 +41,8 @@ def _check_once():
 
 
 def _loop():
-    while True:
-        time.sleep(_INTERVAL)
+    from services.lifecycle import stopping
+    while not stopping.wait(_INTERVAL):
         health_tracker.ping("stale_checker")
         _check_once()
 

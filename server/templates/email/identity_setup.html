@@ -1,0 +1,6 @@
+{% extends "email/base.html" %}
+{% block message %}
+<p style="font-size:15px;line-height:1.65">Your administrator created a password setup link for your Warden identity. Choose your own password using the button below.</p>
+<p style="font-size:15px;line-height:1.65">The link is single-use. {{ expiry_notice }}</p>
+<p style="font-size:15px;line-height:1.65">If this is a password reset, your existing password remains valid until you finish. Do not forward the link. Contact your administrator if this was unexpected.</p>
+{% endblock %}

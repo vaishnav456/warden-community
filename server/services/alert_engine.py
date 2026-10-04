@@ -227,8 +227,8 @@ def _check_connection_anomalies(endpoint_id, company_id, branch_id, hostname):
 
 
 def _loop():
-    while True:
-        time.sleep(_INTERVAL)
+    from services.lifecycle import stopping
+    while not stopping.wait(_INTERVAL):
         health_tracker.ping("alert_engine")
         _check_once()
 

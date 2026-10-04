@@ -44,7 +44,7 @@ def read_build_artifact(build, kind):
     return data
 
 
-def update_payload(endpoint):
+def update_payload(endpoint, *, build=None):
     """Return a build-ID-pinned update payload for one endpoint.
 
     Build-specific URLs avoid the race where `/latest-exe` changes between
@@ -53,7 +53,9 @@ def update_payload(endpoint):
     the same state as a fresh MSI installation.
     """
     target = db.endpoint_target_platform(endpoint)
-    build = db.get_latest_completed_build(target)
+    build = build if build is not None else db.get_latest_completed_build(target)
+    if build and build.get("target_platform", target) != target:
+        raise AgentBuildUnavailable("agent build platform does not match this endpoint")
     if not build or not build.get("sha256") or not build.get("agent_version"):
         raise AgentBuildUnavailable("no agent build is available")
 

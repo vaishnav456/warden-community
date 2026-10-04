@@ -120,7 +120,7 @@ class ModuleCorrectionTests(unittest.TestCase):
         self.assertNotIn("foreign", result)
 
     def test_windows_patch_checks_all_results_and_rejects_forced_restart(self):
-        source = (pathlib.Path(__file__).parents[2]/"agent-go"/"commands.go").read_text()
+        source = (pathlib.Path(__file__).parents[2]/"agent-go"/"commands_patches_windows.go").read_text()
         self.assertIn("$ready.Count -ne $selected.Count", source)
         self.assertIn("$result.GetUpdateResult($i)", source)
         self.assertIn("$r.ResultCode -ne 2", source)

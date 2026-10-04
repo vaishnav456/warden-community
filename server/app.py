@@ -47,6 +47,8 @@ ASSET_VERSION = str(int(time.time()))
 # X-Forwarded-For/X-Forwarded-Proto is trustworthy — anything further back
 # in the chain is attacker-controlled and must not be trusted.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+from services.request_limits import ControlPlaneBodyLimits
+app.wsgi_app = ControlPlaneBodyLimits(app.wsgi_app)
 
 logging.basicConfig(
     level=logging.DEBUG if config.DEBUG else logging.INFO,
@@ -84,6 +86,8 @@ app.register_blueprint(fleet_tools_bp)
 from routes.topology import bp as topology_bp
 
 app.register_blueprint(auth_bp)
+from routes.mail import bp as mail_bp
+app.register_blueprint(mail_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(endpoints_bp)
 app.register_blueprint(escalations_bp)
@@ -141,6 +145,10 @@ def setup_context():
     g.is_admin_domain = False
 
     load_current_user()
+
+from services.operational_requests import install as install_operational_requests
+install_operational_requests(app)
+
 
 @app.after_request
 def security_headers(response):
@@ -279,6 +287,14 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/ready")
+def readiness():
+    from services.lifecycle import stopping
+    if stopping.is_set():
+        return jsonify({"status": "draining"}), 503
+    return health()
+
+
 @app.route("/favicon.ico")
 def favicon_compat():
     """Serve legacy browser favicon probes from the canonical Warden mark."""
@@ -346,6 +362,14 @@ def server_error(e):
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 def start_background_services():
+    from services.process_role import role
+    mode = role()
+    if mode == 'api':
+        if not _os.environ.get('WARDEN_RELAY_HEALTH_URL'):
+            raise RuntimeError('API role requires the dedicated relay readiness URL')
+        return
+    if mode == 'relay':
+        raise RuntimeError('Use services.relay_runner for the dedicated relay')
     import db
     from services.stale_checker import start as start_stale_checker
     from services.ws_proxy import start as start_ws_proxy
@@ -355,13 +379,17 @@ def start_background_services():
         # Relay pairs are process-local and cannot survive a restart. Revoke
         # their browser tokens so the UI creates a fresh session/job instead
         # of reusing a dead database row left by an unclean shutdown.
-        db.close_all_active_remote_sessions()
+        if mode == 'combined':
+            db.close_all_active_remote_sessions()
     except Exception:
         log.exception("Could not invalidate remote sessions after relay restart")
     start_stale_checker()
-    start_ws_proxy()
+    if mode == 'combined':
+        start_ws_proxy()
     start_alert_engine()
     start_scheduler()
+    from services.mail import start as start_mail
+    start_mail()
 
 
 # Start background services inside Warden's single threaded Gunicorn worker

@@ -619,6 +619,10 @@ async def _handle_home_target(websocket, session_id: str, key: str) -> None:
 # ── Main dispatcher ───────────────────────────────────────────────────────────
 
 async def _handle(websocket) -> None:
+    from services.lifecycle import stopping
+    if stopping.is_set():
+        await websocket.close(1012, "server restarting; reconnect")
+        return
     raw_path = websocket.request.path
     parsed   = urlparse(raw_path)
     parts    = [p for p in parsed.path.strip("/").split("/") if p]
@@ -682,6 +686,17 @@ async def _handle(websocket) -> None:
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
+
+async def _shutdown_relays():
+    peers = []
+    for pair in tuple(_pairs.values()):
+        peers.extend(peer for peer in (pair.browser_ws, pair.agent_ws) if peer is not None)
+    for pair in tuple(_home_pairs.values()):
+        peers.extend(peer for peer in (pair.initiator_ws, pair.target_ws) if peer is not None)
+    if peers:
+        await asyncio.gather(*(peer.close(1012, "server restarting; reconnect") for peer in peers),
+                             return_exceptions=True)
+
 def start() -> None:
     """Start the WebSocket relay in a background daemon thread."""
 
@@ -706,7 +721,10 @@ def start() -> None:
                 _ready.set()
                 monitor = asyncio.create_task(monitor_pressure())
                 try:
-                    await asyncio.Future()
+                    from services.lifecycle import stopping
+                    while not stopping.is_set():
+                        await asyncio.sleep(.2)
+                    await _shutdown_relays()
                 finally:
                     monitor.cancel()
                     await asyncio.gather(monitor, return_exceptions=True)
@@ -730,4 +748,18 @@ def start() -> None:
 
 def is_ready() -> bool:
     """True only after port 35021 has been bound successfully."""
+    from services.process_role import role
+    if role() == 'api':
+        import urllib.request
+        import os
+        from urllib.parse import urlsplit
+        url = os.environ.get('WARDEN_RELAY_HEALTH_URL','')
+        parsed = urlsplit(url)
+        if parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        try:
+            with urllib.request.urlopen(url,timeout=2) as response:
+                return response.status == 200
+        except OSError:
+            return False
     return _ready.is_set() and _startup_error is None

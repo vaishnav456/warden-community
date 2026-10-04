@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Email delivery{% endblock %}
+{% block content %}
+{% set settings_section = 'mail' %}
+<div class="settings-layout flex flex-col lg:flex-row gap-6">
+{% if not platform_mail %}{% include "settings/_navigation.html" %}{% endif %}
+<section class="flex-1 min-w-0 space-y-6">
+<h1 class="text-xl font-bold">Email delivery</h1>
+<p class="text-sm text-ink-500">{% if platform_mail %}Platform-managed SMTP serves hosted organizations. Only platform administrators can change it.{% else %}Organization-managed SMTP serves this Community organization.{% endif %} Passwords and queued message bodies are encrypted at rest.</p>
+<form action="{{ mail_path }}" method="post" class="bg-base-850 rounded-xl border border-base-600 p-5 space-y-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label class="flex gap-2 items-center"><input type="checkbox" name="enabled" value="1" {% if smtp.enabled %}checked{% endif %}> Enable email delivery</label>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<div><label for="smtp-host" class="form-label">SMTP host</label><input id="smtp-host" class="form-input w-full" name="host" value="{{ smtp.host or '' }}" maxlength="253" required placeholder="smtp.example.com"></div>
+<div><label for="smtp-port" class="form-label">Port</label><input id="smtp-port" class="form-input w-full" type="number" name="port" value="{{ smtp.port or 587 }}" min="1" max="65535" required></div>
+<div><label for="smtp-mode" class="form-label">Encryption</label><select id="smtp-mode" class="form-input w-full" name="mode"><option value="starttls" {% if smtp.mode != 'tls' %}selected{% endif %}>Required STARTTLS (usually 587)</option><option value="tls" {% if smtp.mode == 'tls' %}selected{% endif %}>Implicit TLS (usually 465)</option></select></div>
+<div><label for="smtp-user" class="form-label">Username (optional for trusted relays)</label><input id="smtp-user" class="form-input w-full" name="username" value="{{ smtp.username or '' }}" maxlength="512" autocomplete="off"></div>
+<div><label for="smtp-password" class="form-label">SMTP password / app password</label><input id="smtp-password" type="password" class="form-input w-full" name="password" autocomplete="new-password" maxlength="2048" placeholder="{{ 'Saved — leave blank to keep' if smtp.password_saved else 'Not configured' }}"><p class="text-xs text-ink-500 mt-1">Never displayed. Changing host or username requires a new password.</p></div>
+<div><label for="smtp-from" class="form-label">Sender email</label><input id="smtp-from" class="form-input w-full" type="email" name="from_email" value="{{ smtp.from_email or '' }}" maxlength="254" required></div>
+<div><label for="smtp-name" class="form-label">Sender name</label><input id="smtp-name" class="form-input w-full" name="from_name" value="{{ smtp.from_name or 'Warden' }}" maxlength="120" required></div>
+</div>
+<label class="flex gap-2 items-center text-sm"><input type="checkbox" name="clear_password" value="1"> Remove saved password (also clear username if relay needs no authentication)</label>
+<button class="btn btn-primary" type="submit">Save SMTP settings</button>
+</form>
+<form action="{{ mail_path }}/test" method="post" class="space-y-2">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<button class="btn btn-secondary" type="submit">Send test to my email</button>
+<p class="text-xs text-ink-500">Save first. Test mail is sent only to your login email. Optional notifications are controlled by each user in <a class="text-accent-400 underline" href="/settings/email-notifications">Email notifications</a>.</p>
+</form>
+<div class="bg-base-850 rounded-xl border border-base-600 p-5">
+<h2 class="text-sm font-semibold mb-3">Recent deliveries</h2>
+<p class="text-xs text-ink-500 mb-3">Sent means the SMTP server accepted the message, not that it reached the inbox. Temporary failures retry automatically, up to six attempts. Delivery metadata is kept for seven days; message bodies are removed on completion.</p>
+<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-2">Time</th><th class="text-left p-2">Category</th><th class="text-left p-2">Status</th><th class="text-left p-2">Attempts</th><th class="text-left p-2">Result</th></tr></thead><tbody>
+{% for row in mail_rows %}<tr><td class="p-2 whitespace-nowrap">{{ row.created_at | timeago }}</td><td class="p-2">{{ row.category }}</td><td class="p-2">{{ row.status }}</td><td class="p-2">{{ row.attempts }}</td><td class="p-2 break-all">{{ row.result_code or 'Queued' }}</td></tr>{% else %}<tr><td class="p-2" colspan="5">No deliveries yet.</td></tr>{% endfor %}
+</tbody></table></div></div>
+</section></div>
+{% endblock %}

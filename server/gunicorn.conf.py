@@ -43,3 +43,14 @@ preload_app = False
 
 # Graceful restart
 graceful_timeout = 30
+
+
+def post_worker_init(worker):
+    from services.lifecycle import install_signal_handlers
+    install_signal_handlers()
+
+
+def worker_exit(server, worker):
+    from services.lifecycle import begin_shutdown, wait_for_workers
+    begin_shutdown()
+    wait_for_workers()

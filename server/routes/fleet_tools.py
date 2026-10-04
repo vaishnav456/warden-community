@@ -6,6 +6,7 @@ from middleware.auth import login_required,company_required,role_required,requir
 from services import fleet_tools as tools
 from services.entitlements import check_job
 from services.device_health import age_seconds
+from services import support_workflow
 from policy_settings import validate_settings_dict
 
 bp=Blueprint('fleet_tools',__name__)
@@ -95,36 +96,165 @@ def control_software_rule(rule_id,action):
 @login_required
 @company_required
 def support():
+    from services import helpdesk
     endpoints={str(ep['id']):ep for ep in scoped_endpoints()}
-    rows=db._get(f"support_requests?company_id=eq.{db._q(g.company['id'])}&order=created_at.desc&limit=500")
-    scoped=[]
-    for row in rows:
-        endpoint=endpoints.get(str(row['endpoint_id']))
-        if endpoint:
-            row['request']=db.decrypt_field(g.company,row.pop('request_encrypted',None),'support.request') or {}
-            row['endpoint']=endpoint;scoped.append(row)
-    return render_template('fleet/support.html',requests=scoped,active_page='fleet_support')
+    rows=db._get(f"support_requests?company_id=eq.{db._q(g.company['id'])}&order=updated_at.desc&limit=500")
+    scoped=[helpdesk.hydrate(row,g.company,endpoints[str(row['endpoint_id'])])
+            for row in rows if str(row['endpoint_id']) in endpoints]
+    query=request.args.get('q','').strip().casefold()[:160]
+    state=request.args.get('state','active')
+    if state not in {'active','all','open','claimed','resolved','mine'}:state='active'
+    counts={key:sum(row['status']==key for row in scoped) for key in ('open','claimed','resolved')}
+    def matches(row):
+        if state=='active' and row['status']=='resolved':return False
+        if state in counts and row['status']!=state:return False
+        if state=='mine' and str(row.get('claimed_by'))!=str(g.admin['id']):return False
+        haystack=' '.join(str(value or '') for value in (row['number'],row['request'].get('subject'),
+            row['request'].get('username'),row['endpoint'].get('display_name'),row['endpoint'].get('hostname')))
+        return not query or query in haystack.casefold()
+    return render_template('fleet/support.html',requests=[row for row in scoped if matches(row)],
+        counts=counts,query=request.args.get('q','')[:160],state=state,active_page='fleet_support')
+
+
+def support_ticket(request_id):
+    from services import helpdesk
+    try:request_id=helpdesk.identifier(request_id)
+    except ValueError:abort(404)
+    rows=db._get(f"support_requests?id=eq.{db._q(request_id)}&company_id=eq.{db._q(g.company['id'])}")
+    if not rows:abort(404)
+    endpoint=next((ep for ep in scoped_endpoints() if str(ep['id'])==str(rows[0]['endpoint_id'])),None)
+    if not endpoint:abort(404)
+    return rows[0],endpoint
+
+
+@bp.get('/operations/support/new')
+@login_required
+@company_required
+@role_required('superadmin','company_admin','branch_admin','technician')
+def support_new():
+    import uuid
+    from services import helpdesk
+    return render_template('fleet/support_new.html',endpoints=scoped_endpoints(),
+        definition=helpdesk.load_form(g.company),ticket_id=str(uuid.uuid4()),active_page='fleet_support')
+
+
+@bp.post('/operations/support/new')
+@login_required
+@company_required
+@role_required('superadmin','company_admin','branch_admin','technician')
+def support_create():
+    from services import helpdesk
+    endpoint=next((ep for ep in scoped_endpoints() if str(ep['id'])==request.form.get('endpoint_id')),None)
+    if not endpoint:abort(404)
+    definition=helpdesk.load_form(g.company)
+    try:
+        username=helpdesk.short(request.form.get('username'),256)
+        body=helpdesk.ticket_content(dict(message=request.form.get('message'),subject=request.form.get('subject'),
+            category=request.form.get('category'),priority=request.form.get('priority'),
+            fields={field['id']:request.form.get('field_'+field['id'],'') for field in definition['fields']}),definition,username,endpoint.get('branch_id'))
+        result=helpdesk.action(g.company,endpoint,request.form.get('ticket_id'),'create',
+            admin=g.admin,username=username,body=body)
+    except ValueError as exc:abort(400,str(exc))
+    helpdesk.http_error(result)
+    db.audit(g.company['id'],g.admin['id'],'support_requested',dict(request_id=result['id']),
+        endpoint_id=endpoint['id'],branch_id=endpoint.get('branch_id'))
+    return redirect(url_for('fleet_tools.support_detail',request_id=result['id']),303)
+
+
+@bp.get('/operations/support/form')
+@login_required
+@company_required
+@role_required('superadmin','company_admin')
+def support_form():
+    import json
+    from services import helpdesk
+    return render_template('fleet/support_form.html',definition=helpdesk.load_form(g.company),branches=db.get_branches(g.company['id']),
+                           active_page='fleet_support')
+
+
+@bp.post('/operations/support/form')
+@login_required
+@company_required
+@role_required('superadmin','company_admin')
+def support_form_save():
+    import json
+    from services import helpdesk
+    raw=request.form.get('definition')
+    if raw and len(raw)>12000:abort(400)
+    try:
+        if raw:
+            candidate=json.loads(raw)
+        else:
+            columns=[request.form.getlist(key) for key in ('field_id','field_label','field_type','field_options','field_condition')]
+            if len(columns[0])>8 or len({len(column) for column in columns})!=1:raise ValueError('Invalid question list.')
+            required=set(request.form.getlist('field_required'))
+            candidate=dict(categories=[value.strip() for value in request.form.get('categories','').splitlines() if value.strip()],
+                fields=[dict(id=key,label=label,type=kind,required=key in required,
+                    **(dict(options=[value.strip() for value in options.splitlines() if value.strip()]) if kind=='select' else {}),
+                    **(dict(show_if=json.loads(condition)) if condition and condition!='null' else {}))
+                    for key,label,kind,options,condition in zip(*columns)])
+        definition=helpdesk.form_definition(candidate)
+        branch_ids={str(branch['id']) for branch in db.get_branches(g.company['id'])}
+        if any(rule['source']=='branch' and rule['value'] not in branch_ids
+               for field in definition['fields'] for rule in field.get('show_if',{}).get('rules',[])):
+            raise ValueError('Choose a branch from this organization.')
+    except (ValueError,TypeError) as exc:abort(400,str(exc))
+    db._post('support_forms?on_conflict=company_id',dict(company_id=g.company['id'],
+        definition_encrypted=db.encrypt_field(g.company,definition,'support.form'),updated_at=db._now_iso()),
+        prefer='resolution=merge-duplicates,return=representation')
+    db.audit(g.company['id'],g.admin['id'],'support_form_updated',dict(custom_fields=len(definition['fields'])))
+    flash('Helpdesk form saved. Existing tickets retain their original field labels and values.','success')
+    return redirect(url_for('fleet_tools.support_form'),303)
+
+
+@bp.get('/operations/support/<request_id>')
+@login_required
+@company_required
+def support_detail(request_id):
+    import uuid
+    from services import helpdesk
+    row,endpoint=support_ticket(request_id)
+    admins=[a for a in db.get_admins_for_company(g.company['id']) if a.get('is_active')
+            and a.get('role') in {'company_admin','branch_admin','technician'}
+            and (a.get('role')!='branch_admin' or str(a.get('branch_id'))==str(endpoint.get('branch_id')))]
+    try:page=max(0,min(10000,int(request.args.get('message_page',0))))
+    except (ValueError,TypeError):abort(400)
+    return render_template('fleet/support_detail.html',item=helpdesk.hydrate(row,g.company,endpoint,True,page),
+        admins=admins,message_id=str(uuid.uuid4()),active_page='fleet_support')
 
 
 @bp.post('/operations/support/<request_id>/<action>')
 @login_required
 @company_required
-@role_required('superadmin','company_admin','branch_admin')
+@role_required('superadmin','company_admin','branch_admin','technician')
 def support_action(request_id,action):
-    if action not in {'claim','resolve'}:abort(400)
-    path=f"support_requests?id=eq.{db._q(request_id)}&company_id=eq.{db._q(g.company['id'])}"
-    rows=db._get(path)
-    if not rows:abort(404)
-    endpoint=next((ep for ep in scoped_endpoints() if str(ep['id'])==str(rows[0]['endpoint_id'])),None)
-    if not endpoint:abort(404)
-    if action=='claim':
-        result=db._patch(path+'&status=eq.open',dict(status='claimed',claimed_by=g.admin['id']))
-    else:
-        if rows[0].get('claimed_by') and str(rows[0]['claimed_by'])!=str(g.admin['id']) and g.admin['role']=='branch_admin':abort(403)
-        result=db._patch(path+'&status=in.(open,claimed)',dict(status='resolved',resolved_at=db._now_iso()))
-    if not result:abort(409,'Request was already changed; refresh')
-    db.audit(g.company['id'],g.admin['id'],'support_request_'+action,dict(request_id=request_id),endpoint_id=endpoint['id'],branch_id=endpoint.get('branch_id'))
-    return redirect(url_for('fleet_tools.support'),303)
+    import uuid
+    from services import helpdesk
+    if action not in {'claim','resolve','reply','reopen','assign','queued','remote','onsite','waiting_user'}:abort(400)
+    row,endpoint=support_ticket(request_id)
+    owner=row.get('claimed_by')
+    if owner and str(owner)!=str(g.admin['id']) and g.admin['role'] in {'branch_admin','technician'}:abort(403)
+    if row['status']=='resolved' and action!='reopen':abort(409,'Reopen the ticket before replying.')
+    try:
+        if action=='reply':
+            body=dict(author=g.admin.get('full_name') or 'IT support',kind='reply',
+                      message=support_workflow.text(request.form.get('message')))
+        else:
+            body=dict(author=g.admin.get('full_name') or 'IT support',kind='event',
+                      message={'claim':'IT support claimed this ticket.','resolve':'Ticket marked resolved.',
+                      'reopen':'Ticket reopened.','assign':'Ticket assigned to IT support.','queued':'Support is queued.',
+                      'remote':'Remote support arranged; normal user consent still applies.',
+                      'onsite':'On-site visit arranged.','waiting_user':'Waiting for information from you.'}[action])
+        visit=support_workflow.visit_time(request.form.get('visit_at')) if action=='onsite' else None
+        if visit:body['message']+=' Visit: '+visit
+        result=helpdesk.action(g.company,endpoint,request_id,action,admin=g.admin,body=body,
+            message_id=request.form.get('message_id') or str(uuid.uuid4()) if action=='reply' else None,
+            assignee=request.form.get('assignee') if action=='assign' else None,visit=visit)
+    except ValueError as exc:abort(400,str(exc))
+    helpdesk.http_error(result)
+    db.audit(g.company['id'],g.admin['id'],'support_request_'+action,dict(request_id=request_id),
+        endpoint_id=endpoint['id'],branch_id=endpoint.get('branch_id'))
+    return redirect(url_for('fleet_tools.support_detail',request_id=request_id),303)
 
 
 @bp.get('/operations/traffic')

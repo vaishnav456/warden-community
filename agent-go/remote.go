@@ -69,7 +69,6 @@ var (
 	procGdiFlush               = gdi32DLL.NewProc("GdiFlush")
 )
 
-
 // sendSecureAttentionSequence runs in the Warden LocalSystem service, which
 // is the security boundary Windows permits to generate a software SAS. A
 // Ctrl+Alt+Delete assembled from SendInput events is intentionally ignored by
@@ -504,15 +503,32 @@ func clipboardGet() string {
 	if h == 0 {
 		return ""
 	}
+	size, _, _ := kernel32DLL.NewProc("GlobalSize").Call(h)
+	if size < 2 || size > 1024*1024 || size%2 != 0 {
+		return ""
+	}
 	p, _, _ := procGlobalLock.Call(h)
 	if p == 0 {
 		return ""
 	}
 	defer procGlobalUnlock.Call(h)
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(p)))
+	return boundedClipboardText(unsafe.Slice((*uint16)(unsafe.Pointer(p)), int(size/2)))
+}
+
+func boundedClipboardText(buffer []uint16) string {
+	for index, value := range buffer {
+		if value == 0 {
+			return windows.UTF16ToString(buffer[:index])
+		}
+	}
+	// A malformed clipboard allocation must never cause a scan past its end.
+	return ""
 }
 
 func clipboardSet(text string) {
+	if len(text) > 1024*1024 {
+		return
+	}
 	r, _, _ := procOpenClipboard.Call(0)
 	if r == 0 {
 		return

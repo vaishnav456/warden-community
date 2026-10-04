@@ -254,6 +254,11 @@
           <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Version</dt><dd class="text-ink-100">{{ endpoint.os_version or '—' }}</dd></div>
           <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Build</dt><dd class="text-ink-100">{{ endpoint.os_build or '—' }}</dd></div>
           <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Agent</dt><dd class="text-ink-100 font-mono-data">{{ endpoint.agent_version or '—' }}</dd></div>
+          {% set integrity=endpoint.agent_integrity or {} %}
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Integrity</dt><dd class="text-ink-100">{{ integrity.status or 'Not reported' }}{% if integrity.checked_at %} · {{ integrity.checked_at | timeago }}{% endif %}</dd></div>
+          {% if integrity.measurement_sha256 %}<div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Install hash</dt><dd class="text-ink-100 font-mono-data break-all min-w-0">{{ integrity.measurement_sha256 }}</dd></div>{% endif %}
+          <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Heartbeat</dt><dd class="text-ink-100">{{ 'Encrypted message + device-key proof' if endpoint.heartbeat_device_proof_required else 'Encrypted message' if endpoint.heartbeat_encryption_required else 'HTTPS/TLS' }}</dd></div>
+          <p class="form-help">Installation measurements detect reported changes; they are not hardware attestation or a guarantee against a fully compromised administrator.</p>
           <div class="flex gap-3"><dt class="text-ink-500 w-24 flex-shrink-0">Enrolled</dt><dd class="text-ink-100">{{ endpoint.enrolled_at | timeago }}</dd></div>
         </dl>
       </div>

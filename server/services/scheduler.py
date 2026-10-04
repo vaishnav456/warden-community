@@ -121,6 +121,7 @@ def _check_auto_updates():
         return
 
     builds = {}
+    payloads = {}
 
     from services.agent_rollouts import campaigns, ACTIVE
     # A paused campaign must also block ordinary auto-updates: otherwise its
@@ -135,12 +136,14 @@ def _check_auto_updates():
         company_id = company["id"]
         try:
             endpoints = db.get_endpoints(company_id)
+            from services.fleet_reads import update_blockers
+            blocked = update_blockers(company_id)
         except Exception as e:
             log.warning("scheduler: get_endpoints failed for company %s: %s", company_id, e)
             continue
 
         for ep in endpoints:
-            if str(ep['id']) in protected or db.get_active_remote_session(ep['id']):
+            if str(ep['id']) in protected or str(ep['id']) in blocked:
                 continue
             if ep.get("status") != "online":
                 continue
@@ -159,11 +162,6 @@ def _check_auto_updates():
             except ValueError:
                 log.error("scheduler: refusing auto-update from invalid build version %r", build["agent_version"])
                 continue
-            try:
-                payload = update_payload(ep)
-            except AgentBuildUnavailable as e:
-                log.warning("scheduler: update artifacts unavailable for endpoint %s: %s", ep["id"], e)
-                continue
             current_version = ep.get("agent_version")
             if current_version:
                 try:
@@ -179,15 +177,12 @@ def _check_auto_updates():
             # The update job finishes before the restarted service reports its
             # new version. Avoid dispatching another updater during that gap.
             try:
-                if db.has_recent_job(ep["id"], "UPDATE_AGENT", minutes=15):
+                # Recheck actual session state immediately before dispatch.
+                if db.get_active_remote_session(ep["id"]):
                     continue
-            except Exception as e:
-                log.warning(
-                    "scheduler: recent update lookup failed for endpoint %s: %s",
-                    ep["id"], e,
-                )
-                continue
-            try:
+                if target not in payloads:
+                    payloads[target] = update_payload(ep, build=build)
+                payload = dict(payloads[target])
                 from services.fleet_tools import defer_updates
                 if defer_updates(dict(ep,company_id=company_id)):
                     continue
@@ -238,8 +233,8 @@ def _purge_expired_trials():
 
 
 def _loop():
-    while True:
-        time.sleep(_INTERVAL)
+    from services.lifecycle import stopping
+    while not stopping.wait(_INTERVAL):
         health_tracker.ping("scheduler")
         _dispatch_once()
         try:

@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block title %}Helpdesk form{% endblock %}
+{% macro question(field) %}
+<section class="helpdesk-question border rounded p-4 space-y-3">
+<div class="flex flex-wrap justify-between gap-2"><h2 class="font-semibold">Custom question</h2><div class="flex flex-wrap gap-2"><button class="btn btn-secondary" type="button" data-question-action="up" aria-label="Move question up">Up</button><button class="btn btn-secondary" type="button" data-question-action="down" aria-label="Move question down">Down</button><button class="btn btn-secondary" type="button" data-question-action="remove">Remove</button></div></div>
+<input type="hidden" name="field_id" value="{{ field.id or '' }}">
+<label class="block">Question label<input class="form-input" name="field_label" value="{{ field.label or '' }}" maxlength="80" required></label>
+<div class="flex flex-wrap gap-4 items-center"><label>Answer type<select class="form-input" name="field_type"><option value="text" {% if field.type!='select' %}selected{% endif %}>Text</option><option value="select" {% if field.type=='select' %}selected{% endif %}>Dropdown</option></select></label><label class="flex items-center gap-2"><input type="checkbox" name="field_required" value="{{ field.id or '' }}" {% if field.required %}checked{% endif %}>Required answer</label></div>
+<label class="helpdesk-options block {% if field.type!='select' %}hidden{% endif %}">Dropdown choices (one per line)<textarea class="form-input" name="field_options" rows="4" maxlength="1000">{{ (field.options or [])|join('\n') }}</textarea><span class="form-help">One to ten unique choices, up to 80 characters each.</span></label>
+<input type="hidden" name="field_condition" value="{{ field.show_if|default(none)|tojson|forceescape }}">
+<label class="block">Visibility<select class="form-input helpdesk-show-mode"><option value="always" {% if not field.show_if %}selected{% endif %}>Always show</option><option value="all" {% if field.show_if and field.show_if.mode=='all' %}selected{% endif %}>Show if all conditions match</option><option value="any" {% if field.show_if and field.show_if.mode=='any' %}selected{% endif %}>Show if any condition matches</option></select></label>
+<div class="helpdesk-conditions space-y-3 {% if not field.show_if %}hidden{% endif %}"><div class="helpdesk-rules space-y-3"></div><button type="button" class="btn btn-secondary helpdesk-add-rule">Add condition</button><p class="form-help">Compare assigned branch, category, priority or an earlier answer. “Does not equal” provides the else case. Hidden questions are not required or stored.</p></div>
+</section>
+{% endmacro %}
+{% block content %}
+<header class="fleet-page-header"><div><h1>Customize the helpdesk form</h1><p>Categories and questions belong to this organization only.</p></div><a class="btn btn-secondary" href="{{ url_for('fleet_tools.support') }}">Back to Helpdesk</a></header>
+<form id="helpdesk-form-editor" method="post" class="w-card p-5 space-y-5 max-w-3xl"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label class="block">Categories (one per line)<textarea class="form-input" name="categories" rows="5" maxlength="1000" required>{{ definition.categories|join('\n') }}</textarea><span class="form-help">One to twelve unique categories. Subject, priority and description are always included.</span></label>
+<div><h2 class="font-semibold">Custom questions</h2><p class="form-help">Add up to eight questions with optional conditional visibility. Existing tickets retain their original labels and answers.</p></div>
+<div id="helpdesk-questions" class="space-y-4">{% for field in definition.fields %}{{ question(field) }}{% endfor %}</div>
+<button type="button" id="helpdesk-add-question" class="btn btn-secondary">Add question</button>
+<p id="helpdesk-form-error" class="text-sm" role="status" aria-live="polite"></p>
+<p class="form-help">No scripts, HTML, uploads or password fields are supported. Never ask users for credentials or recovery keys. Device users receive the current form when opening Helpdesk.</p>
+<button class="btn btn-primary">Save form</button>
+<noscript><p class="form-help">JavaScript is needed to add or reorder questions. You can still edit and save existing questions.</p></noscript>
+</form>
+<template id="helpdesk-question-template">{{ question({}) }}</template>
+<template id="helpdesk-condition-template"><div class="helpdesk-rule border rounded p-3 space-y-2"><label class="block">If<select class="form-input" data-rule-source></select></label><select class="form-input" data-rule-operator aria-label="Comparison"><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select><label class="block">Value<input class="form-input" data-rule-text maxlength="500"><select class="form-input hidden" data-rule-choice></select></label><button type="button" class="btn btn-secondary helpdesk-remove-rule">Remove condition</button></div></template>
+<select id="helpdesk-branch-options" class="hidden" disabled aria-hidden="true">{% for branch in branches %}<option value="{{ branch.id }}">{{ branch.name }}</option>{% endfor %}</select>
+{% endblock %}
+{% block extra_scripts %}<script nonce="{{ csp_nonce }}" src="/static/js/helpdesk-form.js?v={{ asset_v }}" defer></script>{% endblock %}

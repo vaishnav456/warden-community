@@ -19,8 +19,8 @@
 
 {# Status tabs #}
 <div class="flex gap-1 mb-5">
-  {% for s, label in [('pending','Pending'),('pending_secondary','Dual Approval'),('approved','Approved'),('denied','Denied'),('expired','Expired'),('all','All')] %}
-  <a href="/escalations?status={{ s }}"
+  {% for s, label in [('waiting','Awaiting review'),('pending','Pending'),('pending_secondary','Dual Approval'),('approved','Approved'),('denied','Denied'),('expired','Expired'),('all','All')] %}
+  <a href="{{ scoped_url('/escalations', status=s) }}"
      class="px-3 py-1.5 text-sm rounded-lg font-medium transition-colors
             {% if status_filter == s %}bg-accent-500/15 text-accent-400{% else %}text-ink-500 hover:bg-base-700{% endif %}">
     {{ label }}
@@ -31,7 +31,7 @@
 {# Cards #}
 <div id="escalation-cards"
      {% if status_filter == 'pending' %}
-     hx-get="/partials/escalation-cards"
+     hx-get="{{ scoped_url('/partials/escalation-cards') }}"
      hx-trigger="every 5s"
      hx-sync="this:drop"
      hx-swap="innerHTML"
@@ -42,7 +42,7 @@
 
 {% if has_more %}
 <div class="mt-4 text-center">
-  <a href="/escalations?status={{ status_filter }}&page={{ page + 1 }}"
+  <a href="{{ scoped_url('/escalations', status=status_filter, page=page+1) }}"
      class="text-sm text-accent-400 hover:underline">Load more →</a>
 </div>
 {% endif %}

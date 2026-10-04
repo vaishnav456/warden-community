@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"image/jpeg"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -1434,8 +1435,29 @@ func filePush(p map[string]interface{}) (int, string, error) {
 	if err != nil || len(raw) > 8<<20 {
 		return 1, "", errors.New("invalid or oversized file")
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0755); err == nil {
-		err = os.WriteFile(path, raw, 0600)
+	root, rel, err := transferRoot(path)
+	if err != nil {
+		return 1, "", err
+	}
+	defer root.Close()
+	if err = root.MkdirAll(filepath.Dir(rel), 0755); err == nil {
+		file, openErr := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|syscall.O_NONBLOCK, 0600)
+		if openErr != nil {
+			return 1, "", openErr
+		}
+		stat, statErr := file.Stat()
+		if statErr != nil || !stat.Mode().IsRegular() {
+			file.Close()
+			return 1, "", errors.New("regular file required")
+		}
+		err = file.Truncate(0)
+		if err == nil {
+			_, err = file.Write(raw)
+		}
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
 	}
 	if err != nil {
 		return 1, "", err
@@ -1448,16 +1470,36 @@ func filePull(jobID string, p map[string]interface{}) (int, string, error) {
 		return 1, "", err
 	}
 	downloadName := filepath.Base(path)
-	info, err := os.Stat(path)
+	root, rel, err := transferRoot(path)
+	if err != nil {
+		return 1, "", err
+	}
+	defer root.Close()
+	info, err := root.Stat(rel)
 	if err != nil {
 		return 1, "", err
 	}
 	var b []byte
 	if info.IsDir() {
-		b, err = zipDirectory(path, 8<<20)
+		directory, openErr := root.OpenRoot(rel)
+		if openErr != nil {
+			return 1, "", openErr
+		}
+		b, err = zipTransferRoot(directory, 8<<20)
+		directory.Close()
 		downloadName += ".zip"
 	} else {
-		b, err = os.ReadFile(path)
+		file, openErr := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if openErr != nil {
+			return 1, "", openErr
+		}
+		stat, statErr := file.Stat()
+		if statErr != nil || !stat.Mode().IsRegular() {
+			file.Close()
+			return 1, "", errors.New("regular file required")
+		}
+		b, err = io.ReadAll(io.LimitReader(file, (8<<20)+1))
+		file.Close()
 	}
 	if err != nil {
 		return 1, "", err
@@ -1474,17 +1516,55 @@ func filePull(jobID string, p map[string]interface{}) (int, string, error) {
 	return 0, fmt.Sprintf("File %s pulled (%d bytes)", path, len(b)), nil
 }
 
-func zipDirectory(root string, maxBytes int) ([]byte, error) {
+func transferRoot(path string) (*os.Root, string, error) {
+	allowed := []string{"/tmp", "/private/tmp"}
+	if runtime.GOOS == "darwin" {
+		allowed = append(allowed, "/Users")
+	} else {
+		allowed = append(allowed, "/home")
+	}
+	for _, base := range allowed {
+		if path == base || strings.HasPrefix(path, base+string(os.PathSeparator)) {
+			root, err := os.OpenRoot(base)
+			if err != nil {
+				return nil, "", err
+			}
+			rel, err := filepath.Rel(base, path)
+			if err != nil {
+				root.Close()
+				return nil, "", err
+			}
+			return root, rel, nil
+		}
+	}
+	return nil, "", errors.New("path outside transfer roots")
+}
+
+func zipDirectory(path string, maxBytes int) ([]byte, error) {
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return zipTransferRoot(root, maxBytes)
+}
+
+func zipTransferRoot(root *os.Root, maxBytes int) ([]byte, error) {
 	var buffer bytes.Buffer
 	zw := zip.NewWriter(&buffer)
-	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+	total, entries := int64(0), 0
+	err := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path == root {
+		if path == "." {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
+		entries++
+		if entries > 10000 {
+			return errors.New("directory has too many entries")
+		}
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
@@ -1495,7 +1575,7 @@ func zipDirectory(root string, maxBytes int) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		header.Name = filepath.ToSlash(rel)
+		header.Name = path
 		if info.IsDir() {
 			header.Name += "/"
 		} else {
@@ -1505,11 +1585,20 @@ func zipDirectory(root string, maxBytes int) ([]byte, error) {
 		if err != nil || info.IsDir() {
 			return err
 		}
-		file, err := os.Open(path)
+		if !info.Mode().IsRegular() {
+			return errors.New("regular file required")
+		}
+		file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return err
 		}
-		_, copyErr := io.Copy(writer, io.LimitReader(file, int64(maxBytes-buffer.Len()+1)))
+		stat, statErr := file.Stat()
+		if statErr != nil || !stat.Mode().IsRegular() {
+			file.Close()
+			return errors.New("regular file required")
+		}
+		copied, copyErr := io.Copy(writer, io.LimitReader(file, int64(maxBytes)-total+1))
+		total += copied
 		closeErr := file.Close()
 		if copyErr != nil {
 			return copyErr
@@ -1517,7 +1606,7 @@ func zipDirectory(root string, maxBytes int) ([]byte, error) {
 		if closeErr != nil {
 			return closeErr
 		}
-		if buffer.Len() > maxBytes {
+		if buffer.Len() > maxBytes || total > int64(maxBytes) {
 			return errors.New("directory archive exceeds 8 MiB")
 		}
 		return nil
@@ -1561,7 +1650,12 @@ func listDirectory(p map[string]interface{}) (int, string, error) {
 	if err != nil {
 		return 1, "", err
 	}
-	entries, err := os.ReadDir(path)
+	root, rel, err := transferRoot(path)
+	if err != nil {
+		return 1, "", err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(rel))
 	if err != nil {
 		return 1, "", err
 	}
@@ -1632,8 +1726,15 @@ func installApp(job string, p map[string]interface{}) (int, string, error) {
 		return 1, "", errors.New("missing app URL")
 	}
 	ext := strings.TrimPrefix(strings.ToLower(stringValue(p["ext"])), ".")
-	dest := filepath.Join(os.TempDir(), "warden-"+job+"."+ext)
-	defer os.Remove(dest)
+	if (runtime.GOOS == "darwin" && ext != "pkg") || (runtime.GOOS != "darwin" && ext != "deb" && ext != "rpm") {
+		return 1, "", errors.New("unsupported package extension")
+	}
+	privateDir, err := os.MkdirTemp("", "warden-install-")
+	if err != nil {
+		return 1, "", err
+	}
+	defer os.RemoveAll(privateDir)
+	dest := filepath.Join(privateDir, "package."+ext)
 	if err := download(url, dest, stringValue(p["sha256"])); err != nil {
 		return 1, "", err
 	}

@@ -68,7 +68,7 @@ def prepare_endpoints(endpoints, compliance=(), patches=(), now=None):
         ep["_offline_age"] = ("never" if not seen else "days" if now - seen >= timedelta(days=1) else "recent")
         target = db.endpoint_target_platform(ep)
         if target not in builds:
-            builds[target] = db.get_latest_completed_build(target)
+            builds[target] = db.get_latest_completed_build(target, summary_only=True)
         latest = builds[target] or {}
         current, available = version(ep.get("agent_version")), version(latest.get("agent_version"))
         ep["_agent_update"] = bool(current and available and current < available)

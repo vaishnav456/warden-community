@@ -4,3 +4,4 @@
 # against the Python agent — no Windows-only tooling needed anymore.
 
 requests==2.34.2
+idna==3.20

@@ -1,0 +1,6 @@
+{% if storage %}
+<p class="dashboard-storage-total">{{ '%.2f'|format(storage.used_bytes / 1073741824) }}{% if storage_limit %} / {{ '%.0f'|format(storage_limit / 1073741824) }}{% endif %} GB</p>
+{% if storage_limit %}<progress max="{{ storage_limit }}" value="{{ storage.used_bytes }}" aria-label="Server storage used"></progress>{% if storage.used_bytes >= storage_limit %}<p>Storage allowance reached. Remove unused packages before uploading more.</p>{% endif %}{% endif %}
+<dl class="dashboard-storage-breakdown"><div><dt>Packages, builds &amp; server images</dt><dd>{{ '%.2f'|format(storage.file_bytes / 1073741824) }} GB</dd></div><div><dt>Database, including profile photos &amp; logs</dt><dd>{{ '%.2f'|format(storage.database_bytes / 1073741824) }} GB</dd></div></dl>
+<p class="dashboard-note">Home Node disks and infrastructure backups are separate. Usage is a snapshot taken when this page loads. GB = 1,024³ bytes.</p>
+{% else %}<p>Storage usage is temporarily unavailable. Device monitoring is still available.</p><button class="btn btn-secondary" hx-get="/partials/dashboard-storage" hx-target="closest .dashboard-storage-body" hx-swap="innerHTML">Retry</button>{% endif %}

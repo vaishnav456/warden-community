@@ -19,3 +19,5 @@ jobs:
         run: python3 tools/check_third_party.py
       - name: Verify notice packaging contracts
         run: python3 -m unittest discover -s build-service -p 'test_notice*.py'
+      - name: Verify optional module packaging contracts
+        run: python3 -m unittest discover -s build-service -p 'test_module*.py'

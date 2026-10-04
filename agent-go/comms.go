@@ -203,6 +203,22 @@ func apiPostRaw(path string, body map[string]interface{}, auth bool, timeoutSec 
 	if err != nil {
 		return nil, err
 	}
+	var heartbeatReply heartbeatReplyKey
+	encryptedHeartbeat := path == heartbeatPath && auth && heartbeatEncryptionRequired()
+	if encryptedHeartbeat {
+		session, negotiationErr := heartbeatSession()
+		if negotiationErr != nil {
+			return nil, negotiationErr
+		}
+		data, heartbeatReply, err = sealHeartbeat(body, session, getConfig().EndpointID, apiKey)
+		if err != nil {
+			return nil, err
+		}
+		data, err = signHeartbeatDeviceProof(data, heartbeatReply.context)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	url := serverURL() + path
 	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
@@ -211,6 +227,9 @@ func apiPostRaw(path string, body map[string]interface{}, auth bool, timeoutSec 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if encryptedHeartbeat {
+		req.Header.Set("X-Warden-Heartbeat-Encryption", "1")
+	}
 	if auth {
 		req.Header.Set("X-Agent-Key", apiKey)
 		if err := addDeviceRequestProof(req, data); err != nil {
@@ -249,6 +268,13 @@ func apiPostRaw(path string, body map[string]interface{}, auth bool, timeoutSec 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
 		return nil, err
+	}
+	if encryptedHeartbeat {
+		raw, err = openHeartbeatReply(raw, heartbeatReply, resp.StatusCode)
+		if err != nil {
+			invalidateHeartbeatSession()
+			return nil, err
+		}
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
