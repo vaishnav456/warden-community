@@ -19,7 +19,7 @@ jobs:
           POSTGRES_DB: read_optimization
           POSTGRES_PASSWORD: isolated-test-only
         options: >-
-          --health-cmd "pg_isready -U postgres -d read_optimization"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d read_optimization"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10

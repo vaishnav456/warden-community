@@ -40,7 +40,7 @@ jobs:
         run: |
           docker run -d --name warden-foundations-ci --label com.warden.test=operational-foundations --network none --tmpfs /var/lib/postgresql/data:rw,size=256m -e POSTGRES_PASSWORD=isolated-test-only -e POSTGRES_DB=foundation_test postgres:16-alpine
           for attempt in $(seq 1 30); do
-            if docker exec warden-foundations-ci pg_isready -U postgres -d foundation_test; then exit 0; fi
+            if docker exec warden-foundations-ci pg_isready -h 127.0.0.1 -U postgres -d foundation_test; then exit 0; fi
             sleep 1
           done
           exit 1

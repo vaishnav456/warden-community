@@ -18,7 +18,7 @@ jobs:
         run: |
           docker run -d --name warden-fleet-ci --network none --tmpfs /var/lib/postgresql/data:rw,size=256m -e POSTGRES_PASSWORD=isolated-test-only -e POSTGRES_DB=fleet_read postgres:16-alpine
           for attempt in $(seq 1 30); do
-            if docker exec warden-fleet-ci pg_isready -U postgres -d fleet_read; then exit 0; fi
+            if docker exec warden-fleet-ci pg_isready -h 127.0.0.1 -U postgres -d fleet_read; then exit 0; fi
             sleep 1
           done
           exit 1
