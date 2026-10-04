@@ -3,7 +3,7 @@ name: Module correction database regression
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 permissions:
   contents: read
