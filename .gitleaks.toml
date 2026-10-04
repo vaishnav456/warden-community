@@ -1,7 +1,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Structured policy identifiers and private-key variable declarations are not secret values"
 paths = [
   '''(^|/)agent-go/policy_catalog\.json$''',
