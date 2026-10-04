@@ -164,6 +164,14 @@ download the current executable and run it from a different folder:
 - Windows (Administrator): `warden-home-node-windows-amd64.exe upgrade`
 - Linux (root): `sudo ./warden-home-node-linux-amd64 upgrade`
 
+For older Linux installations without `/etc/warden-home-update/identity.json`,
+first verify the node ID and control-plane public key against the administrator's
+original enrollment configuration. Save that verified configuration in a root-owned
+file outside service-writable directories, then run
+`sudo ./warden-home-node-linux-amd64 trust-updates -config /root/verified-warden-home.json`.
+Run `upgrade` after this succeeds. The upgrade checks the protected identity before
+stopping the service; an existing pin is never replaced from service-writable config.
+
 The command stops the installed service, replaces only its program binary,
 repairs the direct-P2P firewall rule on Windows, and starts the service again.
 That one-time upgrade installs managed updates. Later releases are offered in

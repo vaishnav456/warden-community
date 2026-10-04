@@ -98,13 +98,22 @@ def control_software_rule(rule_id,action):
 def support():
     from services import helpdesk
     endpoints={str(ep['id']):ep for ep in scoped_endpoints()}
-    rows=db._get(f"support_requests?company_id=eq.{db._q(g.company['id'])}&order=updated_at.desc&limit=500")
-    scoped=[helpdesk.hydrate(row,g.company,endpoints[str(row['endpoint_id'])])
-            for row in rows if str(row['endpoint_id']) in endpoints]
     query=request.args.get('q','').strip().casefold()[:160]
     state=request.args.get('state','active')
     if state not in {'active','all','open','claimed','resolved','mine'}:state='active'
-    counts={key:sum(row['status']==key for row in scoped) for key in ('open','claimed','resolved')}
+    scope=(f"support_requests?company_id=eq.{db._q(g.company['id'])}"
+           f"&endpoints.company_id=eq.{db._q(g.company['id'])}&endpoints.is_active=eq.true")
+    if g.admin.get('role')=='branch_admin':
+        scope+=f"&endpoints.branch_id=eq.{db._q(g.admin['branch_id'])}"
+    counts={key:db._count(scope+f'&select=id,endpoints!inner(id)&status=eq.{key}')
+            for key in ('open','claimed','resolved')} if endpoints else dict(open=0,claimed=0,resolved=0)
+    selection='&status=in.(open,claimed)' if state=='active' else ''
+    if state in counts:selection=f'&status=eq.{state}'
+    if state=='mine':selection=f"&claimed_by=eq.{db._q(g.admin['id'])}"
+    rows=db._get(scope+'&select=*,endpoints!inner(id)'+selection+
+                 '&order=updated_at.desc,id.desc&limit=500') if endpoints else []
+    scoped=[helpdesk.hydrate(row,g.company,endpoints[str(row['endpoint_id'])])
+            for row in rows if str(row['endpoint_id']) in endpoints]
     def matches(row):
         if state=='active' and row['status']=='resolved':return False
         if state in counts and row['status']!=state:return False

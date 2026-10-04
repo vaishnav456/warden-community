@@ -7,7 +7,7 @@ from services.device_health import findings, age_seconds
 def text(value):
     if not isinstance(value, str):
         raise ValueError("Enter a message.")
-    value = value.strip()
+    value = value.replace("\r\n", "\n").strip()
     if not 1 <= len(value) <= 2000 or any(ord(c) < 32 and c not in "\n\t" for c in value):
         raise ValueError("Enter a message of at most 2000 characters.")
     return value

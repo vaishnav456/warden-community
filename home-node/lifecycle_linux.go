@@ -158,6 +158,11 @@ func upgradeSystemService() error {
 	if _, err := os.Stat(systemdUnit); err != nil {
 		return fmt.Errorf("Warden Home service is not installed")
 	}
+	// Validate trust before stopping the service or replacing its executable.
+	// Older installations must explicitly pin their administrator-verified identity.
+	if err := requireManagedUpdateTrust(linuxUpdateTrustPath); err != nil {
+		return err
+	}
 	if err := exec.Command("systemctl", "stop", "warden-home-node.service").Run(); err != nil {
 		return err
 	}

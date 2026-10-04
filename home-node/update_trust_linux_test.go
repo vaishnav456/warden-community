@@ -9,8 +9,37 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestUpgradeRequiresExistingProtectedUpdateIdentity(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root ownership test runs in isolated Linux container")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.json")
+	if err := requireManagedUpdateTrust(path); err == nil || !strings.Contains(err.Error(), "trust-updates -config") {
+		t.Fatalf("missing identity must give migration instructions: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("upgrade check must not bootstrap trust")
+	}
+	public, _, _ := ed25519.GenerateKey(rand.Reader)
+	raw, _ := json.Marshal(updateTrustIdentity{"node-test", base64.StdEncoding.EncodeToString(public)})
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireManagedUpdateTrust(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireManagedUpdateTrust(path); err == nil {
+		t.Fatal("upgrade accepted service-writable identity")
+	}
+}
 
 func TestUpdateIdentityRequiresProtectedOwnerAndPath(t *testing.T) {
 	if os.Geteuid() != 0 {

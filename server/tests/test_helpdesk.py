@@ -20,6 +20,94 @@ class HelpdeskTests(unittest.TestCase):
         self.endpoint=dict(id=str(uuid.uuid4()),company_id=str(uuid.uuid4()))
         self.company=dict(id=self.endpoint["company_id"])
 
+    def test_browser_multiline_ticket_normalizes_crlf(self):
+        with self.app.test_request_context(method="POST",data=dict(endpoint_id=self.endpoint['id'],
+                username="alice",ticket_id=self.ticket,message="First line\r\nSecond line")):
+            g.company=self.company;g.admin=dict(id=str(uuid.uuid4()),role="company_admin")
+            with patch.object(fleet_tools,"scoped_endpoints",return_value=[self.endpoint]), \
+                 patch.object(helpdesk,"load_form",return_value=helpdesk.DEFAULT_FORM), \
+                 patch.object(helpdesk,"action",return_value=dict(id=self.ticket)) as action, \
+                 patch.object(helpdesk.db,"audit"),patch.object(fleet_tools,"redirect"), \
+                 patch.object(fleet_tools,"url_for"),patch.object(fleet_tools,"flash"):
+                bare(fleet_tools.support_create)()
+                self.assertEqual(action.call_args.kwargs['body']['message'],"First line\nSecond line")
+
+    def test_message_still_rejects_controls_and_excess_length(self):
+        for value in ("a\rb","a\x00b","x"*2001):
+            with self.assertRaises(ValueError):helpdesk.workflow.text(value)
+
+    def test_legacy_owner_is_bound_before_reply_and_reopen(self):
+        key=helpdesk.workflow.requester_key('alice')
+        legacy=dict(id=self.ticket,request_encrypted='cipher',requester_key=None)
+        for route in (agent_api.support_reply,agent_api.support_reopen):
+            with self.subTest(route=route.__name__), self.app.test_request_context(method="POST",json=dict(
+                    username="alice",request_id=self.ticket,message="Details")):
+                g.endpoint=self.endpoint
+                with patch.object(agent_api,"check_rate_limit",return_value=True), \
+                     patch.object(helpdesk.db,"get_company_by_id",return_value=self.company), \
+                     patch.object(helpdesk.db,"_get",return_value=[legacy]), \
+                     patch.object(helpdesk.db,"decrypt_field",return_value=dict(username=' ALICE ')), \
+                     patch.object(helpdesk.db,"_patch",return_value=[dict(legacy,requester_key=key)]) as bind, \
+                     patch.object(helpdesk.db,"encrypt_field",return_value='encrypted'), \
+                     patch.object(helpdesk.db,"_rpc",side_effect=lambda *args: self.assertTrue(bind.called) or dict(id=self.ticket)) as rpc:
+                    self.assertTrue(bare(route)().json['ok'])
+                    self.assertIn('requester_key=is.null',bind.call_args.args[0])
+                    for value in (self.ticket,self.endpoint['id'],self.company['id'],'request_encrypted=eq.cipher'):
+                        self.assertIn(value,bind.call_args.args[0])
+                    self.assertEqual(rpc.call_args.args[1]['p_requester'],key)
+
+    def test_legacy_binding_denies_other_owner_and_conflicting_race(self):
+        legacy=dict(id=self.ticket,request_encrypted='cipher',requester_key=None)
+        with patch.object(helpdesk.db,'_get',return_value=[legacy]), \
+             patch.object(helpdesk.db,'decrypt_field',return_value=dict(username='bob')), \
+             patch.object(helpdesk.db,'_patch') as bind:
+            self.assertIsNone(agent_api.owned_support_ticket(self.company,self.endpoint,'alice',self.ticket,bind_requester=True))
+            bind.assert_not_called()
+        for key in (helpdesk.workflow.requester_key('alice'),helpdesk.workflow.requester_key('bob')):
+            with patch.object(helpdesk.db,'_get',side_effect=[[legacy],[dict(legacy,requester_key=key)]]), \
+                 patch.object(helpdesk.db,'decrypt_field',return_value=dict(username='alice')), \
+                 patch.object(helpdesk.db,'_patch',return_value=[]):
+                row=agent_api.owned_support_ticket(self.company,self.endpoint,'alice',self.ticket,bind_requester=True)
+                self.assertEqual(row is not None,key==helpdesk.workflow.requester_key('alice'))
+
+    def test_legacy_read_does_not_write_requester_key(self):
+        with patch.object(helpdesk.db,'_get',return_value=[dict(id=self.ticket,request_encrypted='cipher')]), \
+             patch.object(helpdesk.db,'decrypt_field',return_value=dict(username='alice')), \
+             patch.object(helpdesk.db,'_patch') as bind:
+            self.assertIsNotNone(agent_api.owned_support_ticket(self.company,self.endpoint,'alice',self.ticket))
+            bind.assert_not_called()
+
+    def test_queue_filters_before_limit_and_counts_full_branch_scope(self):
+        branch=str(uuid.uuid4())
+        for state,selection in (('active','status=in.(open,claimed)'),('resolved','status=eq.resolved'),
+                                ('mine','claimed_by=eq.admin'),('all',None)):
+            with self.subTest(state=state),self.app.test_request_context('/?state='+state):
+                g.company=self.company;g.admin=dict(id='admin',role='branch_admin',branch_id=branch)
+                with patch.object(fleet_tools,'scoped_endpoints',return_value=[self.endpoint]), \
+                     patch.object(helpdesk.db,'_get',return_value=[]) as read, \
+                     patch.object(helpdesk.db,'_count',side_effect=[701,602,503]) as count, \
+                     patch.object(fleet_tools,'render_template') as render:
+                    bare(fleet_tools.support)()
+                    path=read.call_args.args[0]
+                    self.assertIn('endpoints!inner(id)',path)
+                    self.assertIn('endpoints.branch_id=eq.'+branch,path)
+                    self.assertIn('endpoints.is_active=eq.true',path)
+                    self.assertIn('order=updated_at.desc,id.desc&limit=500',path)
+                    if selection:self.assertLess(path.index(selection),path.index('limit=500'))
+                    self.assertEqual(render.call_args.kwargs['counts'],dict(open=701,claimed=602,resolved=503))
+                    for call in count.call_args_list:
+                        self.assertIn('endpoints.branch_id=eq.'+branch,call.args[0])
+                        self.assertNotIn('limit=',call.args[0])
+
+    def test_empty_device_scope_does_not_query_tickets(self):
+        with self.app.test_request_context('/'):
+            g.company=self.company;g.admin=dict(id='admin',role='company_admin')
+            with patch.object(fleet_tools,'scoped_endpoints',return_value=[]), \
+                 patch.object(helpdesk.db,'_get') as read,patch.object(helpdesk.db,'_count') as count, \
+                 patch.object(fleet_tools,'render_template'):
+                bare(fleet_tools.support)()
+                read.assert_not_called();count.assert_not_called()
+
     def test_custom_form_validation_and_snapshot(self):
         form=helpdesk.form_definition(dict(categories=["General"],fields=[
             dict(id="location",label="Work location",type="select",required=True,options=["Office","Home"])]))

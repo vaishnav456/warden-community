@@ -96,6 +96,13 @@ func initializeManagedUpdateTrust(installed config) error {
 	return closeErr
 }
 
+func requireManagedUpdateTrust(path string) error {
+	if _, err := readUpdateTrustIdentity(path); err != nil {
+		return fmt.Errorf("before upgrading, run trust-updates -config <administrator-verified-config> as root to configure the protected update identity: %w", err)
+	}
+	return nil
+}
+
 func loadManagedUpdateConfig(_ string) error {
 	// Never call loadConfig here: service-owned certificate paths and keys
 	// must not drive network requests or filesystem writes as root.

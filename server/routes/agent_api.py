@@ -1341,7 +1341,7 @@ def request_support():
     return jsonify(ok=True,request_id=result['id'],status=result['status'])
 
 
-def owned_support_ticket(company, endpoint, username, request_id):
+def owned_support_ticket(company, endpoint, username, request_id, *, bind_requester=False):
     from services import helpdesk
     try:request_id=helpdesk.identifier(request_id)
     except ValueError:return None
@@ -1350,6 +1350,16 @@ def owned_support_ticket(company, endpoint, username, request_id):
     if not rows:return None
     original=db.decrypt_field(company,rows[0]['request_encrypted'],'support.request') or {}
     if str(original.get('username','')).strip().casefold()!=username.strip().casefold():return None
+    key=helpdesk.workflow.requester_key(username)
+    if bind_requester and rows[0].get('requester_key') is None:
+        # Bind only after checking the encrypted owner, and never overwrite a pin.
+        path=(f"support_requests?id=eq.{db._q(request_id)}&endpoint_id=eq.{db._q(endpoint['id'])}"
+              f"&company_id=eq.{db._q(company['id'])}")
+        updated=db._patch(path+'&requester_key=is.null&request_encrypted=eq.'+
+                          db._q(rows[0]['request_encrypted']),dict(requester_key=key))
+        rows=updated or db._get(path+'&limit=1')
+        if not rows or rows[0].get('requester_key')!=key:return None
+    if rows[0].get('requester_key') is not None and rows[0]['requester_key']!=key:return None
     return rows[0]
 
 
@@ -1370,7 +1380,7 @@ def support_reply():
         message=helpdesk.workflow.text(body.get('message'))
         message_id=helpdesk.identifier(body.get('message_id') or uuid.uuid4())
     except ValueError as exc:return jsonify(error=str(exc)),400
-    row=owned_support_ticket(company,endpoint,username,body.get('request_id'))
+    row=owned_support_ticket(company,endpoint,username,body.get('request_id'),bind_requester=True)
     if not row:return jsonify(error='not_found'),404
     result=helpdesk.action(company,endpoint,row['id'],'reply',username=username,message_id=message_id,
         body=dict(author=username,message=message,kind='reply'))
@@ -1391,7 +1401,7 @@ def support_reopen():
     company=db.get_company_by_id(endpoint['company_id'])
     try:username=helpdesk.short(body.get('username'),256)
     except ValueError as exc:return jsonify(error=str(exc)),400
-    row=owned_support_ticket(company,endpoint,username,body.get('request_id'))
+    row=owned_support_ticket(company,endpoint,username,body.get('request_id'),bind_requester=True)
     if not row:return jsonify(error='not_found'),404
     result=helpdesk.action(company,endpoint,row['id'],'reopen',username=username,
         body=dict(author=username,message='User reopened this ticket.',kind='event'))
