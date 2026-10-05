@@ -9,7 +9,12 @@ from pathlib import Path
 
 
 class LoadController:
-    def __init__(self):
+    def __init__(self, http_capacity=8):
+        # Matches the single eight-thread Gunicorn worker. Slow requests alone
+        # may be waiting on the database/network while the relay remains idle.
+        if type(http_capacity) is not int or http_capacity < 1:
+            raise ValueError('HTTP capacity must be a positive integer')
+        self.http_capacity = http_capacity
         self.lock = threading.Lock()
         self.pressure = 0.0
         self.busy = False
@@ -43,7 +48,10 @@ class LoadController:
             was_busy = self.busy
             self.loop_lag = lag
             self.cpu, self.memory = cpu, memory
-            http = self.http_latency / 1.0
+            # HTTP latency is a pressure signal only when the request pool is
+            # full. An ordinary 1–2 second request must not block Home relays.
+            http_latency = self.http_latency
+            http = http_latency / 1.0 if self.active_http >= self.http_capacity else 0.0
             self.http_latency *= .8  # stale slow requests must decay
             self.pressure = max(*values, http)
             self.high_samples = self.high_samples + 1 if self.pressure >= 1 else 0
@@ -55,8 +63,9 @@ class LoadController:
                 self.busy = False
             if was_busy != self.busy:
                 logging.getLogger("warden.load_control").info(
-                    "Adaptive relay admission %s (pressure=%.2f cpu=%.2f memory=%.2f lag=%.3fs)",
-                    "paused" if self.busy else "resumed", self.pressure, cpu, memory, lag)
+                    "Adaptive relay admission %s (pressure=%.2f cpu=%.2f memory=%.2f lag=%.3fs http=%.3fs active_http=%d)",
+                    "paused" if self.busy else "resumed", self.pressure, cpu, memory, lag,
+                    http_latency, self.active_http)
 
     def sample(self, lag):
         cpu = memory = 0.0
@@ -114,7 +123,8 @@ class LoadController:
     def snapshot(self):
         with self.lock:
             return dict(pressure=self.pressure, busy=self.busy, active_http=self.active_http,
-                        cpu_ratio=self.cpu, memory_ratio=self.memory, loop_lag_seconds=self.loop_lag)
+                        cpu_ratio=self.cpu, memory_ratio=self.memory, loop_lag_seconds=self.loop_lag,
+                        http_latency_seconds=self.http_latency, http_capacity=self.http_capacity)
 
 
 controller = LoadController()

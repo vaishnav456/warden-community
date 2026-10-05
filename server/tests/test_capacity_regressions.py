@@ -10,6 +10,22 @@ import db
 from services import ws_proxy
 
 class CapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_home_relay_admits_slow_http_with_spare_workers(self):
+        from services.load_control import LoadController
+        control = LoadController()
+        control.active_http = 4
+        for _ in range(20):
+            control.http_latency = 1.9
+            control.observe(cpu=.01, memory=.21, lag=.001)
+        with patch.object(ws_proxy, 'load_controller', control):
+            try:
+                pair = await ws_proxy._attach_home_peer('slow-http-home', 'initiator', object())
+                self.assertIsNotNone(pair)
+                self.assertIs(await ws_proxy._attach_home_peer('slow-http-home', 'target', object()), pair)
+                self.assertIsNone(await ws_proxy._attach_home_peer('slow-http-home', 'initiator', object()))
+            finally:
+                await ws_proxy._cleanup_home_pair('slow-http-home')
+
     async def test_pressure_preserves_existing_remote_and_home_pairs(self):
         first = await ws_proxy._attach_peer('pressure-existing', 'browser', object(), 'a')
         home = await ws_proxy._attach_home_peer('pressure-home', 'initiator', object())

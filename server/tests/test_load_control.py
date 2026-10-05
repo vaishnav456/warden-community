@@ -4,6 +4,43 @@ from services.load_control import LoadController
 
 
 class LoadControlTests(unittest.TestCase):
+    def test_slow_http_does_not_block_idle_relay(self):
+        control = LoadController()
+        control.active_http = 4
+        for _ in range(60):
+            control.http_latency = 1.9
+            control.observe(cpu=.01, memory=.21, lag=.001)
+            self.assertFalse(control.reject_remote([], None))
+        self.assertLess(control.pressure, .8)
+        self.assertGreater(control.snapshot()['http_latency_seconds'], 1)
+
+    def test_http_saturation_requires_full_pool_and_recovers_with_spare_capacity(self):
+        control = LoadController(http_capacity=8)
+        control.active_http = 7
+        for _ in range(10):
+            control.http_latency = 2
+            control.observe()
+        self.assertFalse(control.busy)
+        control.active_http = 8
+        for sample in range(3):
+            control.http_latency = 2
+            control.observe()
+            self.assertEqual(control.busy, sample == 2)
+        control.active_http = 4
+        for _ in range(10):
+            control.http_latency = 2
+            control.observe(cpu=.01, memory=.21)
+        self.assertFalse(control.busy)
+
+    def test_slow_http_still_protects_against_real_resource_pressure(self):
+        for signals in (dict(cpu=.9), dict(memory=.9), dict(lag=.2)):
+            with self.subTest(signals=signals):
+                control = LoadController()
+                for _ in range(3):
+                    control.http_latency = 2
+                    control.observe(**signals)
+                self.assertTrue(control.reject_remote([], None))
+
     def test_pressure_hysteresis_and_recovery(self):
         control = LoadController()
         for _ in range(2):
