@@ -283,9 +283,13 @@ def detail(endpoint_id):
         ][:10]
 
     from services.endpoint_drives import local_drives
+    drives = local_drives(endpoint)
+    low_disk = (any(drive["free_gb"] < 10 for drive in drives) if drives else
+                isinstance(endpoint.get("disk_free_gb"), (int, float)) and endpoint["disk_free_gb"] < 10)
     return render_template(
         "endpoints/detail.html",
-        local_drives=local_drives(endpoint),
+        local_drives=drives,
+        low_disk=low_disk,
         endpoint=endpoint,
         branch=branch,
         tab=tab,

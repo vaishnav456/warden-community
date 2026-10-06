@@ -21,7 +21,7 @@
   <div>
     <div class="section-kicker">Fleet operations</div>
     <h1>Endpoints</h1>
-    <p>Monitor health, investigate risk, and connect to managed devices.</p>
+    <p>Find a device, see what needs attention, and open its workspace.</p>
   </div>
   <div class="flex items-center gap-2">
     {% if current_user.role != 'technician' %}
@@ -41,13 +41,13 @@
     <small>Managed</small><strong>{{ fleet_summary.total }}</strong><span>All endpoints</span>
   </a>
   <a href="{{ fleet_url(state='online', page=1) }}" class="{{ 'is-active' if selected_state == 'online' }}">
-    <small>Reachable</small><strong>{{ fleet_summary.online }}</strong><span>Online now</span>
+    <small>Online</small><strong>{{ fleet_summary.online }}</strong><span>Ready to connect</span>
   </a>
   <a href="{{ fleet_url(state='offline', page=1) }}" class="{{ 'is-active' if selected_state == 'offline' }}">
-    <small>Disconnected</small><strong>{{ fleet_summary.total - fleet_summary.online }}</strong><span>Offline</span>
+    <small>Offline</small><strong>{{ fleet_summary.total - fleet_summary.online }}</strong><span>Last known state</span>
   </a>
   <a href="{{ fleet_url(state='attention', page=1) }}" class="attention {{ 'is-active' if selected_state == 'attention' }}">
-    <small>Review</small><strong>{{ fleet_summary.attention }}</strong><span>Need attention</span>
+    <small>Needs review</small><strong>{{ fleet_summary.attention }}</strong><span>Offline or reported issues</span>
   </a>
 </div>
 
@@ -81,10 +81,11 @@
   {% if query or selected_state or selected_branch or selected_health %}<a class="fleet-clear" href="/endpoints">Clear</a>{% endif %}
 </form>
 
-<div class="fleet-results-note" role="status">Showing {{ endpoints|length }} of {{ total_matches }} matches · Page {{ page }} of {{ page_count }}. Health is based on reported evidence.</div>
+<div class="fleet-list-heading"><h2>Devices</h2><span>Choose a device to investigate or connect</span></div>
+<div class="fleet-results-note" role="status">Showing {{ endpoints|length }} of {{ total_matches }} endpoints · Page {{ page }} of {{ page_count }}. Health and IP values are last reported, not live readings.</div>
 <div class="w-table-wrap fleet-table-wrap">
-  <table class="w-table fleet-table fleet-card-grid">
-    <thead><tr><th>Select / Endpoint</th><th>Branch</th><th>Last reported resources</th><th>Checks</th><th>Last contact</th><th>Investigate</th></tr></thead>
+  <table class="w-table fleet-table fleet-directory">
+    <thead><tr><th>Endpoint</th><th>Connection</th><th>Location</th><th>Health</th><th></th></tr></thead>
     <tbody id="endpoint-table-body">
     {% include "partials/endpoint_cards.html" %}
     </tbody>
