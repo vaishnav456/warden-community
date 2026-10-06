@@ -132,7 +132,7 @@
       <a href="/endpoints/{{ endpoint.id }}?tab=alerts" class="attention-item"><span>!</span><div><b>{{ alert.title or alert.alert_type | replace('_',' ') | title }}</b><small>{{ alert.created_at | timeago }}</small></div></a>
       {% endfor %}
     {% elif low_disk %}
-    <a href="#endpoint-storage" class="attention-item"><span>!</span><div><b>Low disk space reported</b><small>Review local drives below</small></div></a>
+    <a href="/endpoints/{{ endpoint.id }}?tab=overview#endpoint-storage" class="attention-item"><span>!</span><div><b>Low disk space reported</b><small>Review local drives below</small></div></a>
     {% else %}
     <div class="attention-clear"><span>✓</span><div><b>No reported issues</b><small>Based on the latest device report</small></div></div>
     {% endif %}

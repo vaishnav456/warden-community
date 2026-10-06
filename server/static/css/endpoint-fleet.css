@@ -66,6 +66,7 @@
 /* Endpoint directory and device workspace share a compact information hierarchy. */
 #endpoint-fleet .fleet-directory {display:table;width:100%;min-width:780px;table-layout:fixed}
 #endpoint-fleet .fleet-directory thead {display:table-header-group}
+#endpoint-fleet .fleet-directory th {display:table-cell!important}
 #endpoint-fleet .fleet-directory tbody {display:table-row-group}
 #endpoint-fleet .fleet-directory tr {display:table-row;background:transparent;border:0;box-shadow:none}
 #endpoint-fleet .fleet-directory th:nth-child(1) {width:27%}
