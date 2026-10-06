@@ -2238,12 +2238,16 @@ function endpointDetail() {
           this.showRemoteModal = false;
           remoteTab.location.replace(res.viewer_url);
         } else {
-          remoteTab.close();
-          window.wardenToast(res.message || res.error || 'Failed to start remote session', 'error');
+          const message = res.message || res.error || 'Failed to start remote session';
+          remoteTab.document.title = 'Warden Remote Control unavailable';
+          remoteTab.document.body.textContent = `Could not start remote control: ${message}. Return to Warden to retry.`;
+          window.wardenToast(message, 'error');
         }
       } catch (error) {
-        remoteTab.close();
-        window.wardenToast('Failed to start remote session', 'error');
+        const message = error.message || 'Failed to start remote session';
+        remoteTab.document.title = 'Warden Remote Control unavailable';
+        remoteTab.document.body.textContent = `Could not start remote control: ${message}. Return to Warden to retry.`;
+        window.wardenToast(message, 'error');
       } finally {
         this.startingSession = false;
       }
