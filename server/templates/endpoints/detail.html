@@ -13,8 +13,6 @@
 {% endblock %}
 
 {% block content %}
-{% set drives = local_drives %}{% include "partials/endpoint_drives.html" %}
-{% include "partials/endpoint_addresses.html" %}
 <div x-data="endpointDetail" data-endpoint-id="{{ endpoint.id }}" data-tab="{{ tab }}"
      data-nickname="{{ endpoint.display_name or '' }}" data-hostname="{{ endpoint.hostname }}"
      data-platform="{{ endpoint_platform }}" data-capabilities='{{ endpoint_capabilities | list | tojson }}'
@@ -51,6 +49,8 @@
   </div>
 </div>
 {% endif %}
+
+<a class="endpoint-back-link" href="/endpoints">← All endpoints</a>
 
 {# Endpoint command header #}
 <section class="endpoint-command-header mb-5">
@@ -115,7 +115,7 @@
 {# Operational status strip #}
 <div class="endpoint-ops-strip mb-5">
   <div class="endpoint-health-panel">
-    <div class="endpoint-panel-heading"><span>Device health</span><small>{{ 'Live telemetry' if endpoint.status == 'online' else 'Last reported' }}</small></div>
+    <div class="endpoint-panel-heading"><span>Device health</span><small>Last reported</small></div>
     <div class="endpoint-health-metrics">
       <div class="health-metric"><span>CPU</span><b>{{ (endpoint.cpu_pct | round(0) | int ~ '%') if endpoint.cpu_pct is not none else '—' }}</b></div>
       <div class="health-metric"><span>Memory</span><b>{{ (endpoint.ram_used_pct | round(0) | int ~ '%') if endpoint.ram_used_pct is not none else '—' }}</b></div>
@@ -125,14 +125,16 @@
       </div>
     </div>
   </div>
-  <div class="endpoint-attention-panel {{ 'has-attention' if alerts else '' }}">
-    <div class="endpoint-panel-heading"><span>Attention</span><small>{{ alerts | length }} open</small></div>
+  <div class="endpoint-attention-panel {{ 'has-attention' if alerts or low_disk else '' }}">
+    <div class="endpoint-panel-heading"><span>Attention</span><small>{{ alerts | length }} alert{{ '' if alerts|length == 1 else 's' }}</small></div>
     {% if alerts %}
       {% for alert in alerts[:2] %}
       <a href="/endpoints/{{ endpoint.id }}?tab=alerts" class="attention-item"><span>!</span><div><b>{{ alert.title or alert.alert_type | replace('_',' ') | title }}</b><small>{{ alert.created_at | timeago }}</small></div></a>
       {% endfor %}
+    {% elif low_disk %}
+    <a href="#endpoint-storage" class="attention-item"><span>!</span><div><b>Low disk space reported</b><small>Review local drives below</small></div></a>
     {% else %}
-    <div class="attention-clear"><span>✓</span><div><b>No immediate action</b><small>Endpoint is reporting normally</small></div></div>
+    <div class="attention-clear"><span>✓</span><div><b>No reported issues</b><small>Based on the latest device report</small></div></div>
     {% endif %}
   </div>
 </div>
@@ -178,6 +180,7 @@
           <div><span>Agent version</span><b class="font-mono-data">{{ endpoint.agent_version or '—' }}</b></div>
           <div><span>Enrolled</span><b>{{ endpoint.enrolled_at | timeago }}</b></div>
         </div>
+        {% include "partials/endpoint_addresses.html" %}
       </section>
       <section class="endpoint-overview-card">
         <div class="endpoint-card-heading"><div><small>Timeline</small><h3>Recent activity</h3></div><a href="?tab=events">View all</a></div>
@@ -192,6 +195,10 @@
           {% endfor %}
         </div>
       </section>
+      <details id="endpoint-storage" class="endpoint-overview-card endpoint-storage-card" {{ 'open' if low_disk and tab == 'overview' }}>
+        <summary><span><small>Storage</small><strong>Local drives</strong></span><span>{{ local_drives|length }} reported <span aria-hidden="true">⌄</span></span></summary>
+        {% set drives = local_drives %}{% include "partials/endpoint_drives.html" %}
+      </details>
       <section class="endpoint-overview-card endpoint-quick-card">
         <div class="endpoint-card-heading"><div><small>Operations</small><h3>Quick actions</h3></div></div>
         <div class="endpoint-quick-grid">

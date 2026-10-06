@@ -614,15 +614,24 @@ function topologyPage() {
       if (!this.selectedEndpoint || !this.remoteReason || this.saving) return;
       const tab = window.open('about:blank', '_blank');
       if (!tab) { window.wardenToast('Allow pop-ups to open Remote Control', 'error'); return; }
+      tab.document.title = 'Starting Warden Remote Control…';
       tab.document.body.textContent = 'Starting secure remote session…'; this.saving = true;
       try {
         const result = await wardenFetchJSON(`/endpoints/${this.selectedEndpoint.id}/start-session`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
           body: JSON.stringify({ access_mode: this.remoteMode, reason: this.remoteReason }),
         });
-        this.showRemoteModal = false; tab.location.replace(result.viewer_url);
-      } catch (error) { tab.close(); window.wardenToast(error.message || 'Remote session failed', 'error'); }
-      finally { this.saving = false; }
+        if (!result.ok || !result.viewer_url) {
+          throw new Error(result.message || result.error || 'Remote session failed');
+        }
+        this.showRemoteModal = false;
+        tab.location.replace(result.viewer_url);
+      } catch (error) {
+        const message = error.message || 'Remote session failed';
+        tab.document.title = 'Warden Remote Control unavailable';
+        tab.document.body.textContent = `Could not start remote control: ${message}. Return to Warden to retry.`;
+        window.wardenToast(message, 'error');
+      } finally { this.saving = false; }
     },
     endpointNeedsAttention(endpoint) { return endpoint.status !== 'online' || Number(endpoint.cpu_pct || 0) >= 85 || Number(endpoint.ram_used_pct || 0) >= 90 || Number((this.alerts[endpoint.id] || {}).count || 0) > 0; },
     endpointClass(endpoint) {
@@ -2238,12 +2247,16 @@ function endpointDetail() {
           this.showRemoteModal = false;
           remoteTab.location.replace(res.viewer_url);
         } else {
-          remoteTab.close();
-          window.wardenToast(res.message || res.error || 'Failed to start remote session', 'error');
+          const message = res.message || res.error || 'Failed to start remote session';
+          remoteTab.document.title = 'Warden Remote Control unavailable';
+          remoteTab.document.body.textContent = `Could not start remote control: ${message}. Return to Warden to retry.`;
+          window.wardenToast(message, 'error');
         }
       } catch (error) {
-        remoteTab.close();
-        window.wardenToast('Failed to start remote session', 'error');
+        const message = error.message || 'Failed to start remote session';
+        remoteTab.document.title = 'Warden Remote Control unavailable';
+        remoteTab.document.body.textContent = `Could not start remote control: ${message}. Return to Warden to retry.`;
+        window.wardenToast(message, 'error');
       } finally {
         this.startingSession = false;
       }

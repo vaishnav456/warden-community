@@ -66,9 +66,13 @@ class FleetTests(unittest.TestCase):
         env.filters["timeago"] = lambda value: "just now"
         html = env.get_template("partials/endpoint_row.html").render(
             endpoint=row, current_user={"role":"company_admin"}, branch_names={})
-        self.assertIn("H:", html)
-        self.assertIn("48 GB used / 50 GB total", html)
+        self.assertIn("Low disk (last report)", html)
         self.assertIn("100 GB free", html)
+        self.assertNotIn("H:", html)
+        drives_html = env.get_template("partials/endpoint_drives.html").render(
+            drives=row["_local_drives"])
+        self.assertIn("H:", drives_html)
+        self.assertIn("48 GB used / 50 GB total", drives_html)
 
     def test_newest_compliance_scan_wins_even_if_input_reversed(self):
         checks = [dict(endpoint_id=ID, scanned_at=NOW.isoformat(), results=[dict(check="bitlocker_enabled", status="fail")]),
