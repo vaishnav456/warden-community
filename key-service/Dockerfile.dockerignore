@@ -1,0 +1,13 @@
+# The key-service build never receives environment files, keys or backups.
+**
+!key-service/
+!key-service/app.py
+!key-service/config.py
+!key-service/gunicorn.conf.py
+!key-service/healthcheck.py
+!key-service/requirements.txt
+!server/
+!server/services/
+!server/services/tenant_crypto.py
+!server/services/platform_secrets.py
+!server/services/key_service_client.py

@@ -135,6 +135,27 @@ The enforced boundary and retained compatibility identifiers are documented in
 
 The included Compose configuration is a development starting point, not a hardened production deployment.
 
+## Database key custody
+
+The optional [Warden key service](key-service/README.md) stores the database
+encryption master key and unlocked organization keys in a separate application.
+Warden requests authenticated encryption and decryption over a private Unix
+socket; the API never exports raw keys. Production and development must use
+separate keys, credentials and socket volumes.
+
+This separates key custody from the web application. It does not protect against
+an attacker controlling the entire host, or stop a compromised application from
+using its authorized decryption access. It also does not encrypt every database
+column: readable fields and historical records require a separate migration.
+See the service guide for installation, compatibility and recovery.
+
+To inventory every application table without exporting record values, set
+`DATABASE_URL` privately and run `python tools/audit_table_encryption.py`. The
+read-only report includes column types and format counts; it exits with status 2
+when populated fields are not uniformly versioned ciphertext. Valid older
+ciphertext needs authenticated checks through Warden, and empty tables do not
+prove that future writes will be encrypted.
+
 ## Optional agent modules
 
 See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release. Community remains application-only, with no landing page or hosted subscriptions.

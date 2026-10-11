@@ -27,7 +27,7 @@ def check(root):
         for name, version in re.findall(r"^\s+([^\s]+)\s+(v[^\s]+)", text, re.MULTILINE):
             if ("go", normalized(name), version) not in covered:
                 errors.append(f"Missing declared Go dependency: {module}: {name}@{version}")
-    for service in ("server", "build-service"):
+    for service in ("server", "build-service", "key-service"):
         text = (root / service / "requirements.txt").read_text(encoding="utf-8")
         for name, version in re.findall(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?==([^\s#]+)", text, re.MULTILINE):
             if ("python", normalized(name), version) not in covered:

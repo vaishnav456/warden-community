@@ -1,0 +1,53 @@
+# Optional key custody for either edition. Paths are outside the repository.
+# Set WARDEN_KEY_DIRECTORY to an absolute directory containing master-key and
+# client-token. Copy the EXISTING 32-byte base64 master key; never generate a
+# replacement for an installed database. Generate client-token with secrets.
+# Initialize socket storage first; then recreate only key-service and server.
+services:
+  key-storage-init:
+    image: alpine:3.20
+    user: "0:0"
+    network_mode: none
+    command: ["sh", "-c", "chown 10003:10001 /run/warden-keys && chmod 0750 /run/warden-keys"]
+    volumes:
+      - warden-key-socket:/run/warden-keys
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+
+  key-service:
+    build:
+      context: .
+      dockerfile: key-service/Dockerfile
+    restart: unless-stopped
+    user: "10003:10001"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 512m
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    depends_on:
+      key-storage-init:
+        condition: service_completed_successfully
+    volumes:
+      - warden-key-socket:/run/warden-keys
+      - ${WARDEN_KEY_DIRECTORY:?Set an absolute private key directory}/master-key:/run/secrets/master-key:ro
+      - ${WARDEN_KEY_DIRECTORY:?Set an absolute private key directory}/client-token:/run/secrets/client-token:ro
+
+  warden-server:
+    depends_on:
+      key-service:
+        condition: service_healthy
+    environment:
+      TENANT_MASTER_KEK_B64: ""
+      KEY_SERVICE_SOCKET: /run/warden-keys/service.sock
+      KEY_SERVICE_TOKEN_FILE: /run/secrets/warden-key-token
+    volumes:
+      - warden-key-socket:/run/warden-keys:ro
+      - ${WARDEN_KEY_DIRECTORY:?Set an absolute private key directory}/client-token:/run/secrets/warden-key-token:ro
+
+volumes:
+  warden-key-socket:
