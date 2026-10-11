@@ -85,6 +85,21 @@ export class JournalCheckpoint {
       this.bytes+=data.length;
     }catch(error){this.failed=true;throw error;}
   }
+  async retireLegacy(){
+    if(this.retired)return;
+    let original;
+    try{original=await open(this.legacyPath,'r');}
+    catch(error){if(error.code!=='ENOENT')throw error;}
+    if(original){
+      await original.close();let marker;
+      try{marker=await open(this.legacyPath+'.legacy','r');}
+      catch(error){if(error.code!=='ENOENT')throw error;}
+      if(marker){await marker.close();throw new CheckpointMismatch();}
+      try{await rename(this.legacyPath,this.legacyPath+'.legacy');await this.directorySync();}
+      catch(error){this.failed=true;throw error;}
+    }
+    this.retired=true;
+  }
   async verify(actual){
     if(process.platform==='win32')throw new Error('Durable runtime checkpoints require Linux');
     await this.load();
@@ -96,10 +111,11 @@ export class JournalCheckpoint {
       if(retired){await retired.close();throw new CheckpointMismatch();}
       await this.legacy.verify(actual);this.head=actual;this.pending=null;
       await this.replace();
-      try{await rename(this.legacyPath,this.legacyPath+'.legacy');await this.directorySync();}
-      catch(error){this.failed=true;throw error;}
       this.loaded=true;
     }
+    // Complete an interrupted upgrade whose journal was durable before the
+    // legacy file was renamed. This must happen before serving any queries.
+    await this.retireLegacy();
     if(this.pending){
       if(equal(actual,this.pending.after))await this.finish(actual);
       else if(equal(actual,this.pending.before)){await this.append({kind:'abort',before:actual});this.pending=null;}

@@ -15,6 +15,9 @@ test('durable append checkpoint upgrades legacy state, reconciles interrupted co
     const old=new FileCheckpoint(path);await old.prepare(undefined,a);await old.finish(a);
     const journal=new JournalCheckpoint(path);await journal.verify(a);
     assert.equal((await stat(path+'.journal')).mode&0o777,0o600);
+    await rename(path+'.legacy',path); // Crash after durable journal creation, before retirement.
+    await new JournalCheckpoint(path).verify(a);
+    await assert.rejects(stat(path));assert((await stat(path+'.legacy')).isFile());
     await journal.prepare(a,b);
     const interrupted=new JournalCheckpoint(path);await assert.rejects(interrupted.verify(unknown));
     await interrupted.verify(a); // Durable store never committed: abort intent.
