@@ -27,8 +27,8 @@ async function definitions(db) {
   const tables = await db.query(`SELECT n.nspname AS schema,c.relname AS name,c.relkind AS kind,
     ARRAY(SELECT a.attname FROM pg_index i JOIN unnest(i.indkey) WITH ORDINALITY k(attnum,ord) ON true
       JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum
-      WHERE i.indrelid=c.oid AND i.indisprimary ORDER BY k.ord) AS pk,
-    ARRAY(SELECT a.attname FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND a.attgenerated='' ORDER BY a.attnum) AS columns
+      WHERE i.indrelid=c.oid AND i.indisprimary ORDER BY k.ord)::text[] AS pk,
+    ARRAY(SELECT a.attname FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND a.attgenerated='' ORDER BY a.attnum)::text[] AS columns
     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' AND n.nspname NOT IN ('information_schema',$1)
     AND c.relkind IN ('r','p','m','f') ORDER BY n.nspname,c.relname`,[PRIVATE]);
@@ -37,8 +37,8 @@ async function definitions(db) {
   }
   return tables.rows;
 }
-async function sequences(db) {
-  const result = await db.query(`SELECT n.nspname AS schema,c.relname AS name FROM pg_class c
+async function sequences(db,known) {
+  const result = known?{rows:known}:await db.query(`SELECT n.nspname AS schema,c.relname AS name FROM pg_class c
     JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='S'
     AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' AND n.nspname NOT IN ('information_schema',$1)
     ORDER BY n.nspname,c.relname`,[PRIVATE]);
@@ -85,9 +85,9 @@ async function insertRows(db,table,rows) {
 // SQL runs in application memory. The persistent database never executes a
 // decrypting view/function, and its interface returns ciphertext records only.
 export class CipherDatabase {
-  constructor(store,box,checkpoint,dataset) {
+  constructor(store,box,checkpoint,dataset,{projection=memoryDatabase}={}) {
     this.store=store; this.box=box; this.checkpoint=checkpoint; this.dataset=identifier(dataset);
-    this.tail=Promise.resolve(); this.closed=false;
+    this.tail=Promise.resolve(); this.closed=false;this.projection=projection;this.readers=new Set();this.writes=[];
   }
   async exclusive(callback) {
     const prior=this.tail; let release;
@@ -99,9 +99,15 @@ export class CipherDatabase {
   async sealManifest(manifest) {
     return sealDocument(this.box,this.dataset,manifestPurpose(manifest.revision),await encodeManifest(manifest));
   }
-  static async create(store,box,checkpoint,dataset,schema,seed=[],sourceSequences=[]) {
-    const engine=new CipherDatabase(store,box,checkpoint,dataset);
-    const db=await memoryDatabase(schema);
+  async pauseReaders() {
+    if(!this.readPause)this.readPause=new Promise(resolve=>{this.resumeReaders=resolve;});
+    await Promise.all([...this.readers].map(reader=>reader.done));
+  }
+  unpauseReaders() {this.resumeReaders?.();this.readPause=undefined;this.resumeReaders=undefined;}
+  async failClosed() {this.closed=true;await this.pauseReaders();await this.db?.close();this.unpauseReaders();}
+  static async create(store,box,checkpoint,dataset,schema,seed=[],sourceSequences=[],options={}) {
+    const engine=new CipherDatabase(store,box,checkpoint,dataset,options);
+    const db=await engine.projection(schema);
     try {
       const tables=(await definitions(db)).map(table=>({...table,id:randomUUID()}));
       const byName=new Map(tables.map(table=>[table.schema+'.'+table.name,table]));
@@ -143,11 +149,15 @@ export class CipherDatabase {
       return engine;
     } catch(error) {await db.close(); throw error;}
   }
-  static async open(store,box,checkpoint,dataset) {
-    const engine=new CipherDatabase(store,box,checkpoint,dataset);
+  static async open(store,box,checkpoint,dataset,options={}) {
+    const engine=new CipherDatabase(store,box,checkpoint,dataset,options);
     await engine.restore(); return engine;
   }
   async restore() {
+    await this.pauseReaders();
+    try{return await this.restoreProjection();}finally{this.unpauseReaders();}
+  }
+  async restoreProjection() {
     const state=await this.store.read();
     await this.checkpoint.verify(stamp(this.dataset,state));
     const manifest=await decodeManifest(await unsealDocument(this.box,this.dataset,manifestPurpose(state.revision),state.manifest));
@@ -158,7 +168,7 @@ export class CipherDatabase {
       const rows=state.collections.get(table.id);
       if(!rows || rows.size!==table.count || integrity(rows)!==table.digest) throw new Error('Encrypted record integrity mismatch');
     }
-    const db=await memoryDatabase(manifest.schema);
+    const db=await this.projection(manifest.schema);
     try {
       const actual=await definitions(db);
       if(!same(actual,tables.map(({id,count,digest,...definition})=>definition))) throw new Error('Encrypted schema membership mismatch');
@@ -188,7 +198,10 @@ export class CipherDatabase {
       await db.exec('ANALYZE');
       await journal(db,tables);
       const old=this.db;
-      this.db=db; this.manifest=manifest; this.state=state; this.indexes=indexes;
+      this.lazyRows=Boolean(db.concurrent&&this.store.records);
+      // Native PostgreSQL owns the readable projection. Keep PK routing and
+      // authenticated digests in JS, rather than a second full ciphertext copy.
+      this.db=db; this.manifest=manifest; this.state=this.lazyRows?{...state,collections:new Map()}:state; this.indexes=indexes;
       if(old) await old.close();
     } catch(error) {await db.close(); throw error;}
   }
@@ -211,7 +224,7 @@ export class CipherDatabase {
         if(head.revision!==this.state.revision)throw new Error('Storage changed');
         return this.manifest.tables.map(({id,count,digest})=>({id,count,digest}));
       })).catch(async()=>{
-        await this.exclusive(async()=>{this.closed=true;await this.db.close();}).catch(()=>{});
+        await this.exclusive(()=>this.failClosed()).catch(()=>{});
         throw new Error('Encrypted storage audit failed');
       });
       this.auditPending=task;
@@ -224,17 +237,93 @@ export class CipherDatabase {
         for(const table of this.manifest.tables){const rows=state.collections.get(table.id);
           if(!rows||rows.size!==table.count||integrity(rows)!==table.digest)throw new Error('Storage changed');}
         return true;
-      }catch{this.closed=true;await this.db.close();throw new Error('Encrypted storage audit failed');}
+      }catch{await this.failClosed();throw new Error('Encrypted storage audit failed');}
     });
   }
+  async concurrentRead(callback) {
+    while(this.readPause)await this.readPause;
+    if(this.closed)throw new Error('Encrypted database closed');
+    const started=performance.now();let guarded,queried,release,fatal=false;
+    const reader={allowed:new Set([JSON.stringify(stamp(this.dataset,this.state)),...(this.pendingHeads||[])]),
+      done:new Promise(resolve=>{release=resolve;})};
+    this.readers.add(reader);
+    try {
+      // This connection is independent of the fenced durable writer. The
+      // ticket records exactly the authenticated revisions possible during
+      // this read's guard; it cannot authorize a pre-request database rollback.
+      const observed=this.store.peekStamp?await this.store.peekStamp():stamp(this.dataset,await this.store.head());
+      if(!reader.allowed.has(JSON.stringify(observed))){fatal=true;throw new Error('Encrypted head changed');}
+      guarded=performance.now();
+      const result=await this.db.transaction(callback,{readOnly:true});queried=performance.now();
+      if(this.closed)throw new Error('Encrypted database closed');
+      return result;
+    }catch(error){
+      const safe=new Error('Read-only application transaction failed');safe.code=error.code||'CIPHER_READ';safe.status=error.status;
+      if(guarded===undefined||this.db.healthy===false)fatal=true;
+      throw safe;
+    }finally{
+      this.readers.delete(reader);release();
+      if(fatal)await this.failClosed();
+      const ended=performance.now();
+      this.observeTransaction?.({readOnly:true,queue:0,guard:(guarded??ended)-started,
+        query:guarded===undefined?0:(queried??ended)-guarded,persist:0,encode:0,intent:0,store:0,confirm:0});
+    }
+  }
   async transaction(callback,{readOnly=false}={}) {
+    if(readOnly&&this.db?.concurrent)return this.concurrentRead(callback);
+    if(!readOnly&&this.db?.concurrent)return this.enqueueWrite(callback);
+    return this.serialTransaction(callback,{readOnly});
+  }
+  enqueueWrite(callback) {
+    if(this.closed)return Promise.reject(new Error('Encrypted database closed'));
+    if(this.writes.length>=1024){const error=new Error('Encrypted writer queue full');error.status=503;return Promise.reject(error);}
+    const promise=new Promise((resolve,reject)=>this.writes.push({callback,resolve,reject}));
+    if(!this.writeTimer&&!this.flushing)this.writeTimer=setTimeout(()=>{this.writeTimer=undefined;this.flushWrites();},5);
+    return promise;
+  }
+  async flushWrites() {
+    this.flushing=true;
+    try{
+      while(this.writes.length){
+        const batch=this.writes.splice(0,128),results=[];
+        try{
+          await this.serialTransaction(async tx=>{
+            if(batch.length===1){results.push({value:await batch[0].callback(tx)});return;}
+            // Requests execute in arrival order. Savepoints isolate rejected
+            // requests; every successful result waits for the one durable commit.
+            const deferred=(await tx.query(`SELECT quote_ident(n.nspname)||'.'||quote_ident(c.conname) AS name
+              FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE c.condeferrable AND c.condeferred`)).rows;
+            for(const item of batch){
+              const before=await sequences(tx,this.manifest.sequences);await tx.query('SAVEPOINT warden_request');
+              try{
+                const value=await item.callback(tx);await tx.query('SET CONSTRAINTS ALL IMMEDIATE');
+                if(deferred.length)await tx.query('SET CONSTRAINTS '+deferred.map(row=>row.name).join(',')+' DEFERRED');
+                await tx.query('RELEASE SAVEPOINT warden_request');results.push({value});
+              }catch(error){
+                await tx.query('ROLLBACK TO SAVEPOINT warden_request');await tx.query('RELEASE SAVEPOINT warden_request');
+                // PostgreSQL sequences survive savepoint rollback. A rejected
+                // request must not change the captured counters of later callers.
+                for(const sequence of before)await tx.query('SELECT setval($1::regclass,$2::bigint,$3)',[relation(sequence),sequence.last_value,sequence.is_called]);
+                const safe=new Error('Application transaction rejected');safe.code=error.code||'CIPHER_TRANSACTION';safe.status=error.status;results.push({error:safe});
+              }
+            }
+          });
+          for(let i=0;i<batch.length;i++)results[i].error?batch[i].reject(results[i].error):batch[i].resolve(results[i].value);
+          this.observeBatch?.({requests:batch.length,rejected:results.filter(result=>result.error).length});
+        }catch(error){for(const item of batch)item.reject(error);}
+      }
+    }finally{this.flushing=false;}
+  }
+  async serialTransaction(callback,{readOnly=false}={}) {
     const started=performance.now();let entered,guarded,queried;
     const phases={encode:0,intent:0,store:0,confirm:0};
     try{return await this.exclusive(async()=>{
       entered=performance.now();
-      const current=await this.store.head();
-      await this.checkpoint.verify(stamp(this.dataset,current));
-      if(current.revision!==this.state.revision) await this.restore();
+      try{
+        const current=await this.store.head();
+        await this.checkpoint.verify(stamp(this.dataset,current));
+        if(current.revision!==this.state.revision) await this.restore();
+      }catch{await this.failClosed();throw new Error('Encrypted database guard failed');}
       guarded=performance.now();
       let committed=false;
       try {
@@ -248,7 +337,7 @@ export class CipherDatabase {
           // encrypted commit; a rejected SQL commit must not persist its rows.
           await tx.query('SET CONSTRAINTS ALL IMMEDIATE');
           const events=(await tx.query(`SELECT collection,operation,old_key,new_key,value FROM ${PRIVATE}.journal ORDER BY seq`)).rows;
-          const nextSequences=await sequences(tx);
+          const nextSequences=await sequences(tx,this.manifest.sequences);
           if(!events.length && same(nextSequences,this.manifest.sequences)) return result;
           const updates=new Map(); const indexes=new Map();
           for(const event of events) {
@@ -267,12 +356,20 @@ export class CipherDatabase {
             else {
               if(lookup(key(event.new_key))) throw new Error('Encrypted write identity conflict');
               keys.set(key(event.new_key),id);
-              rows.set(id,await sealDocument(this.box,id,rowPurpose(this.dataset,table.id),JSON.stringify({key:event.new_key,row:event.value})));
+              rows.set(id,{key:event.new_key,row:event.value});
             }
+          }
+          // Collapse repeated changes to one record, then use the custody
+          // adapter's bounded batch API instead of a socket roundtrip per row.
+          for(const [collection,rows] of updates){
+            const records=[...rows].filter(([,value])=>value!==null);
+            for(let offset=0;offset<records.length;offset+=128)await Promise.all(records.slice(offset,offset+128).map(async([id,value])=>{
+              rows.set(id,await sealDocument(this.box,id,rowPurpose(this.dataset,collection),JSON.stringify(value)));
+            }));
           }
           const changes=[];const stats=new Map();
           for(const [collection,updates_] of updates) {
-            const rows=this.state.collections.get(collection);
+            const rows=this.lazyRows?await this.store.records(collection,[...updates_.keys()]):this.state.collections.get(collection);
             const table=this.manifest.tables.find(item=>item.id===collection);
             let sum=BigInt('0x'+table.digest),count=table.count;
             for(const [id,payload] of updates_) {
@@ -288,6 +385,8 @@ export class CipherDatabase {
           const manifest={...this.manifest,revision:randomUUID(),sequences:nextSequences,tables:this.manifest.tables.map(table=>({...table,...stats.get(table.id)}))};
           let phase=performance.now();
           const next={revision:manifest.revision,manifest:await this.sealManifest(manifest),collections:this.state.collections};
+          this.pendingHeads=[JSON.stringify(stamp(this.dataset,this.state)),JSON.stringify(stamp(this.dataset,next))];
+          for(const reader of this.readers)for(const head of this.pendingHeads)reader.allowed.add(head);
           phases.encode=performance.now()-phase;phase=performance.now();
           await this.checkpoint.prepare(stamp(this.dataset,this.state),stamp(this.dataset,next));
           phases.intent=performance.now()-phase;phase=performance.now();
@@ -297,7 +396,7 @@ export class CipherDatabase {
           await this.checkpoint.finish(stamp(this.dataset,next));
           phases.confirm=performance.now()-phase;
           await tx.query(`DELETE FROM ${PRIVATE}.journal`);
-          for(const change of changes) {
+          if(!this.lazyRows)for(const change of changes) {
             const rows=next.collections.get(change.collection);
             if(change.kind==='delete') rows.delete(change.id);else rows.set(change.id,change.payload);
           }
@@ -306,19 +405,21 @@ export class CipherDatabase {
             if(id===null) this.indexes.get(collection).delete(key_);else this.indexes.get(collection).set(key_,id);
           }
           return result;
-        });
+        },{readOnly});
       } catch(error) {
         // A cold commit is authoritative. A failed local commit/checkpoint must
         // recover it before another query, rather than return a stale cache.
+        await this.pauseReaders();
         try {
           const head=await this.store.head();
           await this.checkpoint.verify(stamp(this.dataset,head));
-          if(head.revision!==this.state.revision||committed)await this.restore();
+          if(head.revision!==this.state.revision||committed)await this.restoreProjection();
           else if(!readOnly)for(const item of this.manifest.sequences)await this.db.query('SELECT setval($1::regclass,$2::bigint,$3)',[relation(item),item.last_value,item.is_called]);
         } catch {this.closed=true; await this.db.close();}
+        finally{this.unpauseReaders();}
         const safe=new Error(committed?'Encrypted commit requires recovery':'Application transaction failed');
         safe.code=error.code || 'CIPHER_TRANSACTION';safe.status=error.status;throw safe;
-      }
+      }finally{this.pendingHeads=undefined;}
     });}finally{
       if(entered!==undefined&&this.observeTransaction){
         const ended=performance.now();
@@ -328,5 +429,11 @@ export class CipherDatabase {
       }
     }
   }
-  async close() {if(this.closed)return;await this.exclusive(async()=>{this.closed=true; await this.db.close();});}
+  async close() {
+    if(this.closed)return;
+    if(this.writeTimer){clearTimeout(this.writeTimer);this.writeTimer=undefined;}
+    if(this.writes.length&&!this.flushing)await this.flushWrites();
+    await this.exclusive(()=>this.failClosed());
+    for(const item of this.writes.splice(0))item.reject(new Error('Encrypted database closed'));
+  }
 }

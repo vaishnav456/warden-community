@@ -3,6 +3,7 @@ Gunicorn configuration for Warden server.
 Usage:  gunicorn -c gunicorn.conf.py app:app
 """
 import os
+from services.http_capacity import http_threads
 
 # Loopback by default (matches the Caddy-fronted deployment, where Caddy is
 # the only process able to reach this port). Set HOST=0.0.0.0 only when
@@ -17,7 +18,7 @@ bind = "{}:{}".format(os.environ.get("HOST", "127.0.0.1"), os.environ.get("PORT"
 # owner for background services and the relay registry.
 workers = 1
 worker_class = "gthread"
-threads = 8
+threads = http_threads()
 worker_connections = 1000
 timeout = 120          # allow slow PDF builds and file uploads
 keepalive = 5

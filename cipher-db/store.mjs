@@ -20,11 +20,23 @@ export class RevisionConflict extends Error {
 // It carries only random IDs and ciphertext; no decryption is done in PostgreSQL.
 export class PostgresCipherStore {
   constructor(connection, dataset) { this.connection = connection; this.dataset = identifier(dataset); }
-  async head() {
-    const result=await this.connection.query('SELECT revision,manifest FROM warden_cipher.head WHERE id=$1',[this.dataset]);
+  async head(independent=false) {
+    const query=independent?this.connection.independentQuery:this.connection.query;
+    const result=await query('SELECT revision,manifest FROM warden_cipher.head WHERE id=$1',[this.dataset]);
     if(result.rows.length!==1) throw new Error('Encrypted database not initialized');
     identifier(result.rows[0].revision);ciphertext(result.rows[0].manifest);
     return result.rows[0];
+  }
+  peekHead(){return this.head(true);}
+  async peekStamp(){
+    const result=await this.connection.independentQuery("SELECT revision,encode(sha256(convert_to(manifest,'UTF8')),'hex') AS digest FROM warden_cipher.head WHERE id=$1",[this.dataset]);
+    if(result.rows.length!==1||!/^[a-f0-9]{64}$/.test(result.rows[0].digest))throw new Error('Invalid encrypted head');
+    identifier(result.rows[0].revision);return {dataset:this.dataset,...result.rows[0]};
+  }
+  async records(collection,ids){
+    for(const id of ids)identifier(id);
+    const result=await this.connection.query('SELECT id,payload FROM '+table(collection)+' WHERE id=ANY($1::uuid[])',[ids]);
+    return new Map(result.rows.map(row=>[identifier(row.id),ciphertext(row.payload)]));
   }
   async read() {
     return this.connection.transaction(async tx => {
@@ -108,14 +120,20 @@ export class PostgresCipherStore {
     await this.connection.transaction(async tx => {
       const head = await tx.query('SELECT revision FROM warden_cipher.head WHERE id=$1 FOR UPDATE', [this.dataset]);
       if (head.rows.length !== 1 || head.rows[0].revision !== expected) throw new RevisionConflict();
-      for (const change of changes) {
-        const name = table(change.collection); const id = identifier(change.id);
-        if (change.kind === 'delete') {
-          const result = await tx.query('DELETE FROM ' + name + ' WHERE id=$1 RETURNING id', [id]);
-          if (result.rows.length !== 1) throw new Error('Encrypted record missing');
-        } else if (change.kind === 'put') {
-          await tx.query('INSERT INTO ' + name + ' VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload', [id,ciphertext(change.payload)]);
-        } else throw new Error('Invalid storage change');
+      const grouped=new Map();
+      for(const change of changes){
+        identifier(change.collection);identifier(change.id);
+        if(!['put','delete'].includes(change.kind))throw new Error('Invalid storage change');
+        if(change.kind==='put')ciphertext(change.payload);
+        const key=change.collection+':'+change.kind;
+        if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(change);
+      }
+      for(const group of grouped.values())for(let offset=0;offset<group.length;offset+=128){
+        const chunk=group.slice(offset,offset+128),name=table(chunk[0].collection),ids=chunk.map(change=>change.id);
+        if(chunk[0].kind==='delete'){
+          const result=await tx.query('DELETE FROM '+name+' WHERE id=ANY($1::uuid[]) RETURNING id',[ids]);
+          if(result.rows.length!==ids.length)throw new Error('Encrypted record missing');
+        }else await tx.query('INSERT INTO '+name+' SELECT * FROM unnest($1::uuid[],$2::text[]) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',[ids,chunk.map(change=>change.payload)]);
       }
       await tx.query('UPDATE warden_cipher.head SET revision=$2,manifest=$3 WHERE id=$1', [this.dataset,revision,manifest]);
     });

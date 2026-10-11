@@ -72,7 +72,7 @@ def manifest(endpoint, challenge, version, observed):
     return dict(**proof, signature=base64.b64encode(signing.sign_canonical_payload(proof)).decode())
 
 
-def record_report(endpoint, body):
+def record_report(endpoint, body, *, defer_patch=False):
     report = body.get("agent_integrity")
     if not isinstance(report, dict):
         return
@@ -90,9 +90,11 @@ def record_report(endpoint, body):
                    and baseline.get("measurement_sha256") == reported_measurement)
     saved = dict(sha256=observed, status="mismatch" if status=="mismatch" else "verified" if trusted else "unverified",
                  local_status=status, measurement_sha256=reported_measurement,checked_at=db._now_iso())
-    db._patch(f"endpoints?id=eq.{db._q(endpoint['id'])}", {
-        "agent_integrity_encrypted": db._endpoint_encrypt(company, "agent_integrity", saved),
-    })
+    encrypted = db._endpoint_encrypt(company, "agent_integrity", saved)
+    if not defer_patch:
+        db._patch(f"endpoints?id=eq.{db._q(endpoint['id'])}", {
+            "agent_integrity_encrypted": encrypted,
+        })
     if status == "mismatch" or not trusted:
         if not db.get_open_alert(endpoint["id"], "agent_integrity"):
             db.create_alert(endpoint["company_id"], endpoint.get("branch_id"), endpoint["id"],
@@ -102,3 +104,4 @@ def record_report(endpoint, body):
         alert=db.get_open_alert(endpoint["id"],"agent_integrity")
         if alert:
             db.resolve_alert(alert["id"],None,"Agent again matches its server-approved installation measurement.")
+    return encrypted

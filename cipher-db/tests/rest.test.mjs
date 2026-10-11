@@ -2,14 +2,16 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {RestCompiler} from '../rest.mjs';
-test('query compatibility: joins, inner filters, pagination, atomic routines and exact JSON numbers',async()=>{
-  const db=new PGlite();await db.exec(`CREATE SCHEMA endpt;
+import {nativeFactory} from '../native.mjs';
+for(const native of [false,true])test(`${native?'native':'memory'} query compatibility: joins, inner filters, pagination, atomic routines and exact JSON numbers`,{skip:native&&process.env.WARDEN_NATIVE_TEST!=='1'},async()=>{
+  const schema=`CREATE SCHEMA endpt;
   CREATE TABLE endpt.companies(id bigint PRIMARY KEY,name text,active boolean);
   CREATE TABLE endpt.endpoints(id integer PRIMARY KEY,company_id bigint REFERENCES endpt.companies,name text,tags text[]);
   CREATE FUNCTION endpt.bump(p_id bigint,p_name text DEFAULT 'default') RETURNS jsonb LANGUAGE plpgsql AS $$
     BEGIN UPDATE endpt.companies SET name=p_name WHERE id=p_id;RETURN jsonb_build_object('ok',FOUND);END $$;
-  CREATE FUNCTION endpt.no_args() RETURNS integer LANGUAGE sql AS $$SELECT 7$$;`);
-  const compiler=new RestCompiler({application:fn=>db.transaction(fn)});
+  CREATE FUNCTION endpt.no_args() RETURNS integer LANGUAGE sql AS $$SELECT 7$$;`;
+  const db=native?await nativeFactory()(schema):new PGlite();if(!native)await db.exec(schema);
+  const compiler=new RestCompiler({application:(fn,options)=>db.transaction(fn,options)});
   const request=(path,method='GET',data_json,prefer)=>compiler.request({schema:'endpt',path,method,data_json,prefer});
   try {
     await request('companies','POST','[{"id":9007199254740993,"name":"Alice","active":true},{"id":2,"name":"Bob","active":false}]');

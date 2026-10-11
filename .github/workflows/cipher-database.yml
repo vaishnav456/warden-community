@@ -35,3 +35,14 @@ jobs:
       - name: Encryption, atomicity, restart, tamper and actual storage-interface checks
         working-directory: cipher-db
         run: npm test
+      - name: Build trusted concurrent runtime
+        run: docker build -f cipher-db/Dockerfile -t warden-cipher-native-test .
+      - name: Concurrent reads, grouped durability, recovery and volatile-only projection
+        run: >-
+          docker run --rm --init --network host --read-only --memory 4g --memory-swap 4g --ulimit core=0
+          --tmpfs /tmp:size=32m,mode=1777
+          --tmpfs /run/warden-projection:size=3g,mode=0700,uid=10005,gid=10001
+          --tmpfs /var/lib/postgresql/data:size=1m,mode=0700,uid=10005,gid=10001
+          --mount type=bind,source=${{ github.workspace }}/cipher-db/tests,target=/app/tests,readonly
+          -e WARDEN_NATIVE_TEST=1 -e WARDEN_CIPHER_TEST_DSN warden-cipher-native-test
+          node --test --test-isolation=none tests/native.test.mjs tests/postgres.test.mjs tests/rest.test.mjs tests/replay.test.mjs

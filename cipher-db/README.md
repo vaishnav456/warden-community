@@ -8,7 +8,13 @@ are included. PostgreSQL receives no business columns, readable SQL routines,
 decryption functions, or keys.
 
 The separate application runtime decrypts into **memory only** and executes the
-original PostgreSQL schema, constraints and atomic routines using PGlite 18.3.
+original PostgreSQL schema, constraints and atomic routines using native
+PostgreSQL 16. The disposable query projection runs inside the trusted runtime
+container; its data directory, WAL, temporary files and SQL socket reside in a
+private tmpfs mount. It has no TCP listener, no published port and no socket
+mount in the web container. Startup rejects a persistent projection filesystem,
+enabled container swap or enabled core dumps. PGlite remains available for
+offline capture and compatibility tests, not as the live query engine.
 Warden's database interface carries encrypted request and response envelopes
 over an authenticated private Unix socket. Readable query results exist inside
 the trusted application boundary. They are never returned by the persistent
@@ -55,6 +61,10 @@ on a separate read-only PostgreSQL snapshot while application queries continue.
 Linux operators can request the same scan with `SIGUSR2`; logs contain only its
 status and duration. Requests have unique IDs, a
 30-second acceptance window, purpose-bound authentication and replay rejection.
+Replay retention uses monotonic expiry and a bounded 500,000-entry registry;
+normal requests examine only expired entries and the first unexpired entry.
+Aggregate buffered request bodies are bounded to 192 MiB across connections.
+Capacity rejection returns 503; it never disables replay checks or durability.
 Requests issued before the current runtime started are rejected. There are no
 automatic write retries or plaintext fallbacks. The application executes as
 the original `service_role`, retaining table/function grants, row-security
@@ -84,11 +94,24 @@ journal and sequence bookkeeping. Writes still persist sequence-only changes,
 enforce deferred constraints and checkpoint before success. Restores run
 `ANALYZE` in memory to rebuild planner statistics; sequence reads are batched.
 
-PGlite has one exclusive SQL connection. These changes reduce queueing, but do
-not establish a fleet-capacity guarantee. Benchmark heartbeat latency, command
+The native runtime pools up to 16 concurrent read-only, repeatable-read
+transactions. Readers see committed, durably encrypted records while a pending
+writer waits for custody or disk flushes. Each reader verifies the ciphertext
+head on an independent connection without changing the writer's checkpoint.
+Recovery drains readers and replaces the projection before access resumes.
+
+The single fenced writer groups up to 128 arriving requests, with a five
+millisecond collection window and a bounded queue of 1,024 requests. Savepoints
+isolate rejected requests, enforce deferred constraints and restore rejected
+sequence changes. Successful requests share the encrypted commit and both
+checkpoint flushes; none receives success before durability and local commit.
+Custody encryption and ciphertext inserts use bounded batches. Repeated changes
+to one row are encrypted once. The runtime retains primary-key routing and
+authenticated counts/digests instead of a second full ciphertext dataset in JS.
+
+These changes do not establish a fleet-capacity guarantee. Benchmark heartbeat latency, command
 delivery, writes, audit overlap and recovery on the intended workload before
-increasing deployment scale. A native concurrent SQL engine inside the trusted
-memory boundary requires a separate verified implementation. Redis or another
+increasing deployment scale. Redis or another
 cache must not store readable records or bypass tenant/BYOK authorization.
 The [10,000-endpoint architecture target](../docs/ENCRYPTED_FLEET_CAPACITY.md)
 sets out the database decision, workload and acceptance tests. Runtime logs
@@ -108,6 +131,8 @@ network. Keep these paths outside the repository:
 | `CIPHER_CHECKPOINT` | Durable private checkpoint outside PostgreSQL, accessible only to this runtime |
 | `CIPHER_SOCKET` | Private Unix socket shared with Warden; directory restricted to runtime/application users |
 | `CIPHER_TOKEN_FILE` | Separate random URL-safe token, at least 43 characters; mounted read-only in runtime and Warden |
+| `CIPHER_QUERY_ENGINE` | Must be `native`; no automatic single-connection or disk-backed fallback |
+| `CIPHER_PROJECTION_ROOT` | Private Linux tmpfs mount; default `/run/warden-projection`, never shared with the web container |
 | `KEY_SERVICE_SOCKET` | Existing custody application's private socket |
 | `KEY_SERVICE_TOKEN_FILE` | Existing key-service authorization file; no master key is mounted in the runtime |
 
@@ -128,6 +153,24 @@ key-service core dumps. Its private configuration paths
 and stable dataset UUID must match the verified capture. Starting the overlay
 against an uncaptured database fails closed; it does not perform a migration
 or retire the old database automatically.
+
+The overlay reserves a 4 GiB runtime memory limit, no swap, a 3 GiB projection
+tmpfs and 128 processes. tmpfs pages count against that memory limit. Adjust
+these bounded settings to measured dataset size and recovery peak, rather than
+assuming the limit proves fleet capacity. `init: true` reaps PostgreSQL children;
+the runtime gets 120 seconds for graceful shutdown. Only the volatile projection
+disables its own fsync/WAL durability; the persistent ciphertext store and
+private checkpoint retain their durable flushes.
+
+`benchmark.mjs` is an explicitly guarded synthetic SQL/durability benchmark. It
+requires `WARDEN_CIPHER_BENCHMARK=synthetic-only`, an empty disposable ciphertext
+database, a private checkpoint directory and the test-only `tests/box.mjs`
+fixture mounted under `/app/tests`. It seeds 10,000 synthetic records, exercises
+three durable write requests plus a concurrent read per cycle at 333/second and
+a short 999/second burst, and overlaps a storage audit. It reports drops,
+failures, drain throughput and latency percentiles. It excludes HTTP, endpoint
+authentication, the real custody service, dashboards and relays; its results
+must not be described as a 10,000-endpoint application acceptance test.
 
 ## Migration and cutover
 
