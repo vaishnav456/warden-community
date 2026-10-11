@@ -39,7 +39,7 @@ metric, into one atomic durable commit. It accepts at most eight operations and
 rolls back the whole request on failure. Request-local notification counts
 avoid duplicate reads without caching authorization between requests. Deploy
 the batch-capable runtime before this app version; revert the app first.
-Thirty-two runtime/storage tests and 768 Hosted / 747 Community server tests
+Thirty-two runtime/storage tests and 776 Hosted / 755 Community server tests
 passed in isolated Linux qualification. These regressions establish correctness,
 not fleet throughput or a response-time guarantee.
 
@@ -152,13 +152,30 @@ Remote setup also waits for the installed agent's 30-second poll: a fresh
 session's job waited 14.836 seconds for pickup and completed about three seconds
 later. Reducing that wait needs a separately tested command wake-up channel or
 agent polling change; it cannot be fixed by adding HTTP workers alone. Streaming
-does not make a database commit for each frame. The browser frame queue now
-coalesces obsolete updates before a newer full snapshot, bounds pending frames
-and bytes, and waits for a full baseline after overflow or decode failure.
-JPEG/encrypted relay traffic no longer negotiates a second Deflate compression
-layer. These preserve authorization and consent; endpoint capture and installed
-agent binaries remain separate deployment items. Idle frame age measures time
-since the last drawn update, not end-to-end input latency.
+does not make a database commit for each frame. The relay explicitly yields with
+`await asyncio.sleep(0)` after forwarding messages so receiving and control tasks
+can run even when a WebSocket send completes without suspending the current task.
+
+Agent JPEG quality remains 60. The relay negotiates WebSocket Deflate by default,
+configurable with `WARDEN_REMOTE_WS_COMPRESSION=deflate|none`. A synthetic UI JPEG
+A/B test saved 19–35% of frame bytes with Deflate. This measurement does not prove
+bandwidth savings or FPS improvements for the affected session; compressibility
+and CPU costs depend on the frame content and workload.
+
+The browser parses binary frame headers directly and uses generation-aware,
+bounded rendering. It coalesces obsolete updates before a newer full snapshot,
+bounds pending frames and bytes, rejects decodes from a reset stream, and waits
+for a full baseline after overflow or decode failure. Viewport requests use the
+displayed canvas size and device pixel ratio while retaining the native aspect
+ratio, reducing unnecessary full-resolution transmission. Live permission checks
+select only current authority fields rather than credentials or MFA secrets.
+They remain fresh, with the same revalidation interval and fail-closed behavior.
+Authorization, consent and BYOK enforcement remain unchanged. No new agent binaries or fleet update are
+included; endpoint capture remains a separate deployment item. Idle frame age
+measures time since the last drawn update, not end-to-end input latency. Sixteen
+browser queue/renderer regressions and both complete server suites passed,
+including real compressed/uncompressed binary transport, large frames and live
+revocation. A new affected-session movement test remains a separate check.
 
 ## Implementation sequence
 
@@ -215,3 +232,4 @@ server URL; this design does not introduce hosted platform or trial features.
 - [PostgreSQL WAL flush configuration and durability](https://www.postgresql.org/docs/16/runtime-config-wal.html)
 - [PostgreSQL filesystem flush diagnostic](https://www.postgresql.org/docs/16/pgtestfsync.html)
 - [WebSocket compression CPU and memory tradeoffs](https://websockets.readthedocs.io/en/stable/topics/compression.html)
+- [WebSocket asyncio scheduling and explicit yielding](https://websockets.readthedocs.io/en/stable/faq/asyncio.html#why-does-my-program-never-receive-any-messages)

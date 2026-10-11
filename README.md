@@ -71,6 +71,22 @@ use scoped name-only reads. Full inventory queries retain their default fields.
 No authorization or plaintext results are cached across requests. Fleet workload
 qualification remains separate from these read-path optimizations.
 
+Remote streaming keeps agent JPEG quality at 60 and negotiates WebSocket
+Deflate by default; set `WARDEN_REMOTE_WS_COMPRESSION=none` to disable it, or
+`deflate` to enable negotiation. A synthetic UI JPEG A/B test reduced frame size
+by 19–35%; this does not establish bandwidth or FPS improvements for an affected
+remote session.
+
+The relay yields between forwarded messages, while the browser uses direct
+binary header parsing and generation-aware, bounded frame rendering. It replaces
+obsolete updates with a newer full snapshot and requires a full baseline after
+overflow or corruption. Viewport requests use the displayed canvas, device pixel
+ratio and native aspect ratio to avoid unnecessary full-resolution transmission.
+Fresh relay permission checks select only authority fields, avoiding unrelated
+account data and MFA-secret decryption. Authorization, consent and BYOK
+enforcement remain in place. These changes do
+not include new agent binaries or a fleet update.
+
 ## Security design
 
 Warden treats the control plane, endpoint agents, Home Nodes, build service, and release pipeline as separate trust boundaries. Important controls include signed commands, short-lived device certificates, organization envelope encryption, endpoint job leasing, TLS validation, and explicit organization authorization.

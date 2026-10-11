@@ -58,6 +58,17 @@ REMOTE_AUTH_CHECK_SECONDS = 2
 MAX_REMOTE_RELAY_PAIRS = 256
 
 
+def _relay_compression():
+    # Desktop JPEGs still contain compressible repeated UI blocks. Keep the
+    # previous negotiated Deflate default; allow an explicit measured opt-out.
+    value = os.environ.get('WARDEN_REMOTE_WS_COMPRESSION', 'deflate').strip().lower()
+    if value == 'deflate':
+        return 'deflate'
+    if value == 'none':
+        return None
+    raise ValueError('WARDEN_REMOTE_WS_COMPRESSION must be deflate or none')
+
+
 class RelayCapacityExceeded(Exception):
     pass
 
@@ -182,6 +193,9 @@ async def _relay(src, dst, quality=None) -> None:
         await dst.send(msg)
         if quality is not None:
             quality['bytes_to_browser']+=len(msg.encode('utf-8') if isinstance(msg,str) else msg)
+        # Buffered recv/send can both finish synchronously. Give input, pings
+        # and authority checks a turn even while a frame burst is draining.
+        await asyncio.sleep(0)
 
 
 _REMOTE_MESSAGE_CAPABILITY = {
@@ -207,6 +221,7 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
     }
     last_ping=0.0
     async for msg in src:
+        await asyncio.sleep(0)
         if not isinstance(msg, str):
             log.warning("Dropped binary browser message for session %s", session.get("id"))
             continue
@@ -233,7 +248,17 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
 
 
 def _remote_authority_current(session, require_consent=False):
-    current = db.get_remote_session(session["id"])
+    # These are fresh authorization reads, not cached session/user records.
+    # Selecting only the authority fields also avoids fetching credentials and
+    # decrypting an administrator's MFA secret on every live relay check.
+    rows = db._get(
+        "remote_sessions?select=id,endpoint_id,company_id,admin_id,status,"
+        "owner_access_token_version,consent_required,consent_status"
+        f"&id=eq.{db._q(session['id'])}"
+        f"&company_id=eq.{db._q(session.get('company_id'))}"
+        f"&endpoint_id=eq.{db._q(session.get('endpoint_id'))}&limit=1"
+    )
+    current = rows[0] if rows else None
     if not current or current.get("status") != "active":
         return False
     if any(str(current.get(key)) != str(session.get(key)) for key in ("endpoint_id", "company_id", "admin_id")):
@@ -241,7 +266,11 @@ def _remote_authority_current(session, require_consent=False):
     admin_id = current.get("admin_id")
     if not admin_id:
         return False
-    admin = db.get_admin_by_id(admin_id)
+    rows = db._get(
+        "admin_users?select=id,is_active,role,company_id,access_token_version"
+        f"&id=eq.{db._q(admin_id)}&limit=1"
+    )
+    admin = rows[0] if rows else None
     if not admin or not admin.get("is_active"):
         return False
     if admin.get("role") != "superadmin" and str(admin.get("company_id")) != str(current.get("company_id")):
@@ -715,9 +744,7 @@ def start() -> None:
             async with websockets.serve(
                 _handle, PROXY_HOST, PROXY_PORT,
                 max_size=MAX_RELAY_MESSAGE_BYTES, max_queue=MAX_RELAY_QUEUE,
-                # JPEG frames and encrypted Home traffic are already compressed
-                # or opaque. Recompressing them adds CPU and stream latency.
-                compression=None,
+                compression=_relay_compression(),
             ):
                 log.info("WS relay listening on %s:%d", PROXY_HOST, PROXY_PORT)
                 _startup_error = None

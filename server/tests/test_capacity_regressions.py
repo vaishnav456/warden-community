@@ -84,10 +84,17 @@ class CapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
                        capabilities={'view':True,'control':False})
         payload = b'JPEG-fixture' + bytes(1988742)
         self.assertLess(len(payload),ws_proxy.MAX_RELAY_MESSAGE_BYTES)
+        owner = dict(id='synthetic-admin',company_id='tenant',role='technician',is_active=True,access_token_version=0)
+        def authority_read(path):
+            if path.startswith('remote_sessions?'):
+                return [dict(session)]
+            if path.startswith('admin_users?'):
+                return [dict(owner)]
+            raise AssertionError('Unexpected authority read')
         with (
              patch.object(ws_proxy.db,'get_remote_session_by_token',return_value=session),
              patch.object(ws_proxy.db,'get_remote_session',return_value=session),
-             patch.object(ws_proxy.db,'get_admin_by_id',return_value=dict(id='synthetic-admin',company_id='tenant',role='technician',is_active=True,access_token_version=0)),
+             patch.object(ws_proxy.db,'_get',side_effect=authority_read),
              patch.object(ws_proxy.db,'get_endpoint_by_api_key_hash',return_value={'id':'capacity-endpoint'}),
              patch.object(ws_proxy.config,'REQUIRE_CLIENT_CERT',False),
              patch.object(ws_proxy.db,'close_remote_session'), patch.object(ws_proxy.db,'_patch')
