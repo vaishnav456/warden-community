@@ -892,7 +892,7 @@ func startRemoteHelperBridge(exePath string, session *relaySession, desktop stri
 		pipeSDDL = fmt.Sprintf("D:(A;;GA;;;SY)(A;;GRGW;;;%s)", userSID)
 	}
 
-	outPipe, err := createPipeServer(outName, windows.PIPE_ACCESS_INBOUND, pipeSDDL)
+	outPipe, err := createPipeServerWithBuffer(outName, windows.PIPE_ACCESS_INBOUND, pipeSDDL, captureOutputPipeBufferSize)
 	if err != nil {
 		return nil, fmt.Errorf("create output pipe: %w", err)
 	}

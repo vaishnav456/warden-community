@@ -149,13 +149,22 @@ func readPipeMsg(r io.Reader) (byte, []byte, error) {
 	return tag, payload, nil
 }
 
-const pipeBufferSize = 1 << 20 // 1 MiB — comfortably larger than a single JPEG frame
-const maxPipeFrame = 16 << 20  // 16 MiB — hard cap on any single frame readPipeMsg will allocate for
+const pipeBufferSize = 1 << 20 // Default 1 MiB quota for input, consent and other local pipes.
+
+// Apply backpressure earlier to capture output so slow WebSocket sends do not
+// accumulate a large FIFO of stale frames. Windows treats this quota as advisory;
+// blocking byte pipes can still carry a complete frame larger than the buffer.
+const captureOutputPipeBufferSize = 64 << 10
+const maxPipeFrame = 16 << 20 // 16 MiB — hard cap on any single frame readPipeMsg will allocate for
 
 // createPipeServer creates a named pipe server end with the given access
 // direction (PIPE_ACCESS_INBOUND / PIPE_ACCESS_OUTBOUND) and SDDL security
 // descriptor.
 func createPipeServer(name string, access uint32, sddl string) (windows.Handle, error) {
+	return createPipeServerWithBuffer(name, access, sddl, pipeBufferSize)
+}
+
+func createPipeServerWithBuffer(name string, access uint32, sddl string, bufferSize uint32) (windows.Handle, error) {
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
 		return 0, fmt.Errorf("SecurityDescriptorFromString: %w", err)
@@ -173,7 +182,7 @@ func createPipeServer(name string, access uint32, sddl string) (windows.Handle, 
 		access,
 		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT,
 		1, // max instances
-		pipeBufferSize, pipeBufferSize,
+		bufferSize, bufferSize,
 		0, // default timeout
 		sa,
 	)

@@ -112,6 +112,16 @@ Input-pipe transit includes the write itself and uses a coarse shared host
 timer, so it must not be added to pipe-write timing. Browser canvas-call and
 timer-delay measurements also distinguish local rendering and scheduling waits.
 
+The helper's capture-output pipe requests 64 KiB buffering so a slow sender
+applies backpressure before a large burst of old screen updates accumulates.
+Input and consent pipes retain their existing buffers; frame order, partial
+updates and complete payloads are preserved. Windows treats the requested size
+as a quota hint, not a hard memory or latency limit. In a synthetic Windows test
+with 16 alternating 20/40 KiB frames and a 100 ms consumer delay, maximum frame
+age fell from 1.61 seconds to 0.30 seconds at the same 297 KiB/s throughput.
+That experiment measures local pipe backlog, not complete remote input latency;
+applying the change requires a qualified agent build and device update.
+
 ## Security design
 
 Warden treats the control plane, endpoint agents, Home Nodes, build service, and release pipeline as separate trust boundaries. Important controls include signed commands, short-lived device certificates, organization envelope encryption, endpoint job leasing, TLS validation, and explicit organization authorization.
