@@ -58,7 +58,7 @@ def consume_rate_limit(bucket_key, max_requests, window_seconds=60):
 
 from database.transport import (
     get as _get, post as _post, patch as _patch, rpc as _rpc,
-    delete as _delete, count as _count, get_all as _get_all,
+    delete as _delete, count as _count, get_all as _get_all, batch as _batch,
 )
 from database.dashboard import dashboard_counts
 

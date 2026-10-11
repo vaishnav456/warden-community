@@ -46,5 +46,6 @@ jobs:
           --tmpfs /run/warden-projection:size=3g,mode=0700,uid=10005,gid=10001
           --tmpfs /var/lib/postgresql/data:size=1m,mode=0700,uid=10005,gid=10001
           --mount type=bind,source=${{ github.workspace }}/cipher-db/tests,target=/app/tests,readonly
+          --mount type=bind,source=${{ github.workspace }}/db-init,target=/db-init,readonly
           -e WARDEN_NATIVE_TEST=1 -e WARDEN_CIPHER_TEST_DSN warden-cipher-native-test
           node --test --test-isolation=none tests/native.test.mjs tests/postgres.test.mjs tests/rest.test.mjs tests/replay.test.mjs

@@ -40,27 +40,48 @@ export class RestCompiler {
       FROM pg_constraint con JOIN pg_class src ON src.oid=con.conrelid JOIN pg_class dst ON dst.oid=con.confrelid
       JOIN pg_namespace ns ON ns.oid=src.relnamespace JOIN pg_namespace nd ON nd.oid=dst.relnamespace
       WHERE con.contype='f' AND ns.nspname='endpt' AND nd.nspname='endpt'`)).rows;
-    const routines=(await tx.query(`SELECT p.proname AS name,p.proretset AS set,p.proargnames AS names,
+    const routines=(await tx.query(`SELECT p.proname AS name,p.proretset AS set,p.proargnames AS names,p.provolatile AS volatility,
       p.pronargs AS nargs,p.pronargdefaults AS defaults,p.prorettype::regtype::text AS returns,
       ARRAY(SELECT t::regtype::text FROM unnest(p.proargtypes::oid[]) AS t) AS types
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='endpt' AND p.prokind='f'`)).rows;
     this.catalog={tables,fks,routines};return this.catalog;
   }
-  async request(request) {
+  parse(request) {
     if(!request||request.schema!=='endpt'||!['GET','HEAD','POST','PATCH','DELETE'].includes(request.method)||typeof request.path!=='string'||request.path.length>65536) throw new Error('Unsupported request');
+    const url=new URL(request.path,'http://private.invalid/');
+    if(url.origin!=='http://private.invalid'||url.hash)throw new Error('Invalid application path');
+    const name=url.pathname.slice(1),dataJson=request.data_json??JSON.stringify(request.data),data=dataJson===undefined?undefined:JSON.parse(dataJson);
+    if(name.startsWith('rpc/')&&(request.method!=='POST'||url.search))throw new Error('Unsupported routine request');
+    return {...request,url,name,dataJson,data};
+  }
+  async request(input) {
+    const request=this.parse(input),{name,data}=request;
+    let routine;
+    if(name.startsWith('rpc/')) {
+      // Routine volatility comes from the server's SQL catalog, never from
+      // caller flags. Warm a cold catalog through a read-only transaction so
+      // the first dashboard aggregate also avoids the durable writer queue.
+      const catalog=this.catalog??await this.engine.application(tx=>this.metadata(tx),{readOnly:true});
+      routine=this.routine(catalog,name.slice(4),data);
+    }
+    return this.engine.application(async tx=>this.executeRequest(tx,request,await this.metadata(tx),routine),
+      {readOnly:request.method==='GET'||request.method==='HEAD'||['s','i'].includes(routine?.volatility)});
+  }
+  async requestBatch(inputs) {
+    if(!Array.isArray(inputs)||inputs.length<1||inputs.length>8)throw new Error('Invalid application batch');
+    const requests=Array.from(inputs,input=>this.parse(input));
+    // A batch is one durable application transaction. The engine owns commit,
+    // constraints and rollback; an operation error must abort every operation.
     return this.engine.application(async tx=>{
-      const catalog=await this.metadata(tx),url=new URL(request.path,'http://private.invalid/');
-      if(url.origin!=='http://private.invalid'||url.hash)throw new Error('Invalid application path');
-      const name=url.pathname.slice(1),params=[],bind=value=>{params.push(value);return '$'+params.length;};
-      const dataJson=request.data_json??JSON.stringify(request.data),data=dataJson===undefined?undefined:JSON.parse(dataJson);
+      const catalog=await this.metadata(tx),results=[];
+      for(const request of requests)results.push(await this.executeRequest(tx,request,catalog));
+      return results;
+    },{readOnly:false});
+  }
+  async executeRequest(tx,request,catalog,resolvedRoutine) {
+      const {name,url,dataJson,data}=request,params=[],bind=value=>{params.push(value);return '$'+params.length;};
       if(name.startsWith('rpc/')) {
-        if(request.method!=='POST'||url.search)throw new Error('Unsupported routine request');
-        const fn=name.slice(4),body=data;
-        if(!body||Array.isArray(body)||typeof body!=='object')throw new Error('Invalid routine arguments');
-        const candidates=catalog.routines.filter(r=>r.name===fn && Object.keys(body).every(k=>r.names?.slice(0,r.nargs).includes(k)) &&
-          (r.names||[]).slice(0,r.nargs-r.defaults).every(k=>Object.hasOwn(body,k)));
-        if(candidates.length!==1){const error=new Error('Ambiguous or unknown routine');error.code='PGRST202';error.status=404;throw error;}
-        const routine=candidates[0];
+        const fn=name.slice(4),body=data,routine=resolvedRoutine??this.routine(catalog,fn,body);
         const payload=Object.keys(body).length?bind(dataJson):undefined;
         const arguments_=Object.keys(body).map(k=>ident(k)+'=>'+this.typed(payload,routine.types[routine.names.indexOf(k)],k));
         const call=ident('endpt')+'.'+ident(fn)+'('+arguments_.join(',')+')';
@@ -117,7 +138,13 @@ export class RestCompiler {
       const result=await tx.query('WITH changed AS ('+mutation+' RETURNING *) SELECT COALESCE(json_agg(changed),\'[]\'::json)::text AS body FROM changed',params);
       const minimal=request.method==='DELETE'||(request.method==='PATCH'&&!preferred.has('return=representation'))||preferred.has('return=minimal');
       return {status:request.method==='POST'?201:200,body:minimal?'':result.rows[0].body,headers:{}};
-    },{readOnly:request.method==='GET'||request.method==='HEAD'});
+  }
+  routine(catalog,name,body) {
+    if(!body||Array.isArray(body)||typeof body!=='object')throw new Error('Invalid routine arguments');
+    const candidates=catalog.routines.filter(r=>r.name===name && Object.keys(body).every(k=>r.names?.slice(0,r.nargs).includes(k)) &&
+      (r.names||[]).slice(0,r.nargs-r.defaults).every(k=>Object.hasOwn(body,k)));
+    if(candidates.length!==1){const error=new Error('Ambiguous or unknown routine');error.code='PGRST202';error.status=404;throw error;}
+    return candidates[0];
   }
   integer(value,fallback){if(value===null)return fallback;if(!/^\d+$/.test(value)||Number(value)>1000000000)throw new Error('Invalid pagination');return Number(value);}
   column(table,name,write=false){const c=table.columns.get(name);if(!c||(write&&c.generated))throw new Error('Unknown or generated column');return c;}

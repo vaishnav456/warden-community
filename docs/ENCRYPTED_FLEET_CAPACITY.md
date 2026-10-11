@@ -32,6 +32,17 @@ runtime memory. Reads cannot see undurable writes. Recovery, constraint failures
 sequence rollback, actual ciphertext storage and query compatibility have new
 native integration tests. This is not yet proof of 10,000-endpoint support.
 
+The read-path release also routes catalog-declared stable/immutable RPCs through
+PostgreSQL-enforced read-only transactions. An encrypted batch combines login
+bookkeeping with session creation, or a heartbeat snapshot with its selected
+metric, into one atomic durable commit. It accepts at most eight operations and
+rolls back the whole request on failure. Request-local notification counts
+avoid duplicate reads without caching authorization between requests. Deploy
+the batch-capable runtime before this app version; revert the app first.
+Thirty-two runtime/storage tests and 763 Hosted / 742 Community server tests
+passed in isolated Linux qualification. These regressions establish correctness,
+not fleet throughput or a response-time guarantee.
+
 ## Immediate deployment guardrails
 
 The encrypted Compose overlay bounds the build worker to 2 GiB and 256 processes,

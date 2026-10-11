@@ -62,6 +62,40 @@ class Response(io.BytesIO):
 
 
 def open_request(path, method, schema, data=None, *, has_data=False, prefer=None):
+    request = {"path": path, "method": method, "schema": schema, "prefer": prefer}
+    if has_data:
+        request["data_json"] = json.dumps(data, allow_nan=False, separators=(",", ":"))
+    return _exchange(request)
+
+
+def open_batch(operations):
+    """One encrypted, atomic request; never retry a possibly committed batch."""
+    if not isinstance(operations, list) or not 1 <= len(operations) <= 8:
+        raise ValueError("Invalid database batch size")
+    requests = []
+    for operation in operations:
+        if (not isinstance(operation, dict) or operation.get("method") not in {"POST", "PATCH", "DELETE", "GET", "HEAD"}
+                or operation.get("schema", "endpt") != "endpt" or not isinstance(operation.get("path"), str)):
+            raise ValueError("Invalid database batch operation")
+        item = {"path": operation["path"], "method": operation["method"], "schema": "endpt",
+                "prefer": operation.get("prefer", "return=representation")}
+        if "data" in operation:
+            item["data_json"] = json.dumps(operation["data"], allow_nan=False, separators=(",", ":"))
+        requests.append(item)
+    response = _exchange({"batch": requests})
+    try:
+        results = json.loads(response.read())
+        if (not isinstance(results, list) or len(results) != len(requests)
+                or any(not isinstance(item, dict) or type(item.get("status")) is not int
+                       or not 200 <= item["status"] < 300 or not isinstance(item.get("body"), str)
+                       or not isinstance(item.get("headers"), dict) for item in results)):
+            raise RuntimeError("Invalid encrypted database batch response")
+        return [json.loads(item["body"]) if item["body"] else None for item in results]
+    finally:
+        response.close()
+
+
+def _exchange(request):
     socket_path = os.environ["CIPHER_SOCKET"]
     token_path = os.environ["CIPHER_TOKEN_FILE"]
     dataset = os.environ["CIPHER_DATASET"]
@@ -72,9 +106,6 @@ def open_request(path, method, schema, data=None, *, has_data=False, prefer=None
         raise ValueError("Invalid encrypted database credential")
     identifier = str(uuid.uuid4())
     issued = int(time.time() * 1000)
-    request = {"path": path, "method": method, "schema": schema, "prefer": prefer}
-    if has_data:
-        request["data_json"] = json.dumps(data, allow_nan=False, separators=(",", ":"))
     document = json.dumps({"id": identifier, "time": issued, "request": request}, allow_nan=False)
     envelope = {"id": identifier, "payload": _seal(identifier, "database.request.v1:" + dataset, document)}
     connection = UnixConnection(socket_path, timeout=90)

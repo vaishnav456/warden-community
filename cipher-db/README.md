@@ -94,6 +94,23 @@ journal and sequence bookkeeping. Writes still persist sequence-only changes,
 enforce deferred constraints and checkpoint before success. Restores run
 `ANALYZE` in memory to rebuild planner statistics; sequence reads are batched.
 
+RPCs declared `STABLE` or `IMMUTABLE` in the trusted SQL catalog also use these
+read-only transactions. Cold catalog lookups use readers, so dashboard functions
+can run while an encrypted write waits for storage. PostgreSQL still enforces
+read-only execution; client flags cannot classify a mutating routine as a read.
+
+The private interface accepts an encrypted batch of one to eight operations in
+one atomic transaction. Login bookkeeping and refresh-session creation share
+one commit, as do a heartbeat update and its sampled metric. Any operation or
+durability failure aborts the entire batch; clients never retry or fall back to
+separate writes after a lost response. Runtime support must be deployed before
+the app uses batches; roll the app back first when reverting this change.
+
+Unread notification counts are reused only within one web request, and a
+database mutation invalidates that request's count. Authentication, session
+revocation, tenant access and vault state continue to be checked without a
+cross-request plaintext cache.
+
 The native runtime pools up to 16 concurrent read-only, repeatable-read
 transactions. Readers see committed, durably encrypted records while a pending
 writer waits for custody or disk flushes. Each reader verifies the ciphertext

@@ -76,7 +76,12 @@ const server=createServer(async(req,res)=>{
     if(document.id!==id||!Number.isSafeInteger(document.time)||document.time<started||Math.abs(now-document.time)>30000)throw new Error('Expired envelope');
     used.accept(id);
     let result;
-    try{result=await rest.request(document.request);}
+    try{
+      if(document.request&&Object.hasOwn(document.request,'batch')){
+        if(Object.keys(document.request).join(',')!=='batch')throw new Error('Invalid atomic request');
+        result={status:200,body:JSON.stringify(await rest.requestBatch(document.request.batch)),headers:{}};
+      }else result=await rest.request(document.request);
+    }
     catch(error){const code=error.code||'CIPHER_QUERY';result={status:engine.closed?503:error.status||(['23503','23505'].includes(code)?409:400),
       body:JSON.stringify({code,message:'Application query rejected'}),headers:{}};}
     const payload=await sealDocument(box,id,'database.response.v1:'+dataset,JSON.stringify({id,time:document.time,...result}));

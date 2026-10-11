@@ -2,9 +2,10 @@
 
 
 def create_refresh_token(admin_id, token_hash, ip, user_agent, expires_at,
-                         absolute_expires_at):
+                         absolute_expires_at, *, record_login=False):
     import db as _db
-    rows = _db._rpc("create_refresh_session", {
+    import os
+    params = {
         "p_admin_id": admin_id,
         "p_token_hash": token_hash,
         "p_ip_address": ip,
@@ -12,7 +13,22 @@ def create_refresh_token(admin_id, token_hash, ip, user_agent, expires_at,
         "p_expires_at": expires_at,
         "p_absolute_expires_at": absolute_expires_at,
         "p_max_sessions": _db.config.MAX_CONCURRENT_SESSIONS,
-    })
+    }
+    if record_login and os.environ.get('CIPHER_SOCKET'):
+        # Successful login bookkeeping and session creation must either both
+        # commit durably, or both roll back. No schema migration is required.
+        results = _db._batch([
+            {"path": f"admin_users?id=eq.{_db._q(admin_id)}", "method": "PATCH", "data": {
+                "last_login_at": _db._now_iso(), "last_login_ip": ip,
+                "failed_attempts": 0, "locked_until": None,
+            }, "prefer": "return=minimal"},
+            {"path": "rpc/create_refresh_session", "method": "POST", "data": params},
+        ])
+        rows = results[1]
+    else:
+        if record_login:
+            _db.update_admin_last_login(admin_id, ip)
+        rows = _db._rpc("create_refresh_session", params)
     return rows[0] if (rows and isinstance(rows, list)) else rows
 
 def rotate_refresh_token(old_token_hash, new_token_hash, ip, user_agent, expires_at):

@@ -1,7 +1,8 @@
 """Metrics database operations."""
 
 
-def insert_metric(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb):
+def prepare_metric(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb, *, company=None):
+    """Prepare history for a normal insert or a durable heartbeat transaction."""
     # endpoint_metrics stores disk_free_pct; we omit disk here since the
     # current disk_free_gb is always available on the endpoints row itself.
     import db as _db
@@ -11,12 +12,18 @@ def insert_metric(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb):
         "ram_used_pct": ram_used_pct,
     }
     if _db.config.ENCRYPT_HEARTBEAT_TELEMETRY:
-        company = _db._endpoint_company(endpoint_id)
+        company = company or _db._endpoint_company(endpoint_id)
         data["metrics_encrypted"] = _db._endpoint_encrypt(company, "metric", {
             "cpu_pct": cpu_pct, "ram_used_pct": ram_used_pct,
             "disk_free_gb": disk_free_gb,
         })
         data.update(cpu_pct=None, ram_used_pct=None)
+    return data
+
+
+def insert_metric(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb):
+    import db as _db
+    data = prepare_metric(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb)
     _db._post("endpoint_metrics", data, prefer="return=minimal")
 
 def get_metrics(endpoint_id, hours=24, *, max_points=None):

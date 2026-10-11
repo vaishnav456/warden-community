@@ -198,3 +198,98 @@ class HeartbeatAtRestTests(unittest.TestCase):
     def test_ciphertext_failure_is_not_plaintext_fallback(self):
         with self.assertRaises(Exception):
             db._decrypt_endpoint(dict(company_id="tenant-a", heartbeat_encrypted="v2:bad", cpu_pct=1), self.company)
+
+    def test_cipher_heartbeat_and_selected_history_share_one_commit(self):
+        app = Flask(__name__)
+        with app.test_request_context(), \
+                mock.patch.dict(os.environ, {"CIPHER_SOCKET": "/run/fixture.sock"}), \
+                mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", True), \
+                mock.patch.object(db, "_endpoint_company", return_value=self.company), \
+                mock.patch.object(db, "_batch", create=True, return_value=[None, None]) as batch, \
+                mock.patch.object(db, "_patch") as patch, \
+                mock.patch.object(db, "_post") as post:
+            g.endpoint = dict(id="endpoint-a", company_id="tenant-a", net_recv_mbps=3)
+            db.update_endpoint_heartbeat("endpoint-a", 12.5, 40, 64, include_metric=True)
+            operations = batch.call_args.args[0]
+            batch.assert_called_once()
+            patch.assert_not_called()
+            post.assert_not_called()
+            self.assertEqual([item["method"] for item in operations], ["PATCH", "POST"])
+            self.assertEqual(operations[0]["path"], "endpoints?id=eq.endpoint-a")
+            self.assertEqual(operations[1]["path"], "endpoint_metrics")
+            for item in operations:
+                self.assertEqual(item["schema"], "endpt")
+                self.assertTrue(item["has_data"])
+                self.assertEqual(item["prefer"], "return=minimal")
+            endpoint_row, metric_row = [item["data"] for item in operations]
+            for field in db._HEARTBEAT_METRIC_FIELDS:
+                self.assertIsNone(endpoint_row[field])
+            self.assertIsNone(metric_row["cpu_pct"])
+            self.assertIsNone(metric_row["ram_used_pct"])
+            self.assertEqual(db._endpoint_decrypt(self.company, "heartbeat", endpoint_row["heartbeat_encrypted"]),
+                             dict(cpu_pct=12.5, ram_used_pct=40, disk_free_gb=64, net_recv_mbps=3))
+            self.assertEqual(db._endpoint_decrypt(self.company, "metric", metric_row["metrics_encrypted"]),
+                             dict(cpu_pct=12.5, ram_used_pct=40, disk_free_gb=64))
+
+    def test_cipher_heartbeat_batch_failure_has_no_separate_write_fallback(self):
+        with mock.patch.dict(os.environ, {"CIPHER_SOCKET": "/run/fixture.sock"}), \
+                mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", False), \
+                mock.patch.object(db, "_endpoint_company", return_value=self.company), \
+                mock.patch.object(db, "_batch", create=True, side_effect=RuntimeError("commit failed")) as batch, \
+                mock.patch.object(db, "_patch") as patch, \
+                mock.patch.object(db, "_post") as post:
+            with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                db.update_endpoint_heartbeat("endpoint-a", 12.5, 40, 64, include_metric=True)
+            batch.assert_called_once()
+            patch.assert_not_called()
+            post.assert_not_called()
+
+    def test_no_history_selection_keeps_single_endpoint_write(self):
+        with mock.patch.dict(os.environ, {"CIPHER_SOCKET": "/run/fixture.sock"}), \
+                mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", False), \
+                mock.patch.object(db, "_endpoint_company", return_value=self.company), \
+                mock.patch.object(db, "_batch", create=True) as batch, \
+                mock.patch.object(db, "_patch") as patch, \
+                mock.patch.object(db, "_post") as post:
+            db.update_endpoint_heartbeat("endpoint-a", 12.5, 40, 64)
+            patch.assert_called_once()
+            batch.assert_not_called()
+            post.assert_not_called()
+
+    def test_legacy_heartbeat_keeps_endpoint_patch(self):
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", False), \
+                mock.patch.object(db, "_endpoint_company", return_value=self.company), \
+                mock.patch.object(db, "_batch", create=True) as batch, \
+                mock.patch.object(db, "_patch") as patch:
+            db.update_endpoint_heartbeat("endpoint-a", 12.5, 40, 64, include_metric=True)
+            patch.assert_called_once()
+            batch.assert_not_called()
+
+    def test_route_selects_each_sample_once_and_keeps_legacy_history_path(self):
+        from routes import agent_api
+        from services.load_control import controller
+        app = Flask(__name__)
+        for cipher, selected, expected_batch_sample in ((True, True, True), (True, False, False),
+                                                       (False, True, False)):
+            with self.subTest(cipher=cipher, selected=selected), \
+                    app.test_request_context("/api/agent/heartbeat", method="POST", json={
+                        "cpu_pct": 12.5, "ram_used_pct": 40, "disk_free_gb": 64,
+                        "job_capacity": 0, "capabilities": [],
+                    }), \
+                    mock.patch.dict(os.environ, {"CIPHER_SOCKET": "/run/fixture.sock" if cipher else ""}), \
+                    mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", False), \
+                    mock.patch.object(db, "update_endpoint_heartbeat") as update, \
+                    mock.patch.object(db, "insert_metric") as insert, \
+                    mock.patch.object(db, "get_open_alert", return_value=None), \
+                    mock.patch.object(db, "get_company_by_id", return_value=self.company), \
+                    mock.patch.object(controller, "allow_metric", return_value=selected) as allow:
+                g.endpoint = dict(id="endpoint-a", company_id="tenant-a")
+                response = agent_api.heartbeat.__wrapped__.__wrapped__()
+                self.assertTrue(response.get_json()["ok"])
+                self.assertEqual(update.call_args.kwargs["include_metric"], expected_batch_sample)
+                allow.assert_called_once_with("endpoint-a")
+                if cipher:
+                    insert.assert_not_called()
+                else:
+                    insert.assert_called_once_with("endpoint-a", 12.5, 40.0, 64.0)

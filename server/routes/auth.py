@@ -180,9 +180,8 @@ def login_post():
         return resp
 
     # No MFA — issue tokens
-    db.update_admin_last_login(admin["id"], ip)
     access_token = issue_access_token(admin)
-    refresh_token = issue_refresh_token(admin["id"], ip, request.user_agent.string)
+    refresh_token = issue_refresh_token(admin["id"], ip, request.user_agent.string, record_login=True)
 
     dest = url_for("dashboard.index")
 
@@ -244,14 +243,13 @@ def mfa_verify_post():
         return render_template("mfa.html", error="Invalid code."), 401
 
     ip = _get_client_ip()
-    db.update_admin_last_login(admin["id"], ip)
 
     # Rebuild admin with slug context
     company = db.get_single_company()
     admin["_company_slug"] = company["slug"]
 
     access_token = issue_access_token(admin)
-    refresh_token = issue_refresh_token(admin["id"], ip, request.user_agent.string)
+    refresh_token = issue_refresh_token(admin["id"], ip, request.user_agent.string, record_login=True)
 
     dest = url_for("dashboard.index")
 

@@ -262,7 +262,7 @@ def update_endpoint_heartbeat(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb, 
                               capabilities=None, capability_details=None,
                               interactive_user_marker=False, interactive_user=None,
                               net_sent_mbps=None, net_recv_mbps=None, topology_telemetry=None,
-                              integrity_report=None):
+                              integrity_report=None, include_metric=False):
     import db as _db
     company = _db._endpoint_company(endpoint_id)
     data = {
@@ -327,7 +327,24 @@ def update_endpoint_heartbeat(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb, 
         data["heartbeat_encrypted"] = _db._endpoint_encrypt(company, "heartbeat", metrics)
         # Do not leave a readable duplicate alongside the encrypted snapshot.
         data.update({field: None for field in _db._HEARTBEAT_METRIC_FIELDS})
-    _db._patch(f"endpoints?id=eq.{_db._q(endpoint_id)}", data)
+    path = f"endpoints?id=eq.{_db._q(endpoint_id)}"
+    if include_metric:
+        import os
+        if os.environ.get("CIPHER_SOCKET"):
+            from database.metrics import prepare_metric
+            metric = prepare_metric(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb,
+                                    company=company)
+            # The live snapshot and its already-selected history sample share
+            # one ciphertext commit. A failure rolls back both operations;
+            # the caller never acknowledges an undurable sample.
+            _db._batch([
+                dict(path=path, method="PATCH", schema="endpt", data=data,
+                     has_data=True, prefer="return=minimal"),
+                dict(path="endpoint_metrics", method="POST", schema="endpt", data=metric,
+                     has_data=True, prefer="return=minimal"),
+            ])
+            return
+    _db._patch(path, data)
 
 def update_endpoint_sysinfo(endpoint_id, info):
     import db as _db
