@@ -9,6 +9,142 @@ from services.agent_updates import read_build_artifact, AgentBuildUnavailable
 from services.device_health import age_seconds
 
 ACTIVE = {'canary', 'expanding', 'paused', 'rolling_back'}
+WORKER_ERROR_PAUSE = 'Worker encountered an error. Inspect device jobs and server logs before resuming.'
+
+
+def _can_follow_latest(row):
+    if row.get('status') not in {'canary', 'expanding', 'paused'}:
+        return False
+    if row['status'] == 'paused' and row.get('pause_reason') != WORKER_ERROR_PAUSE:
+        return False
+    targets = row.get('targets')
+    return bool(isinstance(targets, dict) and targets and all(
+        isinstance(target, dict) and target.get('state') in {'waiting', 'queued', 'verifying', 'verified'}
+        for target in targets.values()))
+
+
+def _follow_jobs_are_safe(row):
+    for endpoint_id, target in row['targets'].items():
+        if not target.get('job_id'):
+            if target['state'] != 'waiting':
+                return False
+            continue
+        job = db.get_job(target['job_id'], decrypt=False)
+        if not job or str(job.get('company_id')) != str(row['company_id']) \
+                or str(job.get('endpoint_id')) != str(endpoint_id) or job.get('type') != 'UPDATE_AGENT':
+            return False
+        allowed = {'completed'} if row['status'] == 'paused' else {'pending', 'approved', 'running', 'completed'}
+        if job.get('status') not in allowed \
+                or (job.get('status') == 'completed' and job.get('exit_code') not in {None, 0}):
+            return False
+    return True
+
+
+def _owned_rollout(rollout_id):
+    rows = db._get(f"agent_rollouts?id=eq.{db._q(rollout_id)}&limit=1")
+    return rows[0] if rows else None
+
+
+def _replacement_for(row, verified):
+    from services.scheduler import compare_agent_versions
+    old = db.get_build_request(row['build_id'])
+    if not old or not old.get('agent_version'):
+        return None
+    platform = old.get('target_platform') or 'windows-amd64'
+    latest = db.get_latest_completed_build(platform)
+    if not latest or (latest.get('target_platform') or 'windows-amd64') != platform \
+            or latest.get('status') != 'completed' or latest.get('deletion_requested_at'):
+        return None
+    if compare_agent_versions(latest.get('agent_version'), old['agent_version']) <= 0:
+        return None
+    endpoints = {str(ep['id']): ep for ep in db.get_endpoints(row['company_id'])}
+    if any(key not in endpoints or str(endpoints[key].get('company_id')) != str(row['company_id'])
+           or db.endpoint_target_platform(endpoints[key]) != platform for key in row['targets']):
+        return None
+    identity = (str(latest['id']), latest['agent_version'], latest.get('sha256'))
+    if identity not in verified:
+        # Cache only verified public artifact metadata for this reconciliation
+        # call; never retain tenant records, authorization or payloads globally.
+        pinned_payload(latest)
+        verified.add(identity)
+    return latest
+
+
+def reconcile_obsolete_campaigns(companies=None):
+    """Let an opted-in tenant follow a verified newer release without stale gates.
+
+    An explicit pause, failed update or rollback remains protected. Existing
+    jobs keep their lifecycle; only the obsolete campaign's lease is revoked.
+    """
+    from services.entitlements import check_job
+    logger = logging.getLogger(__name__)
+    if companies is None:
+        company = db.get_auto_update_company()
+        companies = [company] if company else []
+    opted_in = {str(company['id']) for company in companies
+                if company.get('auto_update_agents') is True and company.get('is_active') is True}
+    if not opted_in:
+        return set()
+    confirmed, verified = set(), set()
+    for candidate in campaigns(active_only=True):
+        if str(candidate.get('company_id')) not in opted_in or not _can_follow_latest(candidate):
+            continue
+        token = None
+        try:
+            if not _replacement_for(candidate, verified):
+                continue
+            token = str(uuid.uuid4())
+            if not db._rpc('claim_agent_rollout', dict(p_id=candidate['id'], p_token=token)):
+                continue
+            row = _owned_rollout(candidate['id'])
+            if not row or str(row.get('lease_token')) != token \
+                    or str(row.get('company_id')) != str(candidate['company_id']) or not _can_follow_latest(row):
+                continue
+            company = db.get_company_by_id(row['company_id'])
+            if not company or company.get('auto_update_agents') is not True or company.get('is_active') is not True \
+                    or not check_job(row['company_id'], 'UPDATE_AGENT').allowed or not _follow_jobs_are_safe(row):
+                continue
+            latest = _replacement_for(row, verified)
+            if not latest:
+                continue
+            reason = (f"Superseded by newer agent release {latest['agent_version']} ({latest['id']}) "
+                      "under this organization's automatic-update policy.")
+            lease_cutoff = db._q(datetime.now(timezone.utc).isoformat())
+            predicate = (f"agent_rollouts?id=eq.{db._q(row['id'])}&company_id=eq.{db._q(row['company_id'])}"
+                         f"&build_id=eq.{db._q(row['build_id'])}&status=eq.{db._q(row['status'])}"
+                         f"&lease_token=eq.{token}&lease_until=gt.{lease_cutoff}")
+            changed = False
+            try:
+                changed = bool(db._patch(predicate, dict(status='cancelled', pause_reason=reason,
+                                                         lease_token=None, lease_until=None)))
+            except Exception:
+                # A lost response can follow a durable commit. Observe the exact
+                # terminal receipt once, rather than retrying a state mutation.
+                fresh = _owned_rollout(row['id'])
+                changed = bool(fresh and fresh.get('status') == 'cancelled'
+                               and fresh.get('pause_reason') == reason
+                               and str(fresh.get('company_id')) == str(row['company_id'])
+                               and str(fresh.get('build_id')) == str(row['build_id'])
+                               and fresh.get('lease_token') is None and fresh.get('lease_until') is None)
+                if not changed:
+                    raise
+            if changed:
+                confirmed.add(str(row['id']))
+                db.audit(row['company_id'], None, 'agent_rollout_superseded', {
+                    'rollout_id': str(row['id']), 'previous_build_id': str(row['build_id']),
+                    'replacement_build_id': str(latest['id']), 'replacement_version': latest['agent_version'],
+                    'policy': 'automatic_latest_release', 'existing_jobs_preserved': True,
+                })
+        except Exception:
+            logger.warning('Obsolete rollout reconciliation deferred for %s', candidate['id'])
+        finally:
+            if token:
+                try:
+                    db._patch(f"agent_rollouts?id=eq.{db._q(candidate['id'])}&lease_token=eq.{token}",
+                              dict(lease_token=None, lease_until=None))
+                except Exception:
+                    logger.warning('Rollout reconciliation lease release deferred for %s', candidate['id'])
+    return confirmed
 
 
 def campaigns(company_id=None, active_only=False):
@@ -179,6 +315,9 @@ def advance(row, now=None):
 
 
 def tick():
+    # Reconcile before dispatch so this worker cannot queue another old batch
+    # just before ordinary automatic updates notice the newly published build.
+    reconcile_obsolete_campaigns()
     for candidate in campaigns(active_only=True):
         if candidate['status'] not in ACTIVE or candidate['status'] == 'paused':
             continue
@@ -194,6 +333,6 @@ def tick():
             logging.getLogger(__name__).exception('Rollout worker failed for %s; pausing for review',candidate['id'])
             # Preserve SQL's durable targets if the error followed dispatch.
             db._patch(f"agent_rollouts?id=eq.{db._q(candidate['id'])}&lease_token=eq.{token}",
-                      dict(status='paused',pause_reason='Worker encountered an error. Inspect device jobs and server logs before resuming.'))
+                      dict(status='paused',pause_reason=WORKER_ERROR_PAUSE))
         finally:
             db._patch(f"agent_rollouts?id=eq.{db._q(candidate['id'])}&lease_token=eq.{token}",dict(lease_token=None,lease_until=None))
