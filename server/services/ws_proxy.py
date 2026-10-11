@@ -38,6 +38,7 @@ import config
 import db
 import services.health_tracker as health_tracker
 from services.load_control import controller as load_controller
+from services.remote_performance import validate_agent_performance
 
 log = logging.getLogger("warden.ws_proxy")
 
@@ -199,6 +200,15 @@ class _RemoteRelayPerformance:
         self._send_waits = collections.deque(maxlen=self.SAMPLE_LIMIT)
         self.frame_messages = 0
         self.frame_bytes = 0
+        self._agent_report = None
+        self._agent_reported_at = None
+
+    def observe_agent(self, report):
+        validated = validate_agent_performance(report)
+        if validated is not None:
+            self._agent_report = validated
+            self._agent_reported_at = self._clock()
+        return validated
 
     def begin_send(self):
         self._send_started = self._clock()
@@ -223,7 +233,7 @@ class _RemoteRelayPerformance:
 
         waits = self._send_waits
         current = max(0.0, self._clock() - self._send_started) * 1000 if self._send_started is not None else 0.0
-        return {
+        result = {
             'frame_messages': self.frame_messages,
             # Application bytes before WebSocket compression; not wire bytes.
             'frame_bytes': self.frame_bytes,
@@ -235,6 +245,9 @@ class _RemoteRelayPerformance:
             'agent_rtt_ms': metric(agent_rtt_ms),
             'relay_loop_lag_ms': metric(relay_loop_lag_seconds, 1000),
         }
+        if self._agent_reported_at is not None and 0 <= self._clock() - self._agent_reported_at <= 20:
+            result['agent_performance'] = self._agent_report
+        return result
 
 
 def _remote_performance_snapshot(performance, quality):
@@ -251,6 +264,18 @@ def _remote_performance_snapshot(performance, quality):
 async def _relay(src, dst, quality=None, performance=None) -> None:
     """Forward all messages from src → dst until the connection closes."""
     async for msg in src:
+        if performance is not None and isinstance(msg, str):
+            try:
+                report = json.loads(msg)
+            except (ValueError, RecursionError):
+                report = None
+            if isinstance(report, dict) and report.get('type') == 'remote_agent_performance':
+                if len(msg) > 8192:
+                    continue
+                validated = performance.observe_agent(report)
+                if validated is None:
+                    continue
+                msg = json.dumps(validated, separators=(',', ':'))
         delivered = False
         if performance is not None:
             performance.begin_send()

@@ -101,6 +101,17 @@ frame age measures time since the last displayed update, not input latency.
 These numeric measurements reuse existing ping and quality reports without
 per-frame database writes or cached authorization.
 
+Agent timing reports separate screen acquisition, readback, JPEG encoding,
+output-pipe waits, WebSocket upload and input queue/dispatch waits. Fixed numeric
+summaries are emitted at most once every five seconds and shown in the remote
+statistics tooltip; screen contents, coordinates and keys are excluded. Idle
+DXGI acquisition waits are labelled separately from image processing. These
+timings require an updated Windows agent and identify local bottlenecks; they
+do not measure complete click-to-screen latency or prove that it is resolved.
+Input-pipe transit includes the write itself and uses a coarse shared host
+timer, so it must not be added to pipe-write timing. Browser canvas-call and
+timer-delay measurements also distinguish local rendering and scheduling waits.
+
 ## Security design
 
 Warden treats the control plane, endpoint agents, Home Nodes, build service, and release pipeline as separate trust boundaries. Important controls include signed commands, short-lived device certificates, organization envelope encryption, endpoint job leasing, TLS validation, and explicit organization authorization.

@@ -184,6 +184,9 @@ type dxgiCapturer struct {
 	width, height                  int
 	left, top                      int32
 	hasSnapshot                    bool
+	lastWait, lastReadback         time.Duration
+	lastAccumulated                uint32
+	lastReadbackAttempt            bool
 }
 
 // newDXGICapturer sets up a Desktop Duplication session for the given
@@ -292,7 +295,12 @@ func newDXGICapturer(outputIndex int) (cap *dxgiCapturer, err error) {
 func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err error) {
 	var frameInfo dxgiOutduplFrameInfo
 	var resource unsafe.Pointer
+	c.lastWait, c.lastReadback, c.lastAccumulated = 0, 0, 0
+	c.lastReadbackAttempt = false
+	waitStarted := time.Now()
 	hr, aErr := comCall(c.dupl, 8, 500, uintptr(unsafe.Pointer(&frameInfo)), uintptr(unsafe.Pointer(&resource))) // AcquireNextFrame
+	c.lastWait = time.Since(waitStarted)
+	c.lastAccumulated = frameInfo.AccumulatedFrames
 	if aErr != nil {
 		switch uint32(hr) {
 		case hrDXGIWaitTimeout:
@@ -314,6 +322,9 @@ func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err e
 		frameInfo.AccumulatedFrames == 0 && frameInfo.TotalMetadataBufferSize == 0 {
 		return nil, 0, 0, nil, errNoNewFrame
 	}
+	c.lastReadbackAttempt = true
+	readbackStarted := time.Now()
+	defer func() { c.lastReadback = time.Since(readbackStarted) }()
 	// If this image cannot be copied, the next acquisition must retry the
 	// snapshot even when it is triggered by a cursor-only update.
 	c.hasSnapshot = false

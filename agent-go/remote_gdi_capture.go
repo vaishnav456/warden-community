@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -33,13 +34,26 @@ func grabJPEGRegionForViewport(quality int, region monitorRect, requestedW, requ
 // Capture at native coordinates, then resize the raw pixels before JPEG
 // encoding. This retains the same GDI fallback and secure-desktop handling.
 func captureGDIJPEGRegion(quality int, region monitorRect, requestedW, requestedH int, call gdiCaptureCall, readBitmap gdiBitmapRead) ([]byte, int, int, error) {
+	return captureGDIJPEGRegionTimed(quality, region, requestedW, requestedH, call, readBitmap, nil)
+}
+
+func captureGDIJPEGRegionTimed(quality int, region monitorRect, requestedW, requestedH int, call gdiCaptureCall, readBitmap gdiBitmapRead, performance *remotePerformance) ([]byte, int, int, error) {
+	captureStarted := time.Now()
 	buf, err := captureGDIRegion(region, call, readBitmap)
+	if performance != nil {
+		performance.observe(remoteGDICapture, time.Since(captureStarted))
+	}
 	if err != nil {
 		return nil, 0, 0, err
 	}
 	w, h := region.width(), region.height()
 	ew, eh := remoteCaptureSize(w, h, requestedW, requestedH)
+	encodeStarted := time.Now()
 	frame, err := encodeBGRAJPEG(downscaleBGRA(buf, w, h, ew, eh), ew, eh, quality)
+	if performance != nil {
+		performance.dimensions(w, h, ew, eh)
+		performance.observe(remoteJPEGEncode, time.Since(encodeStarted))
+	}
 	if err != nil {
 		return nil, 0, 0, err
 	}
