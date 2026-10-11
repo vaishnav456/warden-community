@@ -28,7 +28,9 @@ Two key-custody modes, chosen per-company (see db.set_company_encryption):
   passphrase only the organization knows; the server never persists the
   passphrase or the derived key. The unwrapped DEK is cached in this
   process's memory only after an administrator calls unlock_byok() with the
-  correct passphrase, and is lost on process restart or an explicit
+  correct passphrase, and expires after a server-chosen random 7–30 days.
+  Reading, encrypting, or reopening a browser never extends that expiry.
+  The key is also lost on key-owner process restart or an explicit
   lock_company(). While locked, encrypt/decrypt for that company raises
   VaultLocked — callers (job creation/dispatch, sysinfo ingestion) must
   handle that by refusing the write/read and surfacing a clear error,
@@ -47,7 +49,9 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import threading
+import time
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -80,6 +84,7 @@ class VaultLocked(Exception):
 # ONLY by unlock_byok() and cleared by lock_company() or process restart.
 _dek_cache: dict[str, bytes] = {}
 _dek_cache_context: dict[str, tuple[str, str]] = {}
+_dek_cache_expiry: dict[str, tuple[float, int]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -88,6 +93,31 @@ def _cache_dek(company_id, mode, wrapped_dek, dek):
         key = str(company_id)
         _dek_cache[key] = dek
         _dek_cache_context[key] = (mode, wrapped_dek)
+        if mode == "byok":
+            duration = (7 + secrets.randbelow(24)) * 86400
+            _dek_cache_expiry[key] = (time.monotonic() + duration, int(time.time()) + duration)
+        else:
+            _dek_cache_expiry.pop(key, None)
+
+
+def _expire_cached_keys():
+    """Caller holds cache lock. Fixed deadlines never extend on access."""
+    monotonic_now, wall_now = time.monotonic(), time.time()
+    for key, (deadline, expires) in list(_dek_cache_expiry.items()):
+        if monotonic_now >= deadline or wall_now >= expires or key not in _dek_cache:
+            _dek_cache.pop(key, None)
+            _dek_cache_context.pop(key, None)
+            _dek_cache_expiry.pop(key, None)
+
+
+def start_expiry_worker():
+    """Key-service worker clears expired memory even without a request."""
+    def sweep():
+        while True:
+            time.sleep(30)
+            with _cache_lock:
+                _expire_cached_keys()
+    threading.Thread(target=sweep, name="byok-expiry", daemon=True).start()
 
 
 def _master_kek() -> bytes:
@@ -124,6 +154,10 @@ def _aes_unwrap(kek: bytes, wrapped_b64: str, company_id: str) -> bytes:
 
 
 def _derive_kek_from_passphrase(passphrase: str, salt: bytes) -> bytes:
+    if not isinstance(passphrase, str) or not passphrase or len(passphrase) > 4096:
+        raise ValueError("Invalid vault passphrase")
+    if len(salt) != _SCRYPT_SALT_LEN:
+        raise ValueError("Invalid vault salt")
     kdf = Scrypt(salt=salt, length=32, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P)
     return kdf.derive(passphrase.encode("utf-8"))
 
@@ -201,7 +235,7 @@ def _wrap_dek_for_byok(company_id: str, dek: bytes, passphrase: str) -> dict:
 def unlock_byok(company_id: str, passphrase: str, wrapped_dek: str, byok_salt_b64: str) -> None:
     """Verify the passphrase and cache the unwrapped DEK in memory. Raises
     ValueError on a wrong passphrase (AESGCM authentication failure)."""
-    salt = base64.b64decode(byok_salt_b64)
+    salt = base64.b64decode(byok_salt_b64, validate=True)
     kek = _derive_kek_from_passphrase(passphrase, salt)
     try:
         dek = _aes_unwrap(kek, wrapped_dek, company_id)
@@ -219,12 +253,24 @@ def lock_company(company_id: str) -> None:
     with _cache_lock:
         _dek_cache.pop(str(company_id), None)
         _dek_cache_context.pop(str(company_id), None)
+        _dek_cache_expiry.pop(str(company_id), None)
 
 
 @delegated("tenant.is_unlocked")
 def is_unlocked(company_id: str) -> bool:
     with _cache_lock:
+        _expire_cached_keys()
         return str(company_id) in _dek_cache
+
+
+@delegated("tenant.vault_status")
+def vault_status(company_id: str) -> dict:
+    """Return only lock state and server-issued expiry; never export a key."""
+    with _cache_lock:
+        _expire_cached_keys()
+        key = str(company_id)
+        expiry = _dek_cache_expiry.get(key)
+        return {"unlocked": key in _dek_cache, "expires_at": expiry[1] if expiry else None}
 
 
 # ── Encrypt / decrypt ────────────────────────────────────────────────────
@@ -234,6 +280,7 @@ def _get_dek(company_id: str, mode: str, wrapped_dek: str) -> bytes:
         raise RuntimeError("Tenant keys are held by the key service")
     key = str(company_id)
     with _cache_lock:
+        _expire_cached_keys()
         cached = _dek_cache.get(key)
         context = _dek_cache_context.get(key)
     if cached is not None and context == (mode, wrapped_dek):

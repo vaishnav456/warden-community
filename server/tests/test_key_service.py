@@ -108,6 +108,7 @@ class KeyServiceTests(unittest.TestCase):
         byok = dict(company, mode="byok", wrapped_dek=fields["wrapped_dek"])
         self.assertEqual(self.operate("tenant.decrypt_value", **byok,
                          ciphertext_b64=encrypted).json["result"], "retained")
+
         self.operate("tenant.lock_company", company_id="tenant-a")
         self.assertEqual(self.operate("tenant.decrypt_value", **byok,
                          ciphertext_b64=encrypted).status_code, 423)
@@ -119,6 +120,47 @@ class KeyServiceTests(unittest.TestCase):
                          byok_salt_b64=fields["byok_salt"]).status_code, 200)
         self.assertEqual(self.operate("tenant.decrypt_value", **byok,
                          ciphertext_b64=encrypted).json["result"], "retained")
+
+    def test_server_chooses_fixed_byok_expiry_and_enforces_it_for_all_key_uses(self):
+        for choice, days in ((0, 7), (23, 30)):
+            with self.subTest(days=days), mock.patch.object(tenant_crypto.secrets, "randbelow", return_value=choice) as random, \
+                 mock.patch.object(tenant_crypto.time, "monotonic", return_value=100) as monotonic, \
+                 mock.patch.object(tenant_crypto.time, "time", return_value=1000) as wall:
+                company = self.company()
+                fields = self.operate("tenant.rewrap_to_byok", company_id="tenant-a", current_mode="managed",
+                    current_wrapped_dek=company["wrapped_dek"], passphrase="synthetic-server-expiry-phrase").json["result"]
+                random.assert_called_once_with(24)
+                byok = dict(company, mode="byok", wrapped_dek=fields["wrapped_dek"])
+                expiry = 1000 + days * 86400
+                response = self.operate("tenant.vault_status", company_id="tenant-a")
+                self.assertEqual(response.json["result"], {"unlocked": True, "expires_at": expiry})
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                encrypted = self.operate("tenant.encrypt_value", **byok, plaintext="expiry-fixture").json["result"]
+                monotonic.return_value = 100 + days * 86400 - 1
+                wall.return_value = expiry - 1
+                self.assertEqual(self.operate("tenant.decrypt_value", **byok, ciphertext_b64=encrypted).json["result"], "expiry-fixture")
+                self.assertEqual(self.operate("tenant.vault_status", company_id="tenant-a").json["result"]["expires_at"], expiry)
+                # Wall clock rollback cannot defeat the monotonic deadline.
+                wall.return_value = 1000
+                monotonic.return_value += 1
+                for operation, extra in (("encrypt_value", {"plaintext": "secret"}),
+                                         ("decrypt_value", {"ciphertext_b64": encrypted}),
+                                         ("blind_index_value", {"value": "secret", "purpose": "test"})):
+                    self.assertEqual(self.operate("tenant." + operation, **byok, **extra).status_code, 423)
+                self.assertEqual(self.operate("tenant.vault_status", company_id="tenant-a").json["result"],
+                                 {"unlocked": False, "expires_at": None})
+                self.assertNotIn("tenant-a", tenant_crypto._dek_cache)
+
+    def test_clients_cannot_override_expiry_and_lock_removes_all_state(self):
+        fields = self.operate("tenant.provision_byok", company_id="tenant-a", passphrase="synthetic-lock-state-phrase").json["result"]
+        self.assertEqual(self.operate("tenant.unlock_byok", company_id="tenant-a",
+            passphrase="synthetic-lock-state-phrase", wrapped_dek=fields["wrapped_dek"],
+            byok_salt_b64=fields["byok_salt"], expires_at=9999999999).status_code, 400)
+        self.assertEqual(self.operate("tenant.lock_company", company_id="tenant-a").status_code, 200)
+        self.assertEqual(self.operate("tenant.vault_status", company_id="tenant-a").json["result"],
+                         {"unlocked": False, "expires_at": None})
+        self.assertNotIn("tenant-a", tenant_crypto._dek_cache_context)
+        self.assertNotIn("tenant-a", tenant_crypto._dek_cache_expiry)
 
     def test_platform_mfa_and_backup_codes_are_compatible(self):
         old = platform_secrets.encrypt_mfa_secret("admin-a", "test-mfa")

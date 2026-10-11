@@ -1382,9 +1382,13 @@ def security():
         endpoint for endpoint in db.get_endpoints(g.company["id"])
         if "ROTATE_TLS_PINS" in set(endpoint.get("capabilities") or [])
     ]
+    from services.tenant_crypto import vault_status
+    status = vault_status(g.company["id"]) if g.company.get("encryption_mode") == "byok" else None
+    expires = status.get("expires_at") if status else None
     return render_template(
         "settings/security.html", company=g.company,
         tls_rotation_endpoints=endpoints,
+        vault_expiry=datetime.fromtimestamp(expires, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if expires else None,
     )
 
 
@@ -1540,6 +1544,8 @@ def unlock_vault():
     if g.company.get("encryption_mode") != "byok":
         return jsonify({"error": "This organization isn't in BYOK mode"}), 400
     passphrase = request.form.get("passphrase", "")
+    if not passphrase or len(passphrase) > 4096:
+        return jsonify({"error": "Enter a vault passphrase of at most 4096 characters"}), 400
     try:
         unlock_byok(g.company["id"], passphrase, g.company.get("wrapped_dek"), g.company.get("byok_salt"))
     except ValueError as exc:

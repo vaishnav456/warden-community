@@ -1,0 +1,7 @@
+**
+!trusted-admin/
+!trusted-admin/requirements.txt
+!trusted-admin/warden_admin/
+!trusted-admin/warden_admin/*.py
+!trusted-admin/wsgi.py
+!trusted-admin/gunicorn.conf.py

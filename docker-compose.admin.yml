@@ -1,0 +1,24 @@
+# Independent private admin app. No public Warden process receives these mounts.
+# SSH-forward localhost:35750 from the controller. Do not reverse-proxy publicly.
+services:
+  trusted-admin:
+    build:
+      context: .
+      dockerfile: trusted-admin/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    user: "10004:10004"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 768m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    environment:
+      WARDEN_ADMIN_VAULT: /private/vault.json
+      WARDEN_ADMIN_ARCHIVE: /private/database.sqlite
+      WARDEN_ADMIN_CHECKPOINT: /private/checkpoint.enc
+      WARDEN_ADMIN_PORT: ${WARDEN_ADMIN_PORT:-35750}
+    volumes:
+      - ${WARDEN_ADMIN_DIRECTORY:?Set an external private admin directory}:/private:ro

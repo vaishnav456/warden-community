@@ -25,7 +25,7 @@ cd warden-community
 
 This is a **source release**, not a preconfigured server appliance or universal Windows installer. Self-hosting requires a Linux server with Docker Compose, your own HTTPS origin, and independently generated configuration and secrets; follow the installation guide before starting the stack.
 
-Generate endpoint and Warden Home installers from your own instance so they use its URL, trust configuration and enrollment settings. Community manages one organization and opens directly into the login/application flow, with no landing page. Hosted Warden is separate.
+Generate endpoint and Warden Home installers from your own instance so they use its URL, trust configuration and enrollment settings. Warden Community manages one organization.
 
 ## The problem Warden solves
 
@@ -149,6 +149,13 @@ using its authorized decryption access. It also does not encrypt every database
 column: readable fields and historical records require a separate migration.
 See the service guide for installation, compatibility and recovery.
 
+BYOK uses the existing HTTPS web application, with no Admin or Tenant executable.
+The server chooses a fixed random unlock period of **7–30 days** and shows its
+expiry in Security settings. **Lock workspace** takes effect in the key service
+immediately. Browser activity never extends the period, and a key-service restart
+locks the vault. This server-based model trusts the running server with decryption;
+hardening does not guarantee confidentiality after a full host compromise.
+
 To inventory every application table without exporting record values, set
 `DATABASE_URL` privately and run `python tools/audit_table_encryption.py`. The
 read-only report includes column types and format counts; it exits with status 2
@@ -156,9 +163,24 @@ when populated fields are not uniformly versioned ciphertext. Valid older
 ciphertext needs authenticated checks through Warden, and empty tables do not
 prove that future writes will be encrypted.
 
+## Trusted admin and all-table encryption
+
+The separate [trusted admin application](trusted-admin/README.md) creates and
+verifies encrypted copies of every application table, including full rows and
+table definitions. It has a private localhost interface and can move from the
+Warden host to a separate trusted machine without changing the public server.
+The public application receives no keys or decryption API for these copies.
+
+This is a migration workspace, not a completed live migration. Existing Warden
+tables and agents still use the current server workflows. Client-only reporting,
+command signing, enrollment and automation must replace those workflows before
+live cutover. Running the admin app on the same host also leaves unlocked data
+accessible to a host attacker; move it to a trusted machine for host isolation.
+See its guide for installation, verification, portability and the cutover checks.
+
 ## Optional agent modules
 
-See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release. Community remains application-only, with no landing page or hosted subscriptions.
+See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release.
 
 ## Third party software
 
