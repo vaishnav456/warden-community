@@ -57,7 +57,7 @@ def _data():
         job["_label"] = (ep.get("display_name") or ep.get("hostname")) if ep else "Organization task"
     missing_ids = {str(row['endpoint_id']) for row in alerts + jobs if row.get('endpoint_id')} - visible.keys()
     if fleet is not None and missing_ids:
-        extra = db.get_endpoints_bulk(company_id, branch_id=branch_id, endpoint_ids=sorted(missing_ids))
+        extra = db.get_endpoints_bulk(company_id, branch_id=branch_id, endpoint_ids=sorted(missing_ids), labels_only=True)
         visible.update({str(row['id']): row for row in extra})
         for row in alerts + jobs:
             ep = visible.get(str(row.get('endpoint_id')))

@@ -39,9 +39,18 @@ metric, into one atomic durable commit. It accepts at most eight operations and
 rolls back the whole request on failure. Request-local notification counts
 avoid duplicate reads without caching authorization between requests. Deploy
 the batch-capable runtime before this app version; revert the app first.
-Thirty-two runtime/storage tests and 763 Hosted / 742 Community server tests
+Thirty-two runtime/storage tests and 768 Hosted / 747 Community server tests
 passed in isolated Linux qualification. These regressions establish correctness,
 not fleet throughput or a response-time guarantee.
+
+The follow-up dashboard release narrows the bounded attention sample to card
+labels, displayed metrics and existing fleet flags. Extra activity labels use
+a scoped name-only endpoint projection. Default inventory reads retain their
+existing fields. Tenant and branch checks remain in place, and no authorization
+or plaintext results are cached across requests. A read-only production profile
+reduced tenant decryption calls from 804 to 342 and data assembly from
+4.6–6.2 seconds to 1.6–2.0 seconds in two initial samples. These profiles exclude browser
+rendering and sign-in; they are not a fleet throughput or latency guarantee.
 
 ## Immediate deployment guardrails
 

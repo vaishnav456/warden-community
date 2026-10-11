@@ -66,6 +66,11 @@ reused within a single request and invalidated by writes. Session, replay and
 vault checks retain their existing enforcement; persistent encryption and
 durability remain enabled.
 
+Dashboard cards use only their required endpoint fields, while activity labels
+use scoped name-only reads. Full inventory queries retain their default fields.
+No authorization or plaintext results are cached across requests. Fleet workload
+qualification remains separate from these read-path optimizations.
+
 ## Security design
 
 Warden treats the control plane, endpoint agents, Home Nodes, build service, and release pipeline as separate trust boundaries. Important controls include signed commands, short-lived device certificates, organization envelope encryption, endpoint job leasing, TLS validation, and explicit organization authorization.

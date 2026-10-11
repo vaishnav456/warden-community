@@ -1034,8 +1034,31 @@ def get_endpoints_for_alert_check(company_id):
 # Bulk job dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_endpoints_bulk(company_id, branch_id=None, endpoint_ids=None):
+def get_endpoints_bulk(company_id, branch_id=None, endpoint_ids=None, *, labels_only=False):
     """Get endpoints for bulk dispatch, optionally filtered."""
+    if labels_only:
+        # Dashboard activity needs names rather than inventory or telemetry.
+        # An explicitly empty ID set must not expand into a whole-fleet read.
+        if endpoint_ids is not None and not endpoint_ids:
+            return []
+        fields = ('id', 'company_id', 'branch_id', 'hostname', 'display_name')
+        path = (f"endpoints?company_id=eq.{_q(str(company_id))}&is_active=eq.true"
+                + "&select=" + ",".join(fields))
+        if endpoint_ids:
+            path += "&id=in.(" + ",".join(str(e) for e in endpoint_ids) + ")"
+        if branch_id:
+            path += f"&branch_id=eq.{_q(str(branch_id))}"
+        rows = _get_all(path + "&order=id.asc") or []
+        if not rows:
+            return []
+        company = get_company_by_id(company_id)
+        labels = []
+        for row in rows:
+            if (not isinstance(row, dict) or str(row.get('company_id')) != str(company_id)
+                    or (branch_id and str(row.get('branch_id')) != str(branch_id))):
+                raise RuntimeError('Invalid endpoint label ownership')
+            labels.append(_decrypt_endpoint({field: row[field] for field in fields if field in row}, company))
+        return labels
     if endpoint_ids:
         # PostgREST in.() syntax: id=in.(uuid1,uuid2) — commas must not be encoded
         ids_param = ",".join(str(e) for e in endpoint_ids)
