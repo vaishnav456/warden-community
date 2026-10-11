@@ -93,7 +93,7 @@ class SecurityBoundaryTests(unittest.TestCase):
             (session, dict(owner, access_token_version=4), False),
             (session, dict(owner, company_id="other"), False),
         ]:
-            with patch.object(ws_proxy.db, "get_remote_session", return_value=current), patch.object(ws_proxy.db, "get_admin_by_id", return_value=admin):
+            with patch.object(ws_proxy.db, "_get", side_effect=[[current], [admin]]):
                 self.assertEqual(ws_proxy._remote_authority_current(session), expected)
 
     def test_revoked_request_cannot_rebind_remote_to_new_owner_version(self):
@@ -128,7 +128,13 @@ class ActiveRelayRevocationTests(unittest.IsolatedAsyncioTestCase):
         current = dict(session)
         owner = dict(id="admin", company_id="tenant", role="technician", is_active=True, access_token_version=0)
         ws_proxy._pairs.clear()
-        with patch.object(ws_proxy.db, "get_remote_session_by_token", return_value=session), patch.object(ws_proxy.db, "get_remote_session", side_effect=lambda *_:dict(current)), patch.object(ws_proxy.db, "get_admin_by_id", return_value=owner), patch.object(ws_proxy.db, "get_endpoint_by_api_key_hash", return_value=dict(id="security-endpoint")), patch.object(ws_proxy.config, "REQUIRE_CLIENT_CERT", False), patch.object(ws_proxy.db, "close_remote_session"), patch.object(ws_proxy.db, "_patch"), patch.object(ws_proxy, "REMOTE_AUTH_CHECK_SECONDS", 0.01):
+        def authority_read(path):
+            if path.startswith("remote_sessions?"):
+                return [dict(current)]
+            if path.startswith("admin_users?"):
+                return [dict(owner)]
+            raise AssertionError("Unexpected authority read")
+        with patch.object(ws_proxy.db, "get_remote_session_by_token", return_value=session), patch.object(ws_proxy.db, "get_remote_session", side_effect=lambda *_:dict(current)), patch.object(ws_proxy.db, "_get", side_effect=authority_read), patch.object(ws_proxy.db, "get_endpoint_by_api_key_hash", return_value=dict(id="security-endpoint")), patch.object(ws_proxy.config, "REQUIRE_CLIENT_CERT", False), patch.object(ws_proxy.db, "close_remote_session"), patch.object(ws_proxy.db, "_patch"), patch.object(ws_proxy, "REMOTE_AUTH_CHECK_SECONDS", 0.01):
             async with websockets.serve(ws_proxy._handle, "127.0.0.1", 0) as server:
                 port = server.sockets[0].getsockname()[1]
                 async with websockets.connect(f"ws://127.0.0.1:{port}/agent-relay/security-session", additional_headers={"X-Agent-Key":"fake-key"}) as agent:

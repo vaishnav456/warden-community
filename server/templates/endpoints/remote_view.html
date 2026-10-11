@@ -243,7 +243,7 @@
 </div>
 
 <script type="module" nonce="{{ csp_nonce }}">
-import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
+import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
 (function () {
   const ENDPOINT_ID = {{ endpoint.id | tojson }};
   const SESSION_ID  = {{ session.id  | tojson }};
@@ -269,8 +269,6 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
   let scaleMode = 'fit', viewOnly = !REMOTE_CAPABILITIES.control, reconnectAttempts = 0, allowReconnect = true;
   let relayWasPaired = false, recoveringSession = false;
   let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
-  let decodingFrame = false;
-  const frameQueue = new RemoteFrameQueue();
 
   // Byte 0 of every binary WS message is a frame-type marker: 0x00 = full
   // frame (rest of the message is JPEG bytes, drawn to fill the whole
@@ -281,53 +279,20 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
   // encoded size, so this works unchanged whether or not the agent is
   // sending a downscaled stream. See agent-go's remote_pipe.go
   // (buildPartialFramePayload) and remote_helper.go's capture loop.
-  async function drawFrameMessage(blob) {
-    const head = new Uint8Array(await blob.slice(0, 9).arrayBuffer());
-    // If overload forced us to discard deltas, ignore further partials
-    // until the agent's periodic full frame gives the canvas a known-good
-    // baseline again.
-    if (frameQueue.awaitingFull && head[0] !== 0x00) return false;
-    if (head[0] === 0x01) {
-      const view = new DataView(head.buffer, head.byteOffset + 1, 8);
-      const x = view.getUint16(0, true);
-      const y = view.getUint16(2, true);
-      const w = view.getUint16(4, true);
-      const h = view.getUint16(6, true);
-      const bmp = await createImageBitmap(blob.slice(9));
-      ctx.drawImage(bmp, x, y, w, h);
-      bmp.close();
-    } else {
-      const bmp = await createImageBitmap(blob.slice(1));
-      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-      bmp.close();
-    }
-    return true;
-  }
-
   // A full snapshot replaces older queued updates. Deltas after that snapshot
   // retain their order. Overflow or a decode failure requires a new full
-  // baseline, rather than displaying an incomplete chain of partial changes.
-  async function queueFrame(buffer) {
-    if (!frameQueue.push(buffer)) return;
-    if (decodingFrame) return;
-    decodingFrame = true;
-    try {
-      while (frameQueue.length) {
-        const next = new Blob([frameQueue.take()]);
-        try {
-          if (await drawFrameMessage(next)) {
-            frameCount++;
-            lastFrameAt = performance.now();
-          }
-        } catch (error) {
-          frameQueue.desynchronize();
-          console.warn('Dropped invalid remote frame', error);
-        }
-      }
-    } finally {
-      decodingFrame = false;
-    }
-  }
+  // baseline. Generation checks discard stale partials and reset-stream images.
+  const frameRenderer = new RemoteFrameRenderer({
+    decode: (buffer, frame) => createImageBitmap(new Blob([new Uint8Array(buffer, frame.offset)])),
+    draw: (bitmap, frame) => {
+      if (frame.type === 0x01) {
+        if (frame.x + frame.w > canvas.width || frame.y + frame.h > canvas.height) throw new Error('Remote rectangle outside screen');
+        ctx.drawImage(bitmap, frame.x, frame.y, frame.w, frame.h);
+      } else ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    },
+    onFrame: () => { frameCount++; lastFrameAt = performance.now(); },
+    onError: error => console.warn('Dropped invalid remote frame', error),
+  });
   let _remoteClipboard = '';  // last known remote clipboard text
   let _dropTargetResolver = null;
   let _lastExplorerPath = '';
@@ -360,7 +325,7 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
 
   // ── WebSocket ────────────────────────────────────────────────────────────────
   function connect() {
-    frameQueue.desynchronize();
+    frameRenderer.reset();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/remote-ws/${ENDPOINT_ID}`);
     ws.binaryType = 'arraybuffer';
@@ -371,6 +336,7 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
     // even when the agent side never joined at all.
     ws.onopen  = () => { setStatus('Waiting for device…', ''); canvas.focus(); addSessionEvent('Relay connected; waiting for endpoint'); };
     ws.onclose = (event) => {
+      frameRenderer.reset();
       if (event.code === 1013) {
         setStatus('Remote relay busy — please retry shortly', 'error');
         addSessionEvent('Remote-session capacity reached; retry shortly');
@@ -400,11 +366,11 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
 
         if (msg.type === 'init') {
           sw = msg.w; sh = msg.h;
+          frameRenderer.reset();
           // Reassigning canvas.width/height clears the current image even when
           // the dimensions are unchanged. Keep the last valid frame visible
           // while the agent replaces its capture helper across login/logout.
           if (canvas.width !== sw || canvas.height !== sh) {
-            frameQueue.desynchronize();
             canvas.width = sw;
             canvas.height = sh;
           }
@@ -502,9 +468,9 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
         return;
       }
 
-      // Binary → JPEG frame (full or partial, see queueFrame/drawFrameMessage)
+      // Binary → JPEG frame, with direct ArrayBuffer header parsing.
       if (!sw || !sh) return;
-      queueFrame(e.data);
+      frameRenderer.push(e.data);
     };
   }
 
@@ -608,12 +574,12 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
   let viewportSendTimer = null;
   function reportViewportSize() {
     if (!sw || !sh || !ws || ws.readyState !== WebSocket.OPEN) return;
-    const wrap = document.getElementById('canvas-wrap');
-    const dpr = window.devicePixelRatio || 1;
+    const bounds = canvas.getBoundingClientRect();
+    const viewport = remoteViewportSize(bounds.width, bounds.height, window.devicePixelRatio, sw, sh);
+    if (!viewport) return;
     send({
       type: 'viewport_size',
-      w: Math.max(1, Math.round(wrap.clientWidth * dpr)),
-      h: Math.max(1, Math.round(wrap.clientHeight * dpr)),
+      ...viewport,
     });
   }
 
@@ -1260,7 +1226,7 @@ import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_
     stopStatusPoll();
     clearTimeout(viewportSendTimer);
     clearTimeout(toast._t);
-    frameQueue.desynchronize();
+    frameRenderer.reset();
   });
 
   connect();
