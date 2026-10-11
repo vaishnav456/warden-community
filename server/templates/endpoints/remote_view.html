@@ -242,7 +242,8 @@
 </div>
 </div>
 
-<script nonce="{{ csp_nonce }}">
+<script type="module" nonce="{{ csp_nonce }}">
+import { RemoteFrameQueue } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
 (function () {
   const ENDPOINT_ID = {{ endpoint.id | tojson }};
   const SESSION_ID  = {{ session.id  | tojson }};
@@ -268,9 +269,8 @@
   let scaleMode = 'fit', viewOnly = !REMOTE_CAPABILITIES.control, reconnectAttempts = 0, allowReconnect = true;
   let relayWasPaired = false, recoveringSession = false;
   let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
-  let decodingFrame = false, frameQueue = [];
-  const MAX_FRAME_QUEUE = 60;
-  let waitingForFullFrame = false;
+  let decodingFrame = false;
+  const frameQueue = new RemoteFrameQueue();
 
   // Byte 0 of every binary WS message is a frame-type marker: 0x00 = full
   // frame (rest of the message is JPEG bytes, drawn to fill the whole
@@ -286,7 +286,7 @@
     // If overload forced us to discard deltas, ignore further partials
     // until the agent's periodic full frame gives the canvas a known-good
     // baseline again.
-    if (waitingForFullFrame && head[0] !== 0x00) return false;
+    if (frameQueue.awaitingFull && head[0] !== 0x00) return false;
     if (head[0] === 0x01) {
       const view = new DataView(head.buffer, head.byteOffset + 1, 8);
       const x = view.getUint16(0, true);
@@ -297,7 +297,6 @@
       ctx.drawImage(bmp, x, y, w, h);
       bmp.close();
     } else {
-      waitingForFullFrame = false;
       const bmp = await createImageBitmap(blob.slice(1));
       ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
       bmp.close();
@@ -305,34 +304,23 @@
     return true;
   }
 
-  // Partial updates are deltas against the canvas' current contents, not
-  // independent snapshots like a full frame — unlike the old "keep only the
-  // newest pending frame, drop stale ones" behavior (correct for full
-  // frames, since a newer one is a complete state on its own), dropping a
-  // partial update here would permanently corrupt the canvas (missing
-  // exactly that region's change) until the next full-frame refresh. Queue
-  // and process every message in order instead.
-  async function queueFrame(blob) {
-    if (frameQueue.length >= MAX_FRAME_QUEUE) {
-      // Never allow a slow decoder/background tab to consume memory and
-      // accumulate minutes of remote-control latency. Partial frames are
-      // stateful, so after dropping them we wait for the agent's periodic
-      // full-frame resynchronization instead of drawing a corrupted chain.
-      frameQueue.length = 0;
-      waitingForFullFrame = true;
-    }
-    frameQueue.push(blob);
+  // A full snapshot replaces older queued updates. Deltas after that snapshot
+  // retain their order. Overflow or a decode failure requires a new full
+  // baseline, rather than displaying an incomplete chain of partial changes.
+  async function queueFrame(buffer) {
+    if (!frameQueue.push(buffer)) return;
     if (decodingFrame) return;
     decodingFrame = true;
     try {
       while (frameQueue.length) {
-        const next = frameQueue.shift();
+        const next = new Blob([frameQueue.take()]);
         try {
           if (await drawFrameMessage(next)) {
             frameCount++;
             lastFrameAt = performance.now();
           }
         } catch (error) {
+          frameQueue.desynchronize();
           console.warn('Dropped invalid remote frame', error);
         }
       }
@@ -372,9 +360,10 @@
 
   // ── WebSocket ────────────────────────────────────────────────────────────────
   function connect() {
+    frameQueue.desynchronize();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/remote-ws/${ENDPOINT_ID}`);
-    ws.binaryType = 'blob';
+    ws.binaryType = 'arraybuffer';
 
     // onopen only means the browser reached the relay server — not that the
     // remote machine's agent has actually paired yet (that's what 'init'
@@ -415,6 +404,7 @@
           // the dimensions are unchanged. Keep the last valid frame visible
           // while the agent replaces its capture helper across login/logout.
           if (canvas.width !== sw || canvas.height !== sh) {
+            frameQueue.desynchronize();
             canvas.width = sw;
             canvas.height = sh;
           }
@@ -1270,7 +1260,7 @@
     stopStatusPoll();
     clearTimeout(viewportSendTimer);
     clearTimeout(toast._t);
-    frameQueue.length = 0;
+    frameQueue.desynchronize();
   });
 
   connect();

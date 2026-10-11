@@ -1,6 +1,8 @@
 import asyncio
 import pathlib
 import sys
+import socket
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -52,6 +54,36 @@ class RelayLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     def test_pair_timeout_covers_heartbeat_consent_and_helper_startup(self):
         self.assertGreaterEqual(ws_proxy.PAIR_TIMEOUT, 30 + 60 + 20)
+
+    async def test_live_listener_preserves_binary_frames_without_deflate_negotiation(self):
+        import websockets
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            port = reservation.getsockname()[1]
+        stop = threading.Event()
+        async def echo(connection):
+            async for message in connection:
+                await connection.send(message)
+        ws_proxy._ready.clear()
+        with patch.object(ws_proxy, 'PROXY_HOST', '127.0.0.1'), \
+                patch.object(ws_proxy, 'PROXY_PORT', port), \
+                patch.object(ws_proxy, '_handle', echo), \
+                patch('services.lifecycle.stopping', stop), \
+                patch.object(ws_proxy.load_controller, 'sample'):
+            ws_proxy.start()
+            try:
+                self.assertTrue(await asyncio.to_thread(ws_proxy._ready.wait, 3))
+                async with websockets.connect(f'ws://127.0.0.1:{port}', compression='deflate') as client:
+                    self.assertEqual(client.protocol.extensions, [])
+                    packet = bytes(range(256)) * 64
+                    await client.send(packet)
+                    self.assertEqual(await client.recv(), packet)
+            finally:
+                stop.set()
+                async def closed():
+                    while ws_proxy._ready.is_set():
+                        await asyncio.sleep(.01)
+                await asyncio.wait_for(closed(), 3)
 
     @patch.object(ws_proxy.db, "get_remote_session")
     @patch.object(ws_proxy.db, "get_endpoint_by_api_key_hash")

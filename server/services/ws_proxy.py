@@ -715,6 +715,9 @@ def start() -> None:
             async with websockets.serve(
                 _handle, PROXY_HOST, PROXY_PORT,
                 max_size=MAX_RELAY_MESSAGE_BYTES, max_queue=MAX_RELAY_QUEUE,
+                # JPEG frames and encrypted Home traffic are already compressed
+                # or opaque. Recompressing them adds CPU and stream latency.
+                compression=None,
             ):
                 log.info("WS relay listening on %s:%d", PROXY_HOST, PROXY_PORT)
                 _startup_error = None
