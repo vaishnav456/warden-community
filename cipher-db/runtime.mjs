@@ -4,7 +4,7 @@ import {timingSafeEqual} from 'node:crypto';
 import {connect} from './connection.mjs';
 import {PostgresCipherStore,identifier} from './store.mjs';
 import {KeyServiceBox,unsealDocument,sealDocument} from './crypto.mjs';
-import {FileCheckpoint} from './checkpoint.mjs';
+import {JournalCheckpoint} from './journal_checkpoint.mjs';
 import {CipherDatabase} from './engine.mjs';
 import {RestCompiler} from './rest.mjs';
 
@@ -17,7 +17,7 @@ const connection=await connect(process.env.CIPHER_CONNECTION_FILE);
 const dataset=identifier(process.env.CIPHER_DATASET);
 await connection.acquireWriter(dataset);
 const box=new KeyServiceBox(process.env.KEY_SERVICE_SOCKET,process.env.KEY_SERVICE_TOKEN_FILE);
-const engine=await CipherDatabase.open(new PostgresCipherStore(connection,dataset),box,new FileCheckpoint(process.env.CIPHER_CHECKPOINT),dataset);
+const engine=await CipherDatabase.open(new PostgresCipherStore(connection,dataset),box,new JournalCheckpoint(process.env.CIPHER_CHECKPOINT),dataset);
 const rest=new RestCompiler(engine);
 // Bounded aggregate timings contain no SQL, identities, paths or data.
 let timings={read:{count:0,queue:0,guard:0,query:0,persist:0},write:{count:0,queue:0,guard:0,query:0,persist:0}};

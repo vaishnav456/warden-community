@@ -21,7 +21,8 @@ cache alongside it. Cassandra is not the next primary database for Warden.
 
 The immediate performance release streams integrity audits on a separate
 repeatable-read snapshot, batches sequence reads, rebuilds planner statistics
-after restore and makes GET/HEAD transactions read-only. These changes preserve
+after restore, uses a durable append checkpoint journal and makes GET/HEAD
+transactions read-only. These changes preserve
 the stored format. They do not remove PGlite's exclusive connection or prove
 10,000-endpoint support.
 
@@ -59,6 +60,9 @@ Proposed acceptance targets, not measured results:
 1. Profile SQL execution, runtime queueing, custody calls, encrypted commits and
    application request fan-out separately. Keep diagnostic aggregates free of
    SQL text, query values, keys and identities.
+   Check disk flush latency and I/O pressure as well as CPU and memory. Shared
+   virtual storage can dominate commit latency even when SQL and AES are fast;
+   evaluate dedicated low-latency durable storage before changing database brands.
 2. Consolidate the heartbeat's related work into reviewed atomic operations.
    Preserve lease fencing, tenant/BYOK checks and response signatures. A longer
    agent timeout alone does not solve saturation or prove delivery.

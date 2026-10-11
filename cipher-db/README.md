@@ -36,6 +36,17 @@ detects database rollback and reconciles an interrupted commit at restart.
 Only one runtime can own a database: a dedicated connection holds an advisory
 lock, and loss of that connection never creates an automatic replacement.
 
+The runtime upgrades a verified legacy checkpoint to a private append journal.
+Each encrypted commit still flushes its intent before the PostgreSQL commit and
+flushes confirmation before acknowledgment. It avoids creating and renaming
+checkpoint files on every write. Checksummed records, bounded compaction and
+interrupted-tail recovery retain rollback rejection; I/O failures close access.
+The active checkpoint is `CIPHER_CHECKPOINT` plus `.journal`; retain that file
+with the encrypted store during recovery. The `.legacy` file is a retired
+checkpoint marker, not the current recovery state. Removing the journal never
+enables automatic legacy fallback. An older runtime cannot be used with this
+checkpoint format without an operator-verified recovery procedure.
+
 Startup authenticates every record and verifies table and record membership.
 A five-minute storage audit verifies that persisted ciphertext still matches
 the trusted snapshot; failures close access. It captures authenticated expected
