@@ -24,7 +24,9 @@ package main
 //	'X'  input desktop changed; restart on other desktop  (helper -> service)
 //	'M'  JSON monitor inventory                           (helper -> service)
 //	'L'  log line, payload = utf-8 text                   (helper -> service)
-//	'I'  input event, payload = utf-8 JSON               (service -> helper)
+//	'T'  fixed numeric performance snapshot, no desktop/input contents
+//	'I'  legacy input event, payload = utf-8 JSON        (service -> helper)
+//	'Q'  timed input, 8-byte LE host-uptime ms + original JSON (service -> helper)
 
 import (
 	"encoding/binary"
@@ -36,6 +38,16 @@ import (
 )
 
 const pipeHeaderSize = 5 // 1-byte tag + 4-byte little-endian length
+
+// DurationSinceBoot wraps GetTickCount64 in the pinned Windows API package.
+// Both service and helper use the same host clock, without wall-clock offsets.
+func remoteHostTickMS() uint64 {
+	ticks := windows.DurationSinceBoot().Milliseconds()
+	if ticks < 0 {
+		return 0
+	}
+	return uint64(ticks)
+}
 
 // pipeFile adapts a raw Windows pipe Handle to io.Reader/io.Writer via
 // ReadFile/WriteFile, so the same framing code works for both the server
@@ -113,6 +125,9 @@ func readPipeMsg(r io.Reader) (byte, []byte, error) {
 	}
 	tag := header[0]
 	length := binary.LittleEndian.Uint32(header[1:])
+	if tag == remoteTimedInputTag && (length <= remoteTimedInputHeaderSize || length > remoteTimedInputHeaderSize+remoteInputMaxBytes) {
+		return 0, nil, fmt.Errorf("invalid timed input pipe length")
+	}
 	if length == 0 {
 		return tag, nil, nil
 	}

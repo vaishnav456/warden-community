@@ -33,7 +33,7 @@ jobs:
         working-directory: cipher-db
         run: npm ci --ignore-scripts
       - name: Remote frame ordering, bounds and resynchronization
-        run: node --test server/tests/remote_frame_queue.test.mjs
+        run: node --test server/tests/remote_frame_queue.test.mjs server/tests/remote_agent_performance.test.mjs
       - name: Encryption, atomicity, restart, tamper and actual storage-interface checks
         working-directory: cipher-db
         run: npm test

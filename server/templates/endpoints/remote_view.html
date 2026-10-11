@@ -244,6 +244,7 @@
 
 <script type="module" nonce="{{ csp_nonce }}">
 import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
+import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ url_for('static', filename='js/remote_agent_performance.mjs', v=asset_v) | tojson }};
 (function () {
   const ENDPOINT_ID = {{ endpoint.id | tojson }};
   const SESSION_ID  = {{ session.id  | tojson }};
@@ -270,8 +271,10 @@ import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ 
   let relayWasPaired = false, recoveringSession = false;
   let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
   let pointerSender = null, relayPerformance = null;
+  let agentPerformance = null, agentPerformanceAt = 0;
   let receivedFrames = 0, receivedBytes = 0, decodeErrors = 0;
   const decodeTimes = [];
+  const drawTimes = [];
 
   // Byte 0 of every binary WS message is a frame-type marker: 0x00 = full
   // frame (rest of the message is JPEG bytes, drawn to fill the whole
@@ -298,10 +301,16 @@ import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ 
       }
     },
     draw: (bitmap, frame) => {
-      if (frame.type === 0x01) {
-        if (frame.x + frame.w > canvas.width || frame.y + frame.h > canvas.height) throw new Error('Remote rectangle outside screen');
-        ctx.drawImage(bitmap, frame.x, frame.y, frame.w, frame.h);
-      } else ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const started = performance.now();
+      try {
+        if (frame.type === 0x01) {
+          if (frame.x + frame.w > canvas.width || frame.y + frame.h > canvas.height) throw new Error('Remote rectangle outside screen');
+          ctx.drawImage(bitmap, frame.x, frame.y, frame.w, frame.h);
+        } else ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      } finally {
+        drawTimes.push(performance.now() - started);
+        if (drawTimes.length > 120) drawTimes.shift();
+      }
     },
     onFrame: () => { frameCount++; lastFrameAt = performance.now(); },
     onError: error => { decodeErrors++; console.warn('Dropped invalid remote frame', error); },
@@ -377,6 +386,11 @@ import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ 
       if (typeof e.data === 'string') {
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type === 'remote_agent_performance') {
+          const report = validateRemoteAgentPerformance(msg);
+          if (report) { agentPerformance = report; agentPerformanceAt = performance.now(); }
+          return;
+        }
         if (msg.type === 'relay_pong') {
           if (msg.nonce === relayPingNonce) {
             relayRTT = Math.round(performance.now() - relayPingAt);
@@ -1240,7 +1254,11 @@ import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ 
     const number = key => typeof relayPerformance?.[key] === 'number' && Number.isFinite(relayPerformance[key])
       ? Math.round(relayPerformance[key]) : '—';
     const decode = decodeTimes.length ? Math.round(decodeTimes.reduce((sum, time) => sum + time, 0) / decodeTimes.length) : '—';
+    const draw = drawTimes.length ? Math.round(drawTimes.reduce((sum, time) => sum + time, 0) / drawTimes.length) : '—';
+    const drawMax = drawTimes.length ? Math.round(Math.max(...drawTimes)) : '—';
     stats.title = `Frame age is time since the last update, not input latency; idle screens update less often. Received ${Math.round(receivedFrames / elapsed)} fps, ${Math.round(receivedBytes / elapsed / 1024)} KB/s before compression. Browser decode ${decode} ms; queue ${frameRenderer.queue.length} frames; decode failures ${decodeErrors}. Relay–device RTT ${number('agent_rtt_ms')} ms; relay send wait ${number('send_wait_current_ms')} ms current, ${number('send_wait_mean_ms')} ms average, ${number('send_wait_max_ms')} ms maximum; relay loop delay ${number('relay_loop_lag_ms')} ms.`;
+    stats.title += ` Browser canvas call ${draw} ms average/${drawMax} ms maximum; browser timer delay ${Math.round(Math.max(0, now - lastStatsAt - 2000))} ms (includes background throttling).`;
+    if (agentPerformance && now - agentPerformanceAt <= 20000) stats.title += ' ' + remoteAgentPerformanceText(agentPerformance);
     receivedFrames = receivedBytes = 0;
     frameCount = 0;
     lastStatsAt = now;

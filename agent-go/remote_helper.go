@@ -114,11 +114,27 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 	outFile := pipeFile{outHandle}
 	inFile := pipeFile{inHandle}
 
+	performance := newRemotePerformance(time.Now())
 	var writeMu sync.Mutex
 	writeMsg := func(tag byte, payload []byte) error {
+		started := time.Now()
 		writeMu.Lock()
-		defer writeMu.Unlock()
-		return writePipeMsg(outFile, tag, payload)
+		err := writePipeMsg(outFile, tag, payload)
+		writeMu.Unlock()
+		if tag == 'F' || tag == 'P' {
+			performance.observe(remotePipeWrite, time.Since(started))
+			if err == nil {
+				bytes := len(payload)
+				if tag == 'F' {
+					performance.add(remoteFullFrames, 1)
+				} else {
+					performance.add(remotePartialFrames, 1)
+					bytes -= 8
+				}
+				performance.add(remoteEncodedBytes, uint64(max(0, bytes)))
+			}
+		}
+		return err
 	}
 
 	stop := make(chan struct{})
@@ -179,6 +195,31 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 	}
 
 	var wg sync.WaitGroup
+	// A fixed numeric snapshot also wakes the service pump on an idle screen.
+	// It shares the existing pipe writer; no frame or input contents are reported.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(remotePerformanceInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				now := time.Now()
+				report := remoteHelperPerformance{Version: 1, Window: performance.snapshot(now)}
+				data, err := json.Marshal(report)
+				if err != nil || len(data) > remoteHelperPerformanceMaxBytes {
+					continue
+				}
+				if err := writeMsg('T', data); err != nil {
+					requestStop()
+					return
+				}
+			}
+		}
+	}()
 
 	// Capture loop. Prefers Desktop Duplication (DXGI) for the primary
 	// monitor when available — real-hardware GPU composition means plain GDI
@@ -278,6 +319,20 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 
 			if dxgiMatchesSelection {
 				buf, w, h, dirty, dErr := dxgi.grabBGRA()
+				performance.observe(remoteDXGIWait, dxgi.lastWait)
+				replayed := false
+				// Exclude idle/pointer-only acquisitions, but retain slow failed
+				// readback attempts instead of silently losing their timing.
+				if dxgi.lastReadbackAttempt {
+					performance.observe(remoteDXGIReadback, dxgi.lastReadback)
+				}
+				if dErr == nil {
+					if dxgi.lastAccumulated > 1 {
+						performance.add(remoteDXGIAccumulated, uint64(dxgi.lastAccumulated-1))
+					}
+				} else if dErr == errNoNewFrame {
+					performance.add(remoteDXGIIdle, 1)
+				}
 				if dErr == errNoNewFrame && len(captureState.pixels) > 0 {
 					ew, eh := targetSize(captureState.width, captureState.height)
 					if !captureState.shouldReplay(time.Now(), ew, eh) {
@@ -289,6 +344,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 					// and must not replace a healthy DXGI baseline during idle.
 					buf, w, h = captureState.pixels, captureState.width, captureState.height
 					dirty, dErr = nil, nil
+					replayed = true
 				}
 				switch dErr {
 				case errNoNewFrame:
@@ -312,6 +368,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 					useGDI = false
 					captureState.remember(buf, w, h)
 					ew, eh := targetSize(w, h)
+					performance.dimensions(w, h, ew, eh)
 					ux, uy, uw, uh, haveDirty := unionDirtyRects(dirty, w, h)
 					// Always send a full frame the first time this DXGI
 					// session captures anything (there's no prior canvas
@@ -325,8 +382,10 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 					// region indefinitely on a continuously changing desktop.
 					sendFull := captureState.needsFull(time.Now(), haveDirty, uw*uh, w*h, ew, eh)
 					if sendFull {
+						encodeStarted := time.Now()
 						encBuf := downscaleBGRA(buf, w, h, ew, eh)
 						frame, encErr := encodeBGRAJPEG(encBuf, ew, eh, 60)
+						performance.observe(remoteJPEGEncode, time.Since(encodeStarted))
 						if encErr != nil {
 							_ = writeMsg('L', []byte(fmt.Sprintf("DXGI frame encode failed, using GDI: %v", encErr)))
 							useGDI = true
@@ -352,6 +411,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 						// dimensions — targetSize() compares its argument
 						// against the browser's requested FULL-screen size,
 						// which isn't meaningful applied to a small sub-rect.
+						encodeStarted := time.Now()
 						crop := cropBGRA(buf, w, ux, uy, uw, uh)
 						cew, ceh := uw, uh
 						if ew != w || eh != h {
@@ -366,6 +426,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 						}
 						encBuf := downscaleBGRA(crop, uw, uh, cew, ceh)
 						frame, encErr := encodeBGRAJPEG(encBuf, cew, ceh, 60)
+						performance.observe(remoteJPEGEncode, time.Since(encodeStarted))
 						if encErr != nil {
 							_ = writeMsg('L', []byte(fmt.Sprintf("DXGI partial-frame encode failed, using GDI: %v", encErr)))
 							useGDI = true
@@ -380,6 +441,12 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 				default:
 					_ = writeMsg('L', []byte(fmt.Sprintf("DXGI capture failed, using GDI this frame: %v", dErr)))
 				}
+				if sent {
+					performance.add(remoteDXGIFrames, 1)
+					if replayed {
+						performance.add(remoteReplayFrames, 1)
+					}
+				}
 			}
 
 			if useGDI {
@@ -393,7 +460,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 				sizeMu.Lock()
 				rw, rh := requestedW, requestedH
 				sizeMu.Unlock()
-				frame, _, _, gdiErr := grabJPEGRegionForViewport(60, region, rw, rh)
+				frame, _, _, gdiErr := captureGDIJPEGRegionTimed(60, region, rw, rh, systemGDICaptureCall, systemGDIBitmapRead, performance)
 				if gdiErr != nil {
 					// Previously swallowed entirely: a persistent capture
 					// failure (e.g. BitBlt/GetDIBits erroring on this
@@ -434,6 +501,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 					requestStop()
 					return
 				}
+				performance.add(remoteGDIFrames, 1)
 				captureState.sentGDI(time.Now())
 				sent = true
 			}
@@ -490,7 +558,18 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 			if err != nil {
 				return
 			}
+			if tag == remoteTimedInputTag {
+				original, wait, measured, timingErr := decodeRemoteTimedInput(payload, remoteHostTickMS())
+				if timingErr != nil {
+					continue
+				}
+				if measured {
+					performance.observe(remoteInputPipeQueue, wait)
+				}
+				payload, tag = original, 'I'
+			}
 			if tag == 'I' {
+				dispatchStarted := time.Now()
 				var evt map[string]interface{}
 				if json.Unmarshal(payload, &evt) == nil {
 					if eventType, _ := evt["type"].(string); eventType == "drop_target_request" {
@@ -522,6 +601,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 						dispatchInput(evt, currentMonitor())
 					}
 				}
+				performance.observe(remoteInputDispatch, time.Since(dispatchStarted))
 			}
 		}
 	}()

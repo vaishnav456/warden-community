@@ -1019,13 +1019,24 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 	// arbitrarily large WebSocket message.
 	conn.SetReadLimit(1024 * 1024)
 
+	performance := newRemotePerformance(time.Now())
+	lastPerformanceReport := time.Now()
 	var writerMu sync.Mutex
 	writeWS := func(kind int, data []byte) error {
+		started := time.Now()
 		writerMu.Lock()
 		defer writerMu.Unlock()
-		return conn.WriteMessage(kind, data)
+		performance.observe(remoteWSWriterWait, time.Since(started))
+		started = time.Now()
+		err := conn.WriteMessage(kind, data)
+		performance.observe(remoteWSWrite, time.Since(started))
+		return err
 	}
-	inputCh := make(chan []byte, 128)
+	type queuedRemoteInput struct {
+		data     []byte
+		received time.Time
+	}
+	inputCh := make(chan queuedRemoteInput, 128)
 	wsDead := make(chan struct{})
 	go func() {
 		defer close(wsDead)
@@ -1040,8 +1051,10 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 				return
 			}
 			if kind == websocket.TextMessage {
+				input := queuedRemoteInput{data: data, received: time.Now()}
 				select {
-				case inputCh <- data:
+				case inputCh <- input:
+					performance.queueDepth(len(inputCh))
 				case <-session.stop:
 					return
 				}
@@ -1065,6 +1078,8 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 		pump.Add(1)
 		go func(current *remoteHelperBridge) {
 			defer pump.Done()
+			var helperWindow *remotePerformanceWindow
+			var helperReceived time.Time
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					logError("Recovered panic in remote frame pump: %v", recovered)
@@ -1107,6 +1122,10 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 				} else if tag == 'D' {
 					msg, _ := json.Marshal(map[string]interface{}{"type": "drop_target", "path": string(payload)})
 					err = writeWS(websocket.TextMessage, msg)
+				} else if tag == 'T' {
+					if window, decodeErr := decodeRemoteHelperPerformance(payload); decodeErr == nil {
+						helperWindow, helperReceived = &window, time.Now()
+					}
 				} else if tag == 'L' {
 					// The helper can't reliably write agent.log itself (see
 					// remote_helper.go's capture-failure comment), so it sends
@@ -1124,6 +1143,34 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 				if err != nil {
 					markHelperDead()
 					return
+				}
+				if tag == 'F' || tag == 'P' {
+					bytes := len(payload)
+					if tag == 'F' {
+						performance.add(remoteFullFrames, 1)
+					} else {
+						performance.add(remotePartialFrames, 1)
+						bytes -= 8
+					}
+					performance.add(remoteEncodedBytes, uint64(max(0, bytes)))
+				}
+				// The existing single writer emits at most one numeric report per5s.
+				// Helper snapshots wake this same pump even when no desktop pixels change.
+				now := time.Now()
+				if now.Sub(lastPerformanceReport) >= remotePerformanceInterval {
+					report := remotePerformanceReport{Type: "remote_agent_performance", Version: 1, Service: performance.snapshot(now), Helper: helperWindow}
+					if helperWindow != nil {
+						age := remoteDurationMS(now.Sub(helperReceived))
+						report.HelperAgeMS = &age
+					}
+					data, marshalErr := json.Marshal(report)
+					if marshalErr == nil && len(data) <= 8192 {
+						if err := writeWS(websocket.TextMessage, data); err != nil {
+							markHelperDead()
+							return
+						}
+					}
+					lastPerformanceReport = now
 				}
 			}
 		}(bridge)
@@ -1152,7 +1199,9 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 				default:
 				}
 				break loop
-			case data := <-inputCh:
+			case input := <-inputCh:
+				performance.observe(remoteInputQueue, time.Since(input.received))
+				data := input.data
 				var evt map[string]interface{}
 				if json.Unmarshal(data, &evt) == nil {
 					eventType, _ := evt["type"].(string)
@@ -1242,7 +1291,14 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 						}(text)
 						continue
 					}
-					if err := writePipeMsg(bridge.inFile, 'I', data); err != nil {
+					pipeStarted := time.Now()
+					timedInput, inputErr := buildRemoteTimedInput(data, remoteHostTickMS())
+					if inputErr != nil {
+						continue
+					}
+					pipeErr := writePipeMsg(bridge.inFile, remoteTimedInputTag, timedInput)
+					performance.observe(remoteInputPipeWrite, time.Since(pipeStarted))
+					if pipeErr != nil {
 						restart = true
 						break loop
 					}
