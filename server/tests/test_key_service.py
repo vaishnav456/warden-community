@@ -62,6 +62,19 @@ class KeyServiceTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.operate(name).status_code, 400)
 
+    def test_database_batch_boundaries_and_record_authentication(self):
+        records = [dict(record_id=f"record-{index}", purpose="database.row.v1:test", value=f"private-{index}") for index in range(4)]
+        encrypted = self.operate("platform.encrypt_database_batch", records=records)
+        self.assertEqual(encrypted.status_code, 200)
+        values = encrypted.json["result"]
+        self.assertTrue(all(value.startswith("enc:v1:") for value in values))
+        sealed = [dict(record, value=value) for record, value in zip(records, values)]
+        self.assertEqual(self.operate("platform.decrypt_database_batch", records=sealed).json["result"], [r["value"] for r in records])
+        sealed[0]["record_id"] = "other"
+        self.assertEqual(self.operate("platform.decrypt_database_batch", records=sealed).status_code, 400)
+        for invalid in ([], records * 33, [dict(records[0], purpose="tenant.data")], [dict(records[0], unexpected=True)]):
+            self.assertEqual(self.operate("platform.encrypt_database_batch", records=invalid).status_code, 400)
+
     def test_roundtrip_is_authenticated_and_bound_to_tenant_and_purpose(self):
         company = self.company()
         response = self.operate("tenant.encrypt_value", **company,

@@ -120,3 +120,12 @@ Optional external tools or user-uploaded application packages are not automatica
 - Produce an SBOM for each artifact and review native dependencies bundled in wheels and base images. Do not infer the license of a complete project from one dependency or license identifier.
 - Review Windows SDK, credential-provider, remote-access, packet-capture and networking components separately when they are included in an artifact. Preserve their applicable notices in an SPDX or CycloneDX release SBOM.
 - Refresh third_party/inventory.json when dependencies change and run `python tools/check_third_party.py`. This check detects missing declared dependencies or notice files; it is not legal approval, vulnerability scanning or proof of binary-package compliance.
+
+## Ciphertext database runtime
+
+The runtime pins PGlite 0.5.8 (Apache-2.0, including PostgreSQL 18.3 under the
+PostgreSQL license) and node-postgres 8.23.1 (MIT). Locked transitive dependencies
+retain their respective MIT/ISC notices. Collected npm notices are in
+[third_party/licenses/npm](third_party/licenses/npm); the lockfile and inventory
+are checked together. The runtime image includes these notices. This coverage
+does not replace an image SBOM or review of all compiled/system components.

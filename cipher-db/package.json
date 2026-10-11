@@ -1,0 +1,8 @@
+{
+  "name": "warden-cipher-database",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test --test-isolation=none tests/*.test.mjs", "start":"node start.mjs"},
+  "dependencies": {"@electric-sql/pglite": "0.5.8", "pg":"8.23.1"}
+}

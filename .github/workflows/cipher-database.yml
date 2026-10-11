@@ -1,0 +1,37 @@
+name: Ciphertext database
+on:
+  pull_request:
+  push:
+    branches: [main, master, develop]
+permissions:
+  contents: read
+jobs:
+  encrypted-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: isolated-cipher-test-only
+          POSTGRES_DB: warden_cipher_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d warden_cipher_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      WARDEN_CIPHER_TEST_DSN: postgresql://postgres:isolated-cipher-test-only@127.0.0.1:5432/warden_cipher_test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Install pinned runtime without package scripts
+        working-directory: cipher-db
+        run: npm ci --ignore-scripts
+      - name: Encryption, atomicity, restart, tamper and actual storage-interface checks
+        working-directory: cipher-db
+        run: npm test

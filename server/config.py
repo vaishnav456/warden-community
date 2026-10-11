@@ -15,8 +15,18 @@ if _env_file.exists():
             _os.environ.setdefault(_k.strip(), _v.strip())
 
 # ── Supabase ────────────────────────────────────────────────────────────────
-SUPABASE_URL = _os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_KEY = _os.environ["SUPABASE_SERVICE_KEY"]
+DATABASE_MODE = _os.environ.get("WARDEN_DATABASE_MODE", "legacy")
+if DATABASE_MODE not in {"legacy", "ciphertext"}:
+    raise RuntimeError("Invalid WARDEN_DATABASE_MODE")
+if DATABASE_MODE == "ciphertext":
+    if not all(_os.environ.get(name) for name in ("CIPHER_SOCKET", "CIPHER_TOKEN_FILE", "CIPHER_DATASET")):
+        raise RuntimeError("Ciphertext database configuration is incomplete")
+    # Legacy database credentials are not used or loaded in ciphertext mode.
+    SUPABASE_URL = "http://127.0.0.1:9"
+    SUPABASE_SERVICE_KEY = "ciphertext-interface"
+else:
+    SUPABASE_URL = _os.environ["SUPABASE_URL"]
+    SUPABASE_SERVICE_KEY = _os.environ["SUPABASE_SERVICE_KEY"]
 
 # ── Flask ────────────────────────────────────────────────────────────────────
 SECRET_KEY = _os.environ.get("SECRET_KEY") or ""

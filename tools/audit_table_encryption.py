@@ -10,12 +10,15 @@ import argparse
 import json
 import os
 import sys
+import re
 
 import psycopg2
 from psycopg2 import sql
 
 
 def audit(connection, schema):
+    if schema == 'warden_cipher':
+        return audit_cipher_store(connection)
     connection.set_session(readonly=True, autocommit=False)
     tables = []
     with connection.cursor() as cursor:
@@ -65,6 +68,42 @@ def audit(connection, schema):
             'format_only': True, 'contains_record_values': False, 'tables': tables}
 
 
+def audit_cipher_store(connection):
+    """Opaque identifiers are structure; every stored business value is a blob.
+
+    This is a format/schema inventory only. Runtime startup/audit additionally
+    authenticate ciphertext and compare the independent trusted checkpoint.
+    """
+    connection.set_session(readonly=True, autocommit=False)
+    tables = []
+    complete = True
+    with connection.cursor() as cursor:
+        cursor.execute("SET LOCAL statement_timeout = '30s'")
+        cursor.execute("""SELECT n.nspname,c.relname,c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname NOT LIKE 'pg\\_%%' ESCAPE '\\' AND n.nspname<>'information_schema'
+          AND c.relkind IN ('r','p','m','f') ORDER BY n.nspname,c.relname""")
+        relations = cursor.fetchall()
+        for schema, name, kind in relations:
+            payload = 'manifest' if name == 'head' else 'payload'
+            if schema != 'warden_cipher' or kind != 'r' or name != 'head' and not re.fullmatch(r'r_[0-9a-f]{32}', name):
+                complete = False
+                tables.append(dict(table=name, schema=schema, unexpected_relation=True))
+                continue
+            cursor.execute("""SELECT column_name,data_type FROM information_schema.columns
+              WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position""", (schema, name))
+            expected = [('id', 'uuid'), ('revision', 'uuid'), ('manifest', 'text')] if name == 'head' else [('id', 'uuid'), ('payload', 'text')]
+            shape = cursor.fetchall() == expected
+            cursor.execute(sql.SQL("SELECT count(*),count(*) FILTER (WHERE {} ~ '^wdb1:[A-Za-z0-9_-]+$') FROM {}.{}").format(
+                sql.Identifier(payload), sql.Identifier(schema), sql.Identifier(name)))
+            rows, encrypted = cursor.fetchone()
+            complete = complete and shape and rows == encrypted and (name != 'head' or rows == 1)
+            tables.append(dict(table=name, rows=rows, encrypted_payload_format=encrypted, opaque_schema=shape))
+    connection.rollback()
+    complete = complete and any(t['table'] == 'head' for t in tables)
+    return dict(schema='warden_cipher', table_count=len(tables), record_table_count=sum(t['table'].startswith('r_') for t in tables),
+                format_only=True, contains_record_values=False, complete_ciphertext_format=complete, tables=tables)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--schema', default='endpt')
@@ -79,9 +118,12 @@ def main():
         print('Database audit failed; inspect connectivity and permissions privately', file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2))
-    incomplete = not report['table_count'] or any(not table['rows'] for table in report['tables']) or any(
-        column['populated'] != column['versioned_ciphertext']
-        for table in report['tables'] for column in table['columns'])
+    if 'complete_ciphertext_format' in report:
+        incomplete = not report['complete_ciphertext_format']
+    else:
+        incomplete = not report['table_count'] or any(not table['rows'] for table in report['tables']) or any(
+            column['populated'] != column['versioned_ciphertext']
+            for table in report['tables'] for column in table['columns'])
     return 2 if incomplete else 0
 
 

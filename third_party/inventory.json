@@ -1165,6 +1165,205 @@
           "path": "third_party/licenses/go/golang.org_x_sys@v0.44.0/LICENSE"
         }
       ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@electric-sql/pglite",
+      "version": "0.5.8",
+      "scope": "cipher-db",
+      "license": "Apache-2.0",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/@electric-sql_pglite@0.5.8/LICENSE",
+          "upstream_sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+        },
+        {
+          "path": "third_party/licenses/npm/@electric-sql_pglite@0.5.8/PostgreSQL-COPYRIGHT",
+          "upstream_sha256": "3d6af92ff8a4c2cdf69afb1cf44edea727922f5cd0cf8b5f72b11cdecac8fdfd"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg",
+      "version": "8.23.1",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg@8.23.1/LICENSE",
+          "upstream_sha256": "192b8f5c96900f04a1271dec39688655d7416c1c6ea84a508e18b50d2b6751f3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg-cloudflare",
+      "version": "1.4.1",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg-cloudflare@1.4.1/LICENSE",
+          "upstream_sha256": "192b8f5c96900f04a1271dec39688655d7416c1c6ea84a508e18b50d2b6751f3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg-connection-string",
+      "version": "2.14.1",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg-connection-string@2.14.1/LICENSE",
+          "upstream_sha256": "2244b5486c4427001b6756a87b9a297d427c111dcc3ba64a097492a8979c23d0"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg-int8",
+      "version": "1.0.1",
+      "scope": "cipher-db",
+      "license": "ISC",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg-int8@1.0.1/LICENSE",
+          "upstream_sha256": "4e8e87ccdfc7e4b47fd89015f78468aa53b6bf43ab6e6e12d43e8f55294911de"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg-pool",
+      "version": "3.14.0",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg-pool@3.14.0/LICENSE",
+          "upstream_sha256": "4f15ee7fc2a72082859d7e0d12dfa4bcdd70b1c744ad3850d07780730ac08557"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg-protocol",
+      "version": "1.16.1",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg-protocol@1.16.1/LICENSE",
+          "upstream_sha256": "192b8f5c96900f04a1271dec39688655d7416c1c6ea84a508e18b50d2b6751f3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "postgres-array",
+      "version": "2.0.0",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/postgres-array@2.0.0/license",
+          "upstream_sha256": "f057f36739d53d228a746de4440c1e0c644ecde06d6beab45337d39c9d12a393"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "postgres-bytea",
+      "version": "1.0.1",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/postgres-bytea@1.0.1/license",
+          "upstream_sha256": "f057f36739d53d228a746de4440c1e0c644ecde06d6beab45337d39c9d12a393"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "postgres-date",
+      "version": "1.0.7",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/postgres-date@1.0.7/license",
+          "upstream_sha256": "f057f36739d53d228a746de4440c1e0c644ecde06d6beab45337d39c9d12a393"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "postgres-interval",
+      "version": "1.2.0",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/postgres-interval@1.2.0/license",
+          "upstream_sha256": "f057f36739d53d228a746de4440c1e0c644ecde06d6beab45337d39c9d12a393"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "split2",
+      "version": "4.2.0",
+      "scope": "cipher-db",
+      "license": "ISC",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/split2@4.2.0/LICENSE",
+          "upstream_sha256": "c372ef2fa1dfcb124ed807609751e75e3a009f108c5724916b489288fcb88a0c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "xtend",
+      "version": "4.0.2",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/xtend@4.0.2/LICENSE",
+          "upstream_sha256": "82e67379203d5794e7c44549847d8d64ae6904591381682360470898bd306821"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pg-types",
+      "version": "2.2.0",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pg-types@2.2.0/LICENSE",
+          "upstream_sha256": "2c8a6e1b7782f0ca241792868af742f1c281c9661f59ec36c9acf40381c86645"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "pgpass",
+      "version": "1.0.5",
+      "scope": "cipher-db",
+      "license": "MIT",
+      "license_files": [
+        {
+          "path": "third_party/licenses/npm/pgpass@1.0.5/LICENSE",
+          "upstream_sha256": "492e56ee92e47d39ca91d60ef75f55b1104678fab8f09838206b61b43136e211"
+        }
+      ]
     }
   ]
 }

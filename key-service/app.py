@@ -31,6 +31,39 @@ OPERATIONS = {
 }
 
 
+def _database_batch(records, decrypt=False):
+    """Bounded authenticated record operations; keys stay inside custody.
+
+    Batching avoids one socket round trip per row during an all-table restore.
+    These are the same record/purpose-bound primitives, with no export API.
+    """
+    if not isinstance(records, list) or not 1 <= len(records) <= 128:
+        raise ValueError()
+    for item in records:
+        if not isinstance(item, dict) or set(item) != {"record_id", "purpose", "value"}:
+            raise ValueError()
+        if not isinstance(item["record_id"], str) or not 1 <= len(item["record_id"]) <= 128:
+            raise ValueError()
+        if not isinstance(item["purpose"], str) or not item["purpose"].startswith("database.") or len(item["purpose"]) > 256:
+            raise ValueError()
+        if not isinstance(item["value"], str) or not 1 <= len(item["value"]) <= 2 * 1024 * 1024:
+            raise ValueError()
+    function = platform_secrets.decrypt_platform_field if decrypt else platform_secrets.encrypt_platform_field
+    return [function(**item) for item in records]
+
+
+def encrypt_database_batch(records):
+    return _database_batch(records)
+
+
+def decrypt_database_batch(records):
+    return _database_batch(records, decrypt=True)
+
+
+OPERATIONS["platform.encrypt_database_batch"] = encrypt_database_batch
+OPERATIONS["platform.decrypt_database_batch"] = decrypt_database_batch
+
+
 @app.after_request
 def no_cache(response):
     response.headers["Cache-Control"] = "no-store"

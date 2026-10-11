@@ -14,6 +14,7 @@ import time
 import ssl
 
 import config
+from contextlib import closing
 
 # http:// is only safe because postgres/postgrest never leave the private
 # warden-net Docker network (see server/db.py's identical comment).
@@ -32,6 +33,17 @@ _HEADERS = {
 }
 
 
+def _application(path, data=None, claim_token=None):
+    """Existing authenticated Warden API; no database/key credentials here."""
+    headers = {"X-Build-Key": config.BUILD_SERVICE_KEY, "Content-Type": "application/json"}
+    if claim_token:
+        headers["X-Build-Claim"] = str(claim_token)
+    request = urllib.request.Request(config.WARDEN_SERVER_URL.rstrip("/") + path,
+                                    data=json.dumps(data or {}).encode(), method="POST", headers=headers)
+    with closing(urllib.request.urlopen(request, timeout=90, context=_SSL_CTX)) as response:
+        return json.loads(response.read())
+
+
 def _get(path: str) -> list:
     """
     GET /rest/v1/<path> and return parsed JSON list.
@@ -45,6 +57,8 @@ def _get(path: str) -> list:
     Raises:
         urllib.error.HTTPError: on non-2xx response
     """
+    if getattr(config, "DATABASE_MODE", "legacy") == "ciphertext":
+        raise RuntimeError("Direct database queries are disabled in ciphertext mode")
     req = urllib.request.Request(
         f"{config.SUPABASE_URL}/{path}", headers=_HEADERS
     )
@@ -62,6 +76,8 @@ def _patch(path: str, data: dict):
     Raises:
         urllib.error.HTTPError: on non-2xx response
     """
+    if getattr(config, "DATABASE_MODE", "legacy") == "ciphertext":
+        raise RuntimeError("Direct database queries are disabled in ciphertext mode")
     body = json.dumps(data).encode()
     req = urllib.request.Request(
         f"{config.SUPABASE_URL}/{path}",
@@ -72,6 +88,8 @@ def _patch(path: str, data: dict):
 
 
 def _post(path: str, data: dict):
+    if getattr(config, "DATABASE_MODE", "legacy") == "ciphertext":
+        raise RuntimeError("Direct database queries are disabled in ciphertext mode")
     body = json.dumps(data).encode()
     req = urllib.request.Request(
         f"{config.SUPABASE_URL}/{path}", data=body, method="POST", headers=_HEADERS,
@@ -82,6 +100,8 @@ def _post(path: str, data: dict):
 
 def claim_next_queued_build() -> dict | None:
     """Atomically claim pending work or an expired lease with fencing."""
+    if getattr(config, "DATABASE_MODE", "legacy") == "ciphertext":
+        return _application("/api/build/claim")
     rows = _post("rpc/claim_next_build", {"p_lease_seconds": 900})
     return rows[0] if rows else None
 
@@ -91,6 +111,11 @@ def requeue_stale_builds(max_age_minutes: int = 15) -> None:
 
 
 def renew_build_claim(build_id: str, claim_token: str) -> None:
+    if getattr(config, "DATABASE_MODE", "legacy") == "ciphertext":
+        result = _application(f"/api/build/{urllib.parse.quote(str(build_id), safe='')}/renew", claim_token=claim_token)
+        if result.get("ok") is not True:
+            raise RuntimeError("build lease was lost")
+        return
     result = _post("rpc/renew_build_claim", {
         "p_build_id": build_id, "p_claim_token": claim_token, "p_lease_seconds": 900,
     })
@@ -107,6 +132,14 @@ def set_build_status(build_id: str, status: str,
                      output_filename: str = None,
                      error_msg: str = None) -> None:
     """Update the status of a build request row."""
+    if getattr(config, "DATABASE_MODE", "legacy") == "ciphertext":
+        if status != "failed":
+            raise RuntimeError("Completed builds must use the authenticated artifact-upload API")
+        result = _application(f"/api/build/{urllib.parse.quote(str(build_id), safe='')}/fail",
+                              {"error": (error_msg or "Build failed")[:4000]}, claim_token=claim_token)
+        if result.get("ok") is not True:
+            raise RuntimeError("build claim was lost")
+        return
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data = {"status": status, "updated_at": now}
