@@ -1,6 +1,14 @@
 """
 tenant_crypto.py — Organization envelope encryption
 ----------------------------------------------------
+With KEY_SERVICE_SOCKET configured, all public operations run in the separate
+key service. The application retains neither the master key nor unwrapped DEKs.
+The service never exports keys, but authorized decryption returns plaintext to
+Warden. Application compromise can still abuse that authority; host compromise
+can also compromise the key service. This is not end-to-end encryption.
+BYOK keys then survive an application restart, but not a key-service restart.
+The local mode described below remains for deployments without key custody.
+
 The single organization gets an AES-256-GCM Data Encryption Key (DEK).
 Sensitive organization data (job payloads/output, escalation payloads, raw
 sysinfo — see db.py's encrypt_field/decrypt_field callers) is encrypted
@@ -45,6 +53,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 import config
+from services.key_service_client import delegated
 
 log = logging.getLogger("tenant_crypto")
 
@@ -70,10 +79,20 @@ class VaultLocked(Exception):
 # wrapped_dek + the master key). For "byok" companies this is populated
 # ONLY by unlock_byok() and cleared by lock_company() or process restart.
 _dek_cache: dict[str, bytes] = {}
+_dek_cache_context: dict[str, tuple[str, str]] = {}
 _cache_lock = threading.Lock()
 
 
+def _cache_dek(company_id, mode, wrapped_dek, dek):
+    with _cache_lock:
+        key = str(company_id)
+        _dek_cache[key] = dek
+        _dek_cache_context[key] = (mode, wrapped_dek)
+
+
 def _master_kek() -> bytes:
+    if getattr(config, "KEY_SERVICE_SOCKET", ""):
+        raise RuntimeError("Master keys are held by the key service")
     raw = config.TENANT_MASTER_KEK_B64
     if not raw:
         raise RuntimeError(
@@ -111,17 +130,18 @@ def _derive_kek_from_passphrase(passphrase: str, salt: bytes) -> bytes:
 
 # ── Provisioning ───────────────────────────────────────────────────────────
 
+@delegated("tenant.provision_managed")
 def provision_managed(company_id: str) -> dict:
     """Generate a new DEK for a managed-mode company, wrapped with the
     server master key. Returns fields to persist via
     db.set_company_encryption()."""
     dek = os.urandom(_DEK_LEN)
     wrapped = _aes_wrap(_master_kek(), dek, company_id)
-    with _cache_lock:
-        _dek_cache[str(company_id)] = dek
+    _cache_dek(company_id, "managed", wrapped, dek)
     return {"encryption_mode": "managed", "wrapped_dek": wrapped, "byok_salt": None}
 
 
+@delegated("tenant.provision_byok")
 def provision_byok(company_id: str, passphrase: str) -> dict:
     """Generate a *brand-new* DEK for a company that has never been
     provisioned before (i.e. at company creation, if BYOK is chosen up
@@ -131,11 +151,10 @@ def provision_byok(company_id: str, passphrase: str) -> dict:
     if not passphrase or len(passphrase) < 12:
         raise ValueError("BYOK passphrase must be at least 12 characters")
     dek = os.urandom(_DEK_LEN)
-    with _cache_lock:
-        _dek_cache[str(company_id)] = dek
     return _wrap_dek_for_byok(company_id, dek, passphrase)
 
 
+@delegated("tenant.rewrap_to_byok")
 def rewrap_to_byok(company_id: str, current_mode: str, current_wrapped_dek: str, passphrase: str) -> dict:
     """Switch an existing company to BYOK mode WITHOUT losing access to
     data already encrypted under its current DEK: unwraps the DEK using
@@ -151,6 +170,7 @@ def rewrap_to_byok(company_id: str, current_mode: str, current_wrapped_dek: str,
     return _wrap_dek_for_byok(company_id, dek, passphrase)
 
 
+@delegated("tenant.rewrap_to_managed")
 def rewrap_to_managed(company_id: str, current_mode: str, current_wrapped_dek: str) -> dict:
     """Re-wrap the existing cached DEK with the platform KEK.
 
@@ -159,8 +179,7 @@ def rewrap_to_managed(company_id: str, current_mode: str, current_wrapped_dek: s
     """
     dek = _get_dek(company_id, current_mode, current_wrapped_dek)
     wrapped = _aes_wrap(_master_kek(), dek, company_id)
-    with _cache_lock:
-        _dek_cache[str(company_id)] = dek
+    _cache_dek(company_id, "managed", wrapped, dek)
     return {"encryption_mode": "managed", "wrapped_dek": wrapped, "byok_salt": None}
 
 
@@ -168,8 +187,7 @@ def _wrap_dek_for_byok(company_id: str, dek: bytes, passphrase: str) -> dict:
     salt = os.urandom(_SCRYPT_SALT_LEN)
     kek = _derive_kek_from_passphrase(passphrase, salt)
     wrapped = _aes_wrap(kek, dek, company_id)
-    with _cache_lock:
-        _dek_cache[str(company_id)] = dek
+    _cache_dek(company_id, "byok", wrapped, dek)
     return {
         "encryption_mode": "byok",
         "wrapped_dek": wrapped,
@@ -179,6 +197,7 @@ def _wrap_dek_for_byok(company_id: str, dek: bytes, passphrase: str) -> dict:
 
 # ── Unlock / lock (BYOK only) ───────────────────────────────────────────────
 
+@delegated("tenant.unlock_byok")
 def unlock_byok(company_id: str, passphrase: str, wrapped_dek: str, byok_salt_b64: str) -> None:
     """Verify the passphrase and cache the unwrapped DEK in memory. Raises
     ValueError on a wrong passphrase (AESGCM authentication failure)."""
@@ -188,10 +207,10 @@ def unlock_byok(company_id: str, passphrase: str, wrapped_dek: str, byok_salt_b6
         dek = _aes_unwrap(kek, wrapped_dek, company_id)
     except Exception:
         raise ValueError("Incorrect vault passphrase")
-    with _cache_lock:
-        _dek_cache[str(company_id)] = dek
+    _cache_dek(company_id, "byok", wrapped_dek, dek)
 
 
+@delegated("tenant.lock_company")
 def lock_company(company_id: str) -> None:
     """Drop a company's cached DEK from memory. For managed-mode companies
     this is harmless — the next encrypt/decrypt call just re-derives it
@@ -199,8 +218,10 @@ def lock_company(company_id: str) -> None:
     vault until unlock_byok() is called again."""
     with _cache_lock:
         _dek_cache.pop(str(company_id), None)
+        _dek_cache_context.pop(str(company_id), None)
 
 
+@delegated("tenant.is_unlocked")
 def is_unlocked(company_id: str) -> bool:
     with _cache_lock:
         return str(company_id) in _dek_cache
@@ -209,15 +230,17 @@ def is_unlocked(company_id: str) -> bool:
 # ── Encrypt / decrypt ────────────────────────────────────────────────────
 
 def _get_dek(company_id: str, mode: str, wrapped_dek: str) -> bytes:
+    if getattr(config, "KEY_SERVICE_SOCKET", ""):
+        raise RuntimeError("Tenant keys are held by the key service")
     key = str(company_id)
     with _cache_lock:
         cached = _dek_cache.get(key)
-    if cached is not None:
+        context = _dek_cache_context.get(key)
+    if cached is not None and context == (mode, wrapped_dek):
         return cached
     if mode == "managed":
         dek = _aes_unwrap(_master_kek(), wrapped_dek, company_id)
-        with _cache_lock:
-            _dek_cache[key] = dek
+        _cache_dek(company_id, mode, wrapped_dek, dek)
         return dek
     raise VaultLocked(
         f"Tenant vault for company {company_id} is locked — a tenant admin "
@@ -225,6 +248,7 @@ def _get_dek(company_id: str, mode: str, wrapped_dek: str) -> bytes:
     )
 
 
+@delegated("tenant.encrypt_value")
 def encrypt_value(company_id: str, mode: str, wrapped_dek: str, plaintext,
                   purpose: str = "generic") -> str:
     """Encrypt plaintext (any JSON-serializable value) for a company.
@@ -238,6 +262,7 @@ def encrypt_value(company_id: str, mode: str, wrapped_dek: str, plaintext,
     return _V2_PREFIX + base64.b64encode(nonce + ct).decode()
 
 
+@delegated("tenant.decrypt_value")
 def decrypt_value(company_id: str, mode: str, wrapped_dek: str,
                   ciphertext_b64: str, purpose: str = "generic"):
     dek = _get_dek(company_id, mode, wrapped_dek)
@@ -251,6 +276,7 @@ def decrypt_value(company_id: str, mode: str, wrapped_dek: str,
     return json.loads(data.decode("utf-8"))
 
 
+@delegated("tenant.blind_index_value")
 def blind_index_value(company_id: str, mode: str, wrapped_dek: str, value,
                       purpose: str) -> str:
     """Return a tenant- and field-scoped deterministic lookup token.

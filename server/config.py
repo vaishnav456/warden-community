@@ -84,6 +84,16 @@ HOME_NODE_VERSION = _os.environ.get("HOME_NODE_VERSION", "1.1.7").strip()
 # and is never used to encrypt application data directly.
 # Generate with: python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
 TENANT_MASTER_KEK_B64 = _os.environ.get("TENANT_MASTER_KEK_B64", "").strip()
+KEY_SERVICE_SOCKET = _os.environ.get("KEY_SERVICE_SOCKET", "").strip()
+KEY_SERVICE_TOKEN_FILE = _os.environ.get("KEY_SERVICE_TOKEN_FILE", "").strip()
+KEY_SERVICE_TIMEOUT = float(_os.environ.get("KEY_SERVICE_TIMEOUT", "5"))
+if KEY_SERVICE_SOCKET:
+    if not _pathlib.Path(KEY_SERVICE_SOCKET).is_absolute() or not _pathlib.Path(KEY_SERVICE_TOKEN_FILE).is_absolute():
+        raise RuntimeError("Key service requires an absolute socket path and credential file")
+    if TENANT_MASTER_KEK_B64:
+        raise RuntimeError("Remove TENANT_MASTER_KEK_B64 from the application when using key custody")
+    if not 0 < KEY_SERVICE_TIMEOUT <= 30:
+        raise RuntimeError("KEY_SERVICE_TIMEOUT must be between 0 and 30 seconds")
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 JWT_ACCESS_MINUTES = int(_os.environ.get("JWT_ACCESS_MINUTES", "15"))

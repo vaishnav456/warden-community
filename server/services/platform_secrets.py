@@ -7,12 +7,15 @@ import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import config
+from services.key_service_client import delegated
 
 _ENC_PREFIX = "enc:v1:"
 _HASH_PREFIX = "h1:"
 
 
 def _key() -> bytes:
+    if getattr(config, "KEY_SERVICE_SOCKET", ""):
+        raise RuntimeError("Master keys are held by the key service")
     raw = config.TENANT_MASTER_KEK_B64
     if not raw:
         raise RuntimeError("TENANT_MASTER_KEK_B64 is required to protect MFA secrets")
@@ -22,6 +25,7 @@ def _key() -> bytes:
     return key
 
 
+@delegated("platform.encrypt_mfa_secret")
 def encrypt_mfa_secret(admin_id, secret: str) -> str:
     if secret.startswith(_ENC_PREFIX):
         return secret
@@ -31,6 +35,7 @@ def encrypt_mfa_secret(admin_id, secret: str) -> str:
     return _ENC_PREFIX + base64.urlsafe_b64encode(nonce + encrypted).decode()
 
 
+@delegated("platform.decrypt_mfa_secret")
 def decrypt_mfa_secret(admin_id, value):
     if not value or not str(value).startswith(_ENC_PREFIX):
         return value  # rolling-upgrade support for legacy plaintext rows
@@ -39,6 +44,7 @@ def decrypt_mfa_secret(admin_id, value):
     return AESGCM(_key()).decrypt(raw[:12], raw[12:], aad).decode()
 
 
+@delegated("platform.encrypt_platform_field")
 def encrypt_platform_field(record_id, purpose: str, value: str) -> str:
     """Encrypt application profile data with record- and purpose-bound AAD."""
     nonce = os.urandom(12)
@@ -47,6 +53,7 @@ def encrypt_platform_field(record_id, purpose: str, value: str) -> str:
     return _ENC_PREFIX + base64.urlsafe_b64encode(nonce + encrypted).decode()
 
 
+@delegated("platform.decrypt_platform_field")
 def decrypt_platform_field(record_id, purpose: str, value: str) -> str:
     if not value or not str(value).startswith(_ENC_PREFIX):
         raise ValueError("platform field is not encrypted")
@@ -55,11 +62,13 @@ def decrypt_platform_field(record_id, purpose: str, value: str) -> str:
     return AESGCM(_key()).decrypt(raw[:12], raw[12:], aad).decode()
 
 
+@delegated("platform.hash_backup_code")
 def hash_backup_code(code: str) -> str:
     digest = hmac.new(_key(), str(code).strip().encode(), hashlib.sha256).hexdigest()
     return _HASH_PREFIX + digest
 
 
+@delegated("platform.backup_code_matches")
 def backup_code_matches(candidate: str, stored: str) -> bool:
     if str(stored).startswith(_HASH_PREFIX):
         return hmac.compare_digest(hash_backup_code(candidate), str(stored))
