@@ -158,3 +158,17 @@ legacy SQL migration tools must not be run against the opaque store. Unsupported
 REST syntax fails closed. This runtime is shared by Hosted and Community; it
 does not add Hosted marketing, trials, subscriptions or platform administration
 to Community.
+
+### Compressed manifest metadata
+
+The runtime compresses only private manifest metadata with bounded DEFLATE before
+AES authentication/encryption. Row records and query envelopes retain their
+existing format. Legacy manifests remain readable. The encoding and original
+length are inside the encrypted document; decompression enforces a 64 MiB limit
+and exact length. Database storage still exposes opaque IDs and ciphertext only.
+New compressed manifests require this runtime or a newer compatible version;
+do not downgrade to a runtime without `manifest.mjs`. Recovery must preserve the
+current ciphertext snapshot and matching private checkpoint journal.
+
+Aggregate profiling also reports metadata encoding, durable intent, cold-store
+commit and durable confirmation timings. It never logs queries or record values.

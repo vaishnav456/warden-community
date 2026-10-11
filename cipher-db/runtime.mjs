@@ -20,17 +20,19 @@ const box=new KeyServiceBox(process.env.KEY_SERVICE_SOCKET,process.env.KEY_SERVI
 const engine=await CipherDatabase.open(new PostgresCipherStore(connection,dataset),box,new JournalCheckpoint(process.env.CIPHER_CHECKPOINT),dataset);
 const rest=new RestCompiler(engine);
 // Bounded aggregate timings contain no SQL, identities, paths or data.
-let timings={read:{count:0,queue:0,guard:0,query:0,persist:0},write:{count:0,queue:0,guard:0,query:0,persist:0}};
+const phases=['queue','guard','query','persist','encode','intent','store','confirm'];
+const emptyTimings=()=>Object.fromEntries(['read','write'].map(kind=>[kind,{count:0,...Object.fromEntries(phases.map(name=>[name,0]))}]));
+let timings=emptyTimings();
 engine.observeTransaction=sample=>{
   const group=timings[sample.readOnly?'read':'write'];group.count++;
-  for(const name of ['queue','guard','query','persist'])group[name]+=sample[name];
+  for(const name of phases)group[name]+=sample[name];
 };
 const timingTimer=setInterval(()=>{
   for(const [kind,group] of Object.entries(timings))if(group.count){
-    const mean={};for(const name of ['queue','guard','query','persist'])mean[name+'_ms']=Math.round(group[name]/group.count);
+    const mean={};for(const name of phases)mean[name+'_ms']=Math.round(group[name]/group.count);
     console.log(JSON.stringify({event:'encrypted_query_timings',kind,count:group.count,...mean}));
   }
-  timings={read:{count:0,queue:0,guard:0,query:0,persist:0},write:{count:0,queue:0,guard:0,query:0,persist:0}};
+  timings=emptyTimings();
 },30000);timingTimer.unref();
 let auditing=false;
 async function audit(){

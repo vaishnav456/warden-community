@@ -5,6 +5,7 @@ import { sealDocument, unsealDocument, rowPurpose, manifestPurpose } from './cry
 import { identifier } from './store.mjs';
 import { stamp } from './checkpoint.mjs';
 import {member,hex,integrity} from './integrity.mjs';
+import {encodeManifest,decodeManifest} from './manifest.mjs';
 
 const PRIVATE = '_warden_private_runtime';
 const quote = value => '"' + value.replaceAll('"','""') + '"';
@@ -96,7 +97,7 @@ export class CipherDatabase {
     finally {release();}
   }
   async sealManifest(manifest) {
-    return sealDocument(this.box,this.dataset,manifestPurpose(manifest.revision),JSON.stringify(manifest));
+    return sealDocument(this.box,this.dataset,manifestPurpose(manifest.revision),await encodeManifest(manifest));
   }
   static async create(store,box,checkpoint,dataset,schema,seed=[],sourceSequences=[]) {
     const engine=new CipherDatabase(store,box,checkpoint,dataset);
@@ -149,7 +150,7 @@ export class CipherDatabase {
   async restore() {
     const state=await this.store.read();
     await this.checkpoint.verify(stamp(this.dataset,state));
-    const manifest=JSON.parse(await unsealDocument(this.box,this.dataset,manifestPurpose(state.revision),state.manifest));
+    const manifest=await decodeManifest(await unsealDocument(this.box,this.dataset,manifestPurpose(state.revision),state.manifest));
     if(manifest.v!==1 || manifest.dataset!==this.dataset || manifest.revision!==state.revision || !Array.isArray(manifest.tables)) throw new Error('Invalid encrypted database manifest');
     const tables=manifest.tables;
     if(state.collections.size!==tables.length || new Set(tables.map(table=>identifier(table.id))).size!==tables.length) throw new Error('Encrypted table membership mismatch');
@@ -228,6 +229,7 @@ export class CipherDatabase {
   }
   async transaction(callback,{readOnly=false}={}) {
     const started=performance.now();let entered,guarded,queried;
+    const phases={encode:0,intent:0,store:0,confirm:0};
     try{return await this.exclusive(async()=>{
       entered=performance.now();
       const current=await this.store.head();
@@ -284,11 +286,16 @@ export class CipherDatabase {
             stats.set(collection,{count,digest:hex(sum)});
           }
           const manifest={...this.manifest,revision:randomUUID(),sequences:nextSequences,tables:this.manifest.tables.map(table=>({...table,...stats.get(table.id)}))};
+          let phase=performance.now();
           const next={revision:manifest.revision,manifest:await this.sealManifest(manifest),collections:this.state.collections};
+          phases.encode=performance.now()-phase;phase=performance.now();
           await this.checkpoint.prepare(stamp(this.dataset,this.state),stamp(this.dataset,next));
+          phases.intent=performance.now()-phase;phase=performance.now();
           await this.store.commit(this.state.revision,next.revision,next.manifest,changes);
+          phases.store=performance.now()-phase;phase=performance.now();
           committed=true;
           await this.checkpoint.finish(stamp(this.dataset,next));
+          phases.confirm=performance.now()-phase;
           await tx.query(`DELETE FROM ${PRIVATE}.journal`);
           for(const change of changes) {
             const rows=next.collections.get(change.collection);
@@ -317,7 +324,7 @@ export class CipherDatabase {
         const ended=performance.now();
         this.observeTransaction({readOnly,queue:entered-started,guard:(guarded??ended)-entered,
           query:guarded===undefined?0:(queried??ended)-guarded,
-          persist:queried===undefined?0:ended-queried});
+          persist:queried===undefined?0:ended-queried,...phases});
       }
     }
   }
