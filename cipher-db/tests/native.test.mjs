@@ -170,7 +170,7 @@ test('native atomic login uses the shipped session routine, retains session limi
     ${routine}
     ${permissions}
     GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA endpt TO service_role;`);
-  const admin=randomUUID(),expires=new Date(Date.now()+3600000).toISOString(),absolute=new Date(Date.now()+7200000).toISOString();
+  const admin=randomUUID(),company=randomUUID(),expires=new Date(Date.now()+3600000).toISOString(),absolute=new Date(Date.now()+7200000).toISOString();
   let compiler=new RestCompiler(f.engine),commits=0;
   const operation=(path,method,data,prefer='return=representation')=>({schema:'endpt',path,method,data_json:JSON.stringify(data),prefer});
   const session=hash=>operation('rpc/create_refresh_session','POST',{
@@ -183,8 +183,9 @@ test('native atomic login uses the shipped session routine, retains session limi
   const currentAdmin=async()=>JSON.parse((await compiler.request(operation('admin_users?id=eq.'+admin,'GET'))).body)[0];
   const currentSessions=async()=>JSON.parse((await compiler.request(operation('refresh_tokens?order=token_hash.asc','GET'))).body);
   try{
+    await compiler.request(operation('companies','POST',{id:company}));
     await compiler.request(operation('admin_users','POST',{
-      id:admin,email:'synthetic-login@example.invalid',password_hash:'synthetic hash',full_name:'Synthetic admin',role:'technician',
+      id:admin,company_id:company,email:'synthetic-login@example.invalid',password_hash:'synthetic hash',full_name:'Synthetic admin',role:'technician',
       failed_attempts:4,locked_until:'2000-01-02T00:00:00Z',last_login_at:'2000-01-01T00:00:00Z',last_login_ip:'192.0.2.1',
     }));
     const old=JSON.parse((await compiler.request(session('existing-hash'))).body)[0];
