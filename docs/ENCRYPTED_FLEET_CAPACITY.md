@@ -83,6 +83,32 @@ Proposed acceptance targets, not measured results:
   storage, authenticated membership, rollback rejection and unchanged tenant
   authorization. Record recovery duration and peak memory.
 
+### Isolated measurement on 2026-10-11
+
+The controller benchmark seeded 10,000 synthetic records and issued three
+separate durable write requests and one concurrent read per cycle. The runtime
+had a 2-CPU limit, 4 GiB memory with no swap, a private tmpfs projection and real
+durable ciphertext/checkpoint storage on the existing shared virtual disk.
+The first run targeting 333 cycles/second completed 1,572 cycles, dropped 5,088
+at its bounded admission limit, and drained in 27.83 seconds: 56 cycles/second,
+p95 9.292 seconds and p99 9.372 seconds. No SQL requests failed and the
+overlapping integrity audit passed. The 999/second burst reached 50 cycles/second.
+
+A second run with phase diagnostics and isolated qualification tests running
+alongside it reached 49 cycles/second. Mean write-batch phases were 201 ms of
+SQL execution, 216 ms for checkpoint intent, 152 ms for the ciphertext-store
+commit and 217 ms for checkpoint confirmation. These measurements identify
+durable storage flush latency as a substantial remaining bottleneck. Encryption
+in this synthetic run used a generated test key; it excludes the real custody
+service, HTTP, endpoint authentication, dashboards and remote streams.
+
+This fails the fleet acceptance target. The native runtime improves concurrency
+but this host has not demonstrated 10,000-endpoint capacity. Keep the agent's
+30-second polling interval and 10-second timeout. Evaluate faster durable
+storage, reviewed reductions in heartbeat write fan-out and isolated dataset
+shards against the full workload before increasing fleet size. Never disable
+persistent-store or checkpoint flushes to improve the benchmark score.
+
 ## Implementation sequence
 
 1. Profile SQL execution, runtime queueing, custody calls, encrypted commits and

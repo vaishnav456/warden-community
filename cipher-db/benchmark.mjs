@@ -24,6 +24,7 @@ async function* seed(){for(let id=1;id<=10000;id++)yield {table:'endpt.endpoints
 let engine=await CipherDatabase.create(store,box,new FileCheckpoint(process.env.CIPHER_CHECKPOINT),dataset,schema,seed(),[],options);
 await engine.close();engine=await CipherDatabase.open(store,box,checkpoint,dataset,options);
 let batchCount=0,writeRequests=0;engine.observeBatch=sample=>{batchCount++;writeRequests+=sample.requests;};
+let phases=[];engine.observeTransaction=sample=>{if(!sample.readOnly)phases.push(sample);};
 async function cycle(id){
   await engine.application(tx=>tx.query('INSERT INTO endpt.nonces VALUES($1,$2)',[randomUUID(),id]));
   await engine.application(tx=>tx.query('UPDATE endpt.endpoints SET last_seen=now() WHERE id=$1',[id]));
@@ -34,6 +35,7 @@ const percentile=(values,p)=>values.length?Math.round([...values].sort((a,b)=>a-
 async function stage(rate,seconds){
   const begin=performance.now(),pending=new Set(),latencies=[];let dropped=0,failed=0,completed=0;
   const initialBatches=batchCount,initialRequests=writeRequests;
+  phases=[];
   let audit;const timer=setTimeout(()=>{audit=engine.audit();audit.catch(()=>{});},Math.min(5000,seconds*500));
   for(let item=0;item<Math.floor(rate*seconds);item++){
     const scheduled=begin+item*1000/rate;await sleep(Math.max(0,scheduled-performance.now()));
@@ -46,6 +48,7 @@ async function stage(rate,seconds){
     completed,failed,dropped,drained_seconds:Math.round(elapsed*100)/100,completed_per_second:Math.round(completed/elapsed),
     p50_ms:percentile(latencies,.5),p95_ms:percentile(latencies,.95),p99_ms:percentile(latencies,.99),
     batches:batchCount-initialBatches,write_requests:writeRequests-initialRequests,audit_verified:!!audit,
+    write_phase_mean_ms:Object.fromEntries(['queue','guard','query','persist','encode','intent','store','confirm'].map(name=>[name,Math.round(phases.reduce((sum,sample)=>sum+sample[name],0)/Math.max(1,phases.length))])),
     excludes:['HTTP','agent_authentication','custody_service','remote_relay','dashboard']}));
 }
 try{await stage(333,20);await stage(999,3);await engine.audit();}
