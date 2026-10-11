@@ -227,6 +227,9 @@ export class CipherDatabase {
       try {
         return await this.db.transaction(async tx=>{
           const result=await callback(tx);
+          // Deferred constraints/triggers must finish before the durable
+          // encrypted commit; a rejected SQL commit must not persist its rows.
+          await tx.query('SET CONSTRAINTS ALL IMMEDIATE');
           const events=(await tx.query(`SELECT collection,operation,old_key,new_key,value FROM ${PRIVATE}.journal ORDER BY seq`)).rows;
           const nextSequences=await sequences(tx);
           if(!events.length && same(nextSequences,this.manifest.sequences)) return result;

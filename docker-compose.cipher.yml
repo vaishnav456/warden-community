@@ -1,6 +1,11 @@
 # Apply after docker-compose.keys.yml only AFTER a verified capture/cutover.
 # Bootstrap/private operator files are never mounted in the public web service.
 services:
+  key-service:
+    mem_limit: 512m
+    memswap_limit: 512m
+    ulimits:
+      core: {soft: 0, hard: 0}
   cipher-storage-init:
     image: alpine:3.20
     user: "0:0"
@@ -67,6 +72,8 @@ services:
       - ${WARDEN_CIPHER_STATE_DIRECTORY:?Set the captured private checkpoint directory}:/var/lib/warden-cipher
       - ${WARDEN_KEY_DIRECTORY:?Set the existing private key directory}/client-token:/run/secrets/warden-key-token:ro
   warden-server:
+    mem_limit: 1g
+    memswap_limit: 1g
     depends_on:
       cipher-runtime:
         condition: service_healthy

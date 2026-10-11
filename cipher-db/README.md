@@ -27,7 +27,9 @@ not retain a readable legacy database after claiming a completed cutover.
 
 ## Durability and validation
 
-SQL writes, cascades and trigger effects are journaled in memory. Complete
+SQL writes, cascades and trigger effects are journaled in memory. Deferred
+constraints and triggers are checked before the durable encrypted commit, so
+a rejected SQL transaction cannot persist its records. Complete
 encrypted records and an encrypted manifest commit atomically in PostgreSQL
 before the caller receives success. A separate private, fsynced checkpoint
 detects database rollback and reconciles an interrupted commit at restart.
@@ -59,7 +61,8 @@ test-only keys. Linux additionally tests durable checkpoints. Set
 `WARDEN_CIPHER_TEST_DSN` **only to an empty disposable database** to enable the
 real PostgreSQL test; it creates and removes its owned `warden_cipher` schema.
 CI runs that test against disposable PostgreSQL 16, plus restart, mutation,
-concurrency, cascade, rollback, tamper, numeric precision and role checks.
+concurrency, cascade, deferred constraints, rollback, tamper, numeric precision
+and role checks.
 
 ## Private configuration
 
@@ -89,7 +92,8 @@ exporting keys to this component.
 
 The optional [Compose overlay](../docker-compose.cipher.yml), applied after the
 key-service overlay, provides private storage/network/socket volumes, health
-checks, disabled runtime swap and core dumps. Its private configuration paths
+checks, disabled runtime/application/key-service swap and disabled runtime and
+key-service core dumps. Its private configuration paths
 and stable dataset UUID must match the verified capture. Starting the overlay
 against an uncaptured database fails closed; it does not perform a migration
 or retire the old database automatically.

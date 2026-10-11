@@ -29,9 +29,9 @@ CREATE TABLE endpt.children(parent_id bigint REFERENCES endpt.parents ON DELETE 
 CREATE TABLE endpt.empty_records(id uuid PRIMARY KEY);
 CREATE FUNCTION endpt.claim(p_name text) RETURNS SETOF endpt.parents LANGUAGE plpgsql AS $$
 BEGIN RETURN QUERY INSERT INTO endpt.parents(name) VALUES(p_name) ON CONFLICT(name) DO NOTHING RETURNING *; END $$;`;
-async function fixture() {
+async function fixture(customSchema=schema) {
   const store=new MemoryCipherStore(),box=new TestBox(),checkpoint=new MemoryCheckpoint(),dataset=randomUUID();
-  const engine=await CipherDatabase.create(store,box,checkpoint,dataset,schema);
+  const engine=await CipherDatabase.create(store,box,checkpoint,dataset,customSchema);
   return {store,box,checkpoint,dataset,engine};
 }
 test('complete records, including empty tables, persist only as ciphertext and recover exact types',async()=>{
@@ -63,6 +63,21 @@ test('atomic routines, concurrent callers, cascades and failed transactions surv
     await f.engine.execute('DELETE FROM endpt.parents WHERE id=1');
     await f.engine.close(); f.engine=await CipherDatabase.open(f.store,f.box,f.checkpoint,f.dataset);
     assert.equal((await f.engine.execute('SELECT count(*)::int AS n FROM endpt.children')).rows[0].n,0);
+  } finally {await f.engine.close();}
+});
+test('deferred constraints reject invalid transactions before persistence and allow valid multi-statement transactions',async()=>{
+  const f=await fixture(schema.replace('ON DELETE CASCADE','ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED'));
+  try {
+    const revision=(await f.store.head()).revision;
+    await assert.rejects(f.engine.execute("INSERT INTO endpt.children VALUES(100,'invalid',1,NULL,NULL)"));
+    assert.equal((await f.store.head()).revision,revision);
+    assert.equal((await f.engine.execute('SELECT count(*)::int AS n FROM endpt.children')).rows[0].n,0);
+    await f.engine.transaction(async tx=>{
+      await tx.query("INSERT INTO endpt.children VALUES(100,'valid',1,NULL,NULL)");
+      await tx.query("INSERT INTO endpt.parents(id,name) OVERRIDING SYSTEM VALUE VALUES(100,'created later')");
+    });
+    await f.engine.close();f.engine=await CipherDatabase.open(f.store,f.box,f.checkpoint,f.dataset);
+    assert.equal((await f.engine.execute('SELECT count(*)::int AS n FROM endpt.children c JOIN endpt.parents p ON p.id=c.parent_id')).rows[0].n,1);
   } finally {await f.engine.close();}
 });
 test('missing or modified ciphertext, cross-record substitution and database rollback fail closed',async()=>{

@@ -207,10 +207,12 @@ memory, while the separate key service keeps custody of the master key.
 Existing web BYOK unlock/lock rules remain in place; no Admin/Tenant executable
 is needed. Full host or trusted-application compromise can still expose data.
 
-The Hosted development snapshot pilot verified 86 tables and 4,663 records,
-including original transaction routines and application reads/writes. Community
-requires its own verified migration and deployment; this source update does not
-claim a Community live cutover. It preserves Community's configured server URL,
+Hosted development and production completed verified 86-table migrations on
+2026-10-11 (4,663 and 595,099 records in their final snapshots), with full
+encrypted rollback restoration and application/interface checks. Validation
+includes 13 ciphertext-runtime tests against PostgreSQL and 721 Community
+server tests. Community requires its own verified migration and deployment;
+this source update does not claim a Community live cutover. It preserves Community's configured server URL,
 single organization and login/dashboard entry, without adding Hosted marketing,
 trials, subscriptions or platform administration. See the runtime guide for
 private configuration, tests, migration and recovery.
