@@ -58,10 +58,10 @@ export class RestCompiler {
         const fn=name.slice(4),body=data;
         if(!body||Array.isArray(body)||typeof body!=='object')throw new Error('Invalid routine arguments');
         const candidates=catalog.routines.filter(r=>r.name===fn && Object.keys(body).every(k=>r.names?.slice(0,r.nargs).includes(k)) &&
-          r.names?.slice(0,r.nargs-r.defaults).every(k=>Object.hasOwn(body,k)));
+          (r.names||[]).slice(0,r.nargs-r.defaults).every(k=>Object.hasOwn(body,k)));
         if(candidates.length!==1){const error=new Error('Ambiguous or unknown routine');error.code='PGRST202';error.status=404;throw error;}
         const routine=candidates[0];
-        const payload=bind(dataJson);
+        const payload=Object.keys(body).length?bind(dataJson):undefined;
         const arguments_=Object.keys(body).map(k=>ident(k)+'=>'+this.typed(payload,routine.types[routine.names.indexOf(k)],k));
         const call=ident('endpt')+'.'+ident(fn)+'('+arguments_.join(',')+')';
         const composite=catalog.tables.has(routine.returns.replace(/^endpt\./,''))||routine.returns==='record';
@@ -117,7 +117,7 @@ export class RestCompiler {
       const result=await tx.query('WITH changed AS ('+mutation+' RETURNING *) SELECT COALESCE(json_agg(changed),\'[]\'::json)::text AS body FROM changed',params);
       const minimal=request.method==='DELETE'||(request.method==='PATCH'&&!preferred.has('return=representation'))||preferred.has('return=minimal');
       return {status:request.method==='POST'?201:200,body:minimal?'':result.rows[0].body,headers:{}};
-    });
+    },{readOnly:request.method==='GET'||request.method==='HEAD'});
   }
   integer(value,fallback){if(value===null)return fallback;if(!/^\d+$/.test(value)||Number(value)>1000000000)throw new Error('Invalid pagination');return Number(value);}
   column(table,name,write=false){const c=table.columns.get(name);if(!c||(write&&c.generated))throw new Error('Unknown or generated column');return c;}

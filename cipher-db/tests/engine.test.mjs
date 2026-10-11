@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { CipherDatabase } from '../engine.mjs';
 import { MemoryCipherStore } from '../store.mjs';
-import { MemoryCheckpoint } from '../checkpoint.mjs';
+import { MemoryCheckpoint,FileCheckpoint } from '../checkpoint.mjs';
+import {JournalCheckpoint} from '../journal_checkpoint.mjs';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import { sealDocument, unsealDocument } from '../crypto.mjs';
 
 // Keys are generated for synthetic tests only; the production adapter never
@@ -34,6 +38,20 @@ async function fixture(customSchema=schema) {
   const engine=await CipherDatabase.create(store,box,checkpoint,dataset,customSchema);
   return {store,box,checkpoint,dataset,engine};
 }
+test('runtime upgrades a legacy checkpoint, durably writes with the journal and rejects database rollback after restart',{skip:process.platform!=='linux'},async()=>{
+  const folder=await mkdtemp(join(tmpdir(),'warden-runtime-journal-')),path=join(folder,'head');
+  const store=new MemoryCipherStore(),box=new TestBox(),dataset=randomUUID();let engine;
+  try{
+    engine=await CipherDatabase.create(store,box,new FileCheckpoint(path),dataset,schema);
+    const initial=await store.read();await engine.close();
+    engine=await CipherDatabase.open(store,box,new JournalCheckpoint(path),dataset);
+    await engine.execute('INSERT INTO endpt.parents(name) VALUES($1)',['journal fixture']);await engine.close();
+    engine=await CipherDatabase.open(store,box,new JournalCheckpoint(path),dataset);
+    assert.equal((await engine.execute('SELECT count(*)::int AS n FROM endpt.parents')).rows[0].n,1);
+    await engine.close();store.state=initial;
+    await assert.rejects(CipherDatabase.open(store,box,new JournalCheckpoint(path),dataset));
+  }finally{await engine?.close();await rm(folder,{recursive:true,force:true});}
+});
 test('complete records, including empty tables, persist only as ciphertext and recover exact types',async()=>{
   const f=await fixture();
   try {
@@ -135,6 +153,17 @@ test('sequence-only changes persist and storage tampering during a running sessi
   [...f.store.state.collections.values()].find(rows=>rows.size).clear();
   await assert.rejects(f.engine.audit());await assert.rejects(f.engine.execute('SELECT 1'));
   await f.engine.close();
+});
+test('read-only transactions preserve revision and reject writes and sequence changes',async()=>{
+  const f=await fixture();
+  try{
+    const revision=(await f.store.head()).revision;
+    assert.equal((await f.engine.transaction(tx=>tx.query('SELECT count(*)::int AS n FROM endpt.parents'),{readOnly:true})).rows[0].n,0);
+    await assert.rejects(f.engine.transaction(tx=>tx.query("INSERT INTO endpt.parents(name) VALUES('blocked')"),{readOnly:true}));
+    await assert.rejects(f.engine.transaction(tx=>tx.query("SELECT nextval('endpt.parents_id_seq')"),{readOnly:true}));
+    assert.equal((await f.store.head()).revision,revision);
+    assert.equal((await f.engine.execute("INSERT INTO endpt.parents(name) VALUES('first') RETURNING id::text")).rows[0].id,'1');
+  }finally{await f.engine.close();}
 });
 test('application role retains audit immutability and cannot access the private journal',async()=>{
   const store=new MemoryCipherStore(),box=new TestBox(),checkpoint=new MemoryCheckpoint(),dataset=randomUUID();

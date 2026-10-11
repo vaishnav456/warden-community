@@ -7,7 +7,8 @@ test('query compatibility: joins, inner filters, pagination, atomic routines and
   CREATE TABLE endpt.companies(id bigint PRIMARY KEY,name text,active boolean);
   CREATE TABLE endpt.endpoints(id integer PRIMARY KEY,company_id bigint REFERENCES endpt.companies,name text,tags text[]);
   CREATE FUNCTION endpt.bump(p_id bigint,p_name text DEFAULT 'default') RETURNS jsonb LANGUAGE plpgsql AS $$
-    BEGIN UPDATE endpt.companies SET name=p_name WHERE id=p_id;RETURN jsonb_build_object('ok',FOUND);END $$;`);
+    BEGIN UPDATE endpt.companies SET name=p_name WHERE id=p_id;RETURN jsonb_build_object('ok',FOUND);END $$;
+  CREATE FUNCTION endpt.no_args() RETURNS integer LANGUAGE sql AS $$SELECT 7$$;`);
   const compiler=new RestCompiler({application:fn=>db.transaction(fn)});
   const request=(path,method='GET',data_json,prefer)=>compiler.request({schema:'endpt',path,method,data_json,prefer});
   try {
@@ -21,6 +22,7 @@ test('query compatibility: joins, inner filters, pagination, atomic routines and
     assert.deepEqual(JSON.parse((await request('endpoints?id=eq.1')).body)[0].tags,['changed','x']);
     const routine=await request('rpc/bump','POST','{"p_id":9007199254740993,"p_name":"Routine"}');assert.deepEqual(JSON.parse(routine.body),{ok:true});
     await assert.rejects(request('rpc/missing','POST','{}'),error=>error.code==='PGRST202'&&error.status===404);
+    assert.equal((await request('rpc/no_args','POST','{}')).body,'7');
     assert.equal(JSON.parse((await request('companies?id=eq.9007199254740993')).body)[0].name,'Routine');
     const logical=await request('companies?or=(active.eq.false,name.eq.Routine)&id=not.in.(3,4)');assert.equal(JSON.parse(logical.body).length,2);
     assert.equal((await request('companies?active=eq.true','HEAD')).headers['Content-Range'],'*/1');

@@ -36,9 +36,24 @@ detects database rollback and reconciles an interrupted commit at restart.
 Only one runtime can own a database: a dedicated connection holds an advisory
 lock, and loss of that connection never creates an automatic replacement.
 
+The runtime upgrades a verified legacy checkpoint to a private append journal.
+Each encrypted commit still flushes its intent before the PostgreSQL commit and
+flushes confirmation before acknowledgment. It avoids creating and renaming
+checkpoint files on every write. Checksummed records, bounded compaction and
+interrupted-tail recovery retain rollback rejection; I/O failures close access.
+The active checkpoint is `CIPHER_CHECKPOINT` plus `.journal`; retain that file
+with the encrypted store during recovery. The `.legacy` file is a retired
+checkpoint marker, not the current recovery state. Removing the journal never
+enables automatic legacy fallback. An older runtime cannot be used with this
+checkpoint format without an operator-verified recovery procedure.
+
 Startup authenticates every record and verifies table and record membership.
 A five-minute storage audit verifies that persisted ciphertext still matches
-the trusted snapshot; failures close access. Requests have unique IDs, a
+the trusted snapshot; failures close access. It captures authenticated expected
+membership while holding the writer mutex briefly, then streams bounded batches
+on a separate read-only PostgreSQL snapshot while application queries continue.
+Linux operators can request the same scan with `SIGUSR2`; logs contain only its
+status and duration. Requests have unique IDs, a
 30-second acceptance window, purpose-bound authentication and replay rejection.
 Requests issued before the current runtime started are rejected. There are no
 automatic write retries or plaintext fallbacks. The application executes as
@@ -63,6 +78,22 @@ real PostgreSQL test; it creates and removes its owned `warden_cipher` schema.
 CI runs that test against disposable PostgreSQL 16, plus restart, mutation,
 concurrency, cascade, deferred constraints, rollback, tamper, numeric precision
 and role checks.
+
+GET/HEAD queries use PostgreSQL-enforced read-only transactions, avoiding write
+journal and sequence bookkeeping. Writes still persist sequence-only changes,
+enforce deferred constraints and checkpoint before success. Restores run
+`ANALYZE` in memory to rebuild planner statistics; sequence reads are batched.
+
+PGlite has one exclusive SQL connection. These changes reduce queueing, but do
+not establish a fleet-capacity guarantee. Benchmark heartbeat latency, command
+delivery, writes, audit overlap and recovery on the intended workload before
+increasing deployment scale. A native concurrent SQL engine inside the trusted
+memory boundary requires a separate verified implementation. Redis or another
+cache must not store readable records or bypass tenant/BYOK authorization.
+The [10,000-endpoint architecture target](../docs/ENCRYPTED_FLEET_CAPACITY.md)
+sets out the database decision, workload and acceptance tests. Runtime logs
+report bounded aggregate queue, guard, query and persistence timings without
+SQL, identifiers or values.
 
 ## Private configuration
 
@@ -127,3 +158,17 @@ legacy SQL migration tools must not be run against the opaque store. Unsupported
 REST syntax fails closed. This runtime is shared by Hosted and Community; it
 does not add Hosted marketing, trials, subscriptions or platform administration
 to Community.
+
+### Compressed manifest metadata
+
+The runtime compresses only private manifest metadata with bounded DEFLATE before
+AES authentication/encryption. Row records and query envelopes retain their
+existing format. Legacy manifests remain readable. The encoding and original
+length are inside the encrypted document; decompression enforces a 64 MiB limit
+and exact length. Database storage still exposes opaque IDs and ciphertext only.
+New compressed manifests require this runtime or a newer compatible version;
+do not downgrade to a runtime without `manifest.mjs`. Recovery must preserve the
+current ciphertext snapshot and matching private checkpoint journal.
+
+Aggregate profiling also reports metadata encoding, durable intent, cold-store
+commit and durable confirmation timings. It never logs queries or record values.

@@ -4,7 +4,7 @@ import {timingSafeEqual} from 'node:crypto';
 import {connect} from './connection.mjs';
 import {PostgresCipherStore,identifier} from './store.mjs';
 import {KeyServiceBox,unsealDocument,sealDocument} from './crypto.mjs';
-import {FileCheckpoint} from './checkpoint.mjs';
+import {JournalCheckpoint} from './journal_checkpoint.mjs';
 import {CipherDatabase} from './engine.mjs';
 import {RestCompiler} from './rest.mjs';
 
@@ -17,9 +17,33 @@ const connection=await connect(process.env.CIPHER_CONNECTION_FILE);
 const dataset=identifier(process.env.CIPHER_DATASET);
 await connection.acquireWriter(dataset);
 const box=new KeyServiceBox(process.env.KEY_SERVICE_SOCKET,process.env.KEY_SERVICE_TOKEN_FILE);
-const engine=await CipherDatabase.open(new PostgresCipherStore(connection,dataset),box,new FileCheckpoint(process.env.CIPHER_CHECKPOINT),dataset);
+const engine=await CipherDatabase.open(new PostgresCipherStore(connection,dataset),box,new JournalCheckpoint(process.env.CIPHER_CHECKPOINT),dataset);
 const rest=new RestCompiler(engine);
-const auditTimer=setInterval(()=>engine.audit().catch(()=>console.error('Encrypted storage audit failed; runtime closed')),300000);
+// Bounded aggregate timings contain no SQL, identities, paths or data.
+const phases=['queue','guard','query','persist','encode','intent','store','confirm'];
+const emptyTimings=()=>Object.fromEntries(['read','write'].map(kind=>[kind,{count:0,...Object.fromEntries(phases.map(name=>[name,0]))}]));
+let timings=emptyTimings();
+engine.observeTransaction=sample=>{
+  const group=timings[sample.readOnly?'read':'write'];group.count++;
+  for(const name of phases)group[name]+=sample[name];
+};
+const timingTimer=setInterval(()=>{
+  for(const [kind,group] of Object.entries(timings))if(group.count){
+    const mean={};for(const name of phases)mean[name+'_ms']=Math.round(group[name]/group.count);
+    console.log(JSON.stringify({event:'encrypted_query_timings',kind,count:group.count,...mean}));
+  }
+  timings=emptyTimings();
+},30000);timingTimer.unref();
+let auditing=false;
+async function audit(){
+  if(auditing)return;auditing=true;const start=Date.now();
+  try{await engine.audit();console.log(JSON.stringify({event:'encrypted_storage_audit',milliseconds:Date.now()-start,status:'verified'}));}
+  catch{console.error('Encrypted storage audit failed; runtime closed');}
+  finally{auditing=false;}
+}
+const auditTimer=setInterval(audit,300000);
+// A trusted Linux operator can request a scan without restarting the service.
+process.on('SIGUSR2',audit);
 auditTimer.unref();
 const used=new Map(),started=Date.now();
 function authorized(req){const supplied=Buffer.from(req.headers.authorization||''),expected=Buffer.from('Bearer '+token);return supplied.length===expected.length&&timingSafeEqual(supplied,expected);}
@@ -53,7 +77,7 @@ try{const entry=await lstat(socket);if(!entry.isSocket())throw new Error('Invali
 catch(error){if(error.code!=='ENOENT')throw error;}
 await new Promise((resolve,reject)=>{server.once('error',()=>reject(new Error('Private runtime socket unavailable')));server.listen(socket,resolve);});
 await chmod(socket,0o660);
-async function stop(){clearInterval(auditTimer);server.close();await engine.close();await connection.close();await unlink(socket).catch(()=>{});}
+async function stop(){clearInterval(auditTimer);clearInterval(timingTimer);server.close();await engine.close();await connection.close();await unlink(socket).catch(()=>{});}
 process.once('SIGTERM',()=>stop().then(()=>process.exit(0)));
 process.once('SIGINT',()=>stop().then(()=>process.exit(0)));
 console.log('Encrypted application runtime ready');
