@@ -3,6 +3,7 @@
 package main
 
 import (
+	"runtime"
 	"testing"
 	"unsafe"
 )
@@ -34,6 +35,9 @@ func TestTicketFormRequiredAndConditionalAnswers(t *testing.T) {
 }
 
 func TestNativeTicketFormControlsAndHiddenAnswers(t *testing.T) {
+	// HWND ownership and synchronous SendMessage require one OS thread.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	parent, _, _ := uiCreateWindow.Call(0, uintptr(unsafe.Pointer(uiString("STATIC"))), 0, 0x80000000, 0, 0, 600, 600, 0, 0, 0, 0)
 	if parent == 0 {
 		t.Fatal("cannot create hidden native parent")
