@@ -49,7 +49,7 @@ a scoped name-only endpoint projection. Default inventory reads retain their
 existing fields. Tenant and branch checks remain in place, and no authorization
 or plaintext results are cached across requests. A read-only production profile
 reduced tenant decryption calls from 804 to 342 and data assembly from
-4.6–6.2 seconds to 1.6–2.0 seconds in two initial samples. These profiles exclude browser
+4.6-6.2 seconds to 1.6-2.0 seconds in two initial samples. These profiles exclude browser
 rendering and sign-in; they are not a fleet throughput or latency guarantee.
 
 ## Immediate deployment guardrails
