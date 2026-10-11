@@ -243,7 +243,7 @@
 </div>
 
 <script type="module" nonce="{{ csp_nonce }}">
-import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
+import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
 (function () {
   const ENDPOINT_ID = {{ endpoint.id | tojson }};
   const SESSION_ID  = {{ session.id  | tojson }};
@@ -269,6 +269,9 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
   let scaleMode = 'fit', viewOnly = !REMOTE_CAPABILITIES.control, reconnectAttempts = 0, allowReconnect = true;
   let relayWasPaired = false, recoveringSession = false;
   let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
+  let pointerSender = null, relayPerformance = null;
+  let receivedFrames = 0, receivedBytes = 0, decodeErrors = 0;
+  const decodeTimes = [];
 
   // Byte 0 of every binary WS message is a frame-type marker: 0x00 = full
   // frame (rest of the message is JPEG bytes, drawn to fill the whole
@@ -283,7 +286,17 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
   // retain their order. Overflow or a decode failure requires a new full
   // baseline. Generation checks discard stale partials and reset-stream images.
   const frameRenderer = new RemoteFrameRenderer({
-    decode: (buffer, frame) => createImageBitmap(new Blob([new Uint8Array(buffer, frame.offset)])),
+    decode: async (buffer, frame) => {
+      const started = performance.now();
+      const stream = frameRenderer.queue.streamGeneration;
+      try { return await createImageBitmap(new Blob([new Uint8Array(buffer, frame.offset)])); }
+      finally {
+        if (stream === frameRenderer.queue.streamGeneration) {
+          decodeTimes.push(performance.now() - started);
+          if (decodeTimes.length > 120) decodeTimes.shift();
+        }
+      }
+    },
     draw: (bitmap, frame) => {
       if (frame.type === 0x01) {
         if (frame.x + frame.w > canvas.width || frame.y + frame.h > canvas.height) throw new Error('Remote rectangle outside screen');
@@ -291,7 +304,7 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
       } else ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     },
     onFrame: () => { frameCount++; lastFrameAt = performance.now(); },
-    onError: error => console.warn('Dropped invalid remote frame', error),
+    onError: error => { decodeErrors++; console.warn('Dropped invalid remote frame', error); },
   });
   let _remoteClipboard = '';  // last known remote clipboard text
   let _dropTargetResolver = null;
@@ -326,6 +339,10 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
   // ── WebSocket ────────────────────────────────────────────────────────────────
   function connect() {
     frameRenderer.reset();
+    pointerSender?.reset();
+    relayPerformance = null;
+    receivedFrames = receivedBytes = decodeErrors = 0;
+    decodeTimes.length = 0;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/remote-ws/${ENDPOINT_ID}`);
     ws.binaryType = 'arraybuffer';
@@ -337,6 +354,7 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
     ws.onopen  = () => { setStatus('Waiting for device…', ''); canvas.focus(); addSessionEvent('Relay connected; waiting for endpoint'); };
     ws.onclose = (event) => {
       frameRenderer.reset();
+      pointerSender?.reset();
       if (event.code === 1013) {
         setStatus('Remote relay busy — please retry shortly', 'error');
         addSessionEvent('Remote-session capacity reached; retry shortly');
@@ -360,13 +378,17 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
         if (msg.type === 'relay_pong') {
-          if (msg.nonce === relayPingNonce) relayRTT = Math.round(performance.now() - relayPingAt);
+          if (msg.nonce === relayPingNonce) {
+            relayRTT = Math.round(performance.now() - relayPingAt);
+            relayPerformance = msg.performance && typeof msg.performance === 'object' ? msg.performance : null;
+          }
           return;
         }
 
         if (msg.type === 'init') {
           sw = msg.w; sh = msg.h;
           frameRenderer.reset();
+          pointerSender?.reset();
           // Reassigning canvas.width/height clears the current image even when
           // the dimensions are unchanged. Keep the last valid frame visible
           // while the agent replaces its capture helper across login/logout.
@@ -470,6 +492,8 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
 
       // Binary → JPEG frame, with direct ArrayBuffer header parsing.
       if (!sw || !sh) return;
+      receivedFrames++;
+      receivedBytes += e.data.byteLength;
       frameRenderer.push(e.data);
     };
   }
@@ -559,8 +583,13 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
     if (!REMOTE_CAPABILITIES.process_manager && ['process_list','process_kill'].includes(obj.type)) return;
     if (!REMOTE_CAPABILITIES.reboot && obj.type === 'reboot_reconnect') return;
     if (viewOnly && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','clipboard_write','ctrl_alt_del'].includes(obj.type)) return;
+    if (obj.type !== 'mousemove') pointerSender?.flush();
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
+  pointerSender = new RemotePointerSender({ send,
+    requestFrame: callback => requestAnimationFrame(callback),
+    cancelFrame: handle => cancelAnimationFrame(handle),
+  });
 
   // ── Scaling ──────────────────────────────────────────────────────────────────
   // Reports how big the stream actually needs to be so the agent can encode
@@ -739,12 +768,13 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
   }
 
   function releaseAllRemoteButtons() {
+    pointerSender.flush();
     Array.from(pressedRemoteButtons).forEach(releaseRemoteButton);
   }
 
   canvas.addEventListener('pointermove', e => {
     lastPointerPosition = canvasXY(e);
-    send({ type: 'mousemove', ...lastPointerPosition });
+    pointerSender.push(lastPointerPosition);
   });
   canvas.addEventListener('pointerdown', e => {
     e.preventDefault();
@@ -1205,7 +1235,13 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
     const elapsed = (now - lastStatsAt) / 1000;
     const fps = elapsed ? Math.round(frameCount / elapsed) : 0;
     const age = lastFrameAt ? Math.round(now - lastFrameAt) : 0;
-    document.getElementById('quality-stats').textContent = `${fps} fps · ${age || '—'} ms frame age · ${relayRTT === null ? '—' : relayRTT} ms relay RTT`;
+    const stats = document.getElementById('quality-stats');
+    stats.textContent = `${fps} fps · ${age || '—'} ms frame age · ${relayRTT === null ? '—' : relayRTT} ms relay RTT`;
+    const number = key => typeof relayPerformance?.[key] === 'number' && Number.isFinite(relayPerformance[key])
+      ? Math.round(relayPerformance[key]) : '—';
+    const decode = decodeTimes.length ? Math.round(decodeTimes.reduce((sum, time) => sum + time, 0) / decodeTimes.length) : '—';
+    stats.title = `Frame age is time since the last update, not input latency; idle screens update less often. Received ${Math.round(receivedFrames / elapsed)} fps, ${Math.round(receivedBytes / elapsed / 1024)} KB/s before compression. Browser decode ${decode} ms; queue ${frameRenderer.queue.length} frames; decode failures ${decodeErrors}. Relay–device RTT ${number('agent_rtt_ms')} ms; relay send wait ${number('send_wait_current_ms')} ms current, ${number('send_wait_mean_ms')} ms average, ${number('send_wait_max_ms')} ms maximum; relay loop delay ${number('relay_loop_lag_ms')} ms.`;
+    receivedFrames = receivedBytes = 0;
     frameCount = 0;
     lastStatsAt = now;
   }, 2000);
@@ -1227,6 +1263,7 @@ import { RemoteFrameRenderer, remoteViewportSize } from {{ url_for('static', fil
     clearTimeout(viewportSendTimer);
     clearTimeout(toast._t);
     frameRenderer.reset();
+    pointerSender.reset();
   });
 
   connect();

@@ -18,9 +18,11 @@ Session pairing:
   Once both are live, frames and input events relay bidirectionally.
 """
 import asyncio
+import collections
 import hashlib
 import json
 import logging
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -187,10 +189,77 @@ async def _cleanup_home_pair(session_id: str) -> None:
 
 # ── Relay helpers ─────────────────────────────────────────────────────────────
 
-async def _relay(src, dst, quality=None) -> None:
+class _RemoteRelayPerformance:
+    """Numeric-only counters and a fixed-size sample of browser send waits."""
+    SAMPLE_LIMIT = 120
+
+    def __init__(self, clock=None):
+        self._clock = clock or time.monotonic
+        self._send_started = None
+        self._send_waits = collections.deque(maxlen=self.SAMPLE_LIMIT)
+        self.frame_messages = 0
+        self.frame_bytes = 0
+
+    def begin_send(self):
+        self._send_started = self._clock()
+
+    def finish_send(self, message, delivered):
+        if self._send_started is not None:
+            self._send_waits.append(max(0.0, self._clock() - self._send_started) * 1000)
+            self._send_started = None
+        if delivered and isinstance(message, (bytes, bytearray, memoryview)):
+            self.frame_messages += 1
+            self.frame_bytes += len(message)
+
+    def snapshot(self, agent_rtt_ms=None, relay_loop_lag_seconds=None):
+        def metric(value, multiplier=1):
+            if type(value) not in (int, float):
+                return None
+            try:
+                scaled = value * multiplier
+                return round(scaled, 3) if math.isfinite(value) and math.isfinite(scaled) and value >= 0 else None
+            except OverflowError:
+                return None
+
+        waits = self._send_waits
+        current = max(0.0, self._clock() - self._send_started) * 1000 if self._send_started is not None else 0.0
+        return {
+            'frame_messages': self.frame_messages,
+            # Application bytes before WebSocket compression; not wire bytes.
+            'frame_bytes': self.frame_bytes,
+            'send_samples': len(waits),
+            'send_wait_current_ms': round(current, 3),
+            'send_wait_latest_ms': round(waits[-1], 3) if waits else None,
+            'send_wait_mean_ms': round(math.fsum(waits) / len(waits), 3) if waits else None,
+            'send_wait_max_ms': round(max(waits), 3) if waits else None,
+            'agent_rtt_ms': metric(agent_rtt_ms),
+            'relay_loop_lag_ms': metric(relay_loop_lag_seconds, 1000),
+        }
+
+
+def _remote_performance_snapshot(performance, quality):
+    if performance is None:
+        return None
+    try:
+        loop_lag = load_controller.snapshot().get('loop_lag_seconds')
+    except Exception:
+        loop_lag = None  # Diagnostics must not become a relay dependency.
+    agent_rtt = quality.get('agent_rtt_ms') if isinstance(quality, dict) else None
+    return performance.snapshot(agent_rtt, loop_lag)
+
+
+async def _relay(src, dst, quality=None, performance=None) -> None:
     """Forward all messages from src → dst until the connection closes."""
     async for msg in src:
-        await dst.send(msg)
+        delivered = False
+        if performance is not None:
+            performance.begin_send()
+        try:
+            await dst.send(msg)
+            delivered = True
+        finally:
+            if performance is not None:
+                performance.finish_send(msg, delivered)
         if quality is not None:
             quality['bytes_to_browser']+=len(msg.encode('utf-8') if isinstance(msg,str) else msg)
         # Buffered recv/send can both finish synchronously. Give input, pings
@@ -209,7 +278,7 @@ _REMOTE_MESSAGE_CAPABILITY = {
 }
 
 
-async def _relay_browser_to_agent(src, dst, session) -> None:
+async def _relay_browser_to_agent(src, dst, session, performance=None, quality=None) -> None:
     """Relay only operations granted to this immutable remote session.
 
     Hiding a toolbar button is not authorization: a browser can construct its
@@ -235,7 +304,11 @@ async def _relay_browser_to_agent(src, dst, session) -> None:
             nonce=payload.get('nonce')
             if isinstance(nonce,str) and len(nonce)<=64 and time.monotonic()-last_ping>=5:
                 last_ping=time.monotonic()
-                await src.send(json.dumps({'type':'relay_pong','nonce':nonce}))
+                pong = {'type':'relay_pong','nonce':nonce}
+                snapshot = _remote_performance_snapshot(performance, quality)
+                if snapshot is not None:
+                    pong['performance'] = snapshot
+                await src.send(json.dumps(pong))
             continue
         required = _REMOTE_MESSAGE_CAPABILITY.get(message_type)
         if not required or not capabilities.get(required, False):
@@ -300,7 +373,7 @@ async def _watch_remote_authority(session):
 
 # ── Browser-side handler ──────────────────────────────────────────────────────
 
-async def _measure_remote_quality(agent_ws,session,quality):
+async def _measure_remote_quality(agent_ws,session,quality,performance=None):
     while True:
         try:
             start=time.monotonic()
@@ -313,7 +386,11 @@ async def _measure_remote_quality(agent_ws,session,quality):
             quality['agent_rtt_ms']=None
         quality['measured_at']=datetime.now(timezone.utc).isoformat()
         try:
-            await asyncio.to_thread(db._patch,f"remote_sessions?id=eq.{db._q(session['id'])}&company_id=eq.{db._q(session['company_id'])}",{'connection_quality':dict(quality)})
+            receipt = dict(quality)
+            snapshot = _remote_performance_snapshot(performance, quality)
+            if snapshot is not None:
+                receipt['performance'] = snapshot
+            await asyncio.to_thread(db._patch,f"remote_sessions?id=eq.{db._q(session['id'])}&company_id=eq.{db._q(session['company_id'])}",{'connection_quality':receipt})
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -407,9 +484,10 @@ async def _handle_browser(websocket, endpoint_id: str, token: str) -> None:
 
     health_tracker.increment_connections()
     quality={'transport':'server_relay','bytes_to_browser':0,'agent_rtt_ms':None}
-    quality_task=asyncio.create_task(_measure_remote_quality(agent_ws,session,quality))
-    relay_tasks=[asyncio.create_task(_relay_browser_to_agent(websocket, agent_ws, session)),
-                 asyncio.create_task(_relay(agent_ws, websocket,quality)),
+    performance = _RemoteRelayPerformance()
+    quality_task=asyncio.create_task(_measure_remote_quality(agent_ws,session,quality,performance))
+    relay_tasks=[asyncio.create_task(_relay_browser_to_agent(websocket, agent_ws, session,performance,quality)),
+                 asyncio.create_task(_relay(agent_ws, websocket,quality,performance)),
                  asyncio.create_task(_watch_remote_authority(session))]
     try:
         done, pending = await asyncio.wait(

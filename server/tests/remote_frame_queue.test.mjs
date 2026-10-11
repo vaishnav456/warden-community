@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {RemoteFrameQueue,RemoteFrameRenderer,parseRemoteFrame,remoteViewportSize} from '../static/js/remote_frame_queue.mjs';
+import {RemoteFrameQueue,RemoteFrameRenderer,RemotePointerSender,parseRemoteFrame,remoteViewportSize} from '../static/js/remote_frame_queue.mjs';
 const frame=(type,size=10)=>{
   const bytes=new Uint8Array(size);bytes[0]=type;
   if(type===1&&size>=9){const view=new DataView(bytes.buffer,1,8);view.setUint16(4,1,true);view.setUint16(6,1,true);}
@@ -130,4 +130,34 @@ test('viewport requests reject hidden or invalid bounds and use a safe DPR fallb
   for(const dpr of [undefined,NaN,Infinity,0,-1,'2'])assert.deepEqual(remoteViewportSize(800,600,dpr,1024,768),{w:800,h:600});
   for(const bounds of [[0,600,1024,768],[800,-1,1024,768],[NaN,600,1024,768],
     [800,Infinity,1024,768],[800,600,0,768],[800,600,1024,0.5]])assert.equal(remoteViewportSize(bounds[0],bounds[1],1,bounds[2],bounds[3]),null);
+});
+
+const pointerHarness=()=>{
+  let next=0;const callbacks=new Map(),sent=[];
+  const sender=new RemotePointerSender({send:packet=>sent.push(packet),
+    requestFrame:callback=>{const handle=next++;callbacks.set(handle,callback);return handle;},
+    cancelFrame:handle=>callbacks.delete(handle)});
+  return {sender,callbacks,sent,tick(){const work=[...callbacks.values()];callbacks.clear();work.forEach(callback=>callback());}};
+};
+
+test('a pointer burst sends only its latest position at the next display frame',()=>{
+  const h=pointerHarness();
+  for(let x=0;x<1000;x++)h.sender.push({x,y:17});
+  assert.equal(h.callbacks.size,1);assert.equal(h.sent.length,0);h.tick();
+  assert.deepEqual(h.sent,[{type:'mousemove',x:999,y:17}]);
+  h.sender.push({x:1000,y:18});h.tick();assert.equal(h.sent.length,2);
+});
+
+test('button, release and key actions flush the latest pointer before the action',()=>{
+  for(const type of ['mousedown','mouseup','keydown','keyup','scroll']){
+    const h=pointerHarness();h.sender.push({x:8,y:9});h.sender.flush();h.sent.push({type});h.tick();
+    assert.deepEqual(h.sent,[{type:'mousemove',x:8,y:9},{type}],type);
+    assert.equal(h.callbacks.size,0);
+  }
+});
+
+test('reset drops unsent positions across disconnects without affecting later movement',()=>{
+  const h=pointerHarness(),position={x:8,y:9};h.sender.push(position);position.x=99;
+  h.sender.reset();h.tick();assert.equal(h.sent.length,0);
+  h.sender.push(position);h.tick();assert.deepEqual(h.sent,[{type:'mousemove',x:99,y:9}]);
 });

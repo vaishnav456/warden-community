@@ -112,3 +112,34 @@ export function remoteViewportSize(width, height, devicePixelRatio, nativeWidth,
   return { w: Math.max(1, Math.min(maxWidth, Math.round(nativeWidth * scale))),
     h: Math.max(1, Math.min(maxHeight, Math.round(nativeHeight * scale))) };
 }
+
+// Pointer devices may produce hundreds of movements between display frames.
+// Keep the latest position; buttons, keys and releases can flush it immediately.
+export class RemotePointerSender {
+  constructor({ send, requestFrame, cancelFrame }) {
+    this.send = send;
+    this.requestFrame = requestFrame;
+    this.cancelFrame = cancelFrame;
+    this.pending = null;
+    this.frame = null;
+  }
+  push(position) {
+    this.pending = { type: 'mousemove', x: position.x, y: position.y };
+    if (this.frame === null) this.frame = this.requestFrame(() => {
+      this.frame = null;
+      this.flush();
+    });
+  }
+  flush() {
+    if (this.frame !== null) this.cancelFrame(this.frame);
+    this.frame = null;
+    const position = this.pending;
+    this.pending = null;
+    if (position) this.send(position);
+  }
+  reset() {
+    if (this.frame !== null) this.cancelFrame(this.frame);
+    this.frame = null;
+    this.pending = null;
+  }
+}

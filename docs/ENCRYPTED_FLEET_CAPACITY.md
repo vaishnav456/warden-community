@@ -172,10 +172,25 @@ select only current authority fields rather than credentials or MFA secrets.
 They remain fresh, with the same revalidation interval and fail-closed behavior.
 Authorization, consent and BYOK enforcement remain unchanged. No new agent binaries or fleet update are
 included; endpoint capture remains a separate deployment item. Idle frame age
-measures time since the last drawn update, not end-to-end input latency. Sixteen
+measures time since the last drawn update, not end-to-end input latency. Nineteen
 browser queue/renderer regressions and both complete server suites passed,
 including real compressed/uncompressed binary transport, large frames and live
 revocation. A new affected-session movement test remains a separate check.
+
+The capture source now skips a pointer-only DXGI acquisition only after a
+successful snapshot and only when the desktop timestamp, accumulated frames
+and metadata size are all zero. Initial capture, failed copies, monitor changes
+and uncertain metadata retain complete-image recovery. GDI fallback resizes
+raw pixels to the requested viewport before the existing quality-60 JPEG
+encoder; native input coordinates remain unchanged. These paths require a
+qualified agent build and device update, separate from the web deployment.
+
+The browser coalesces pointer movement once per display frame and flushes it
+before button, key or scroll actions. Numeric diagnostics distinguish incoming
+frames/bytes, browser decoding, queue depth, relay send waits, relay loop delay
+and relay–device RTT. The relay retains at most 120 send-wait samples per session;
+it stores no frame content. Diagnostics reuse existing rate-limited pongs and
+15-second encrypted quality receipts, adding no per-frame database calls.
 
 ## Implementation sequence
 

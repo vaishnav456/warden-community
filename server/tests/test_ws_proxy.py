@@ -1,4 +1,6 @@
 import asyncio
+import json
+import math
 import pathlib
 import sys
 import socket
@@ -42,6 +44,170 @@ class MessageStream:
 
     async def send(self, message):
         self.sent.append(message)
+
+
+class RemoteRelayPerformanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_sampling_counts_binary_frames_and_preserves_every_message(self):
+        clock = [0.0]
+        performance = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+        packets = [b'\x00full-jpeg', '{"type":"init"}', b'\x01partial-jpeg']
+        waits = iter([0.010, 0.020, 0.030])
+        class TimedDestination(MessageStream):
+            async def send(self, message):
+                clock[0] += next(waits)
+                await super().send(message)
+        destination = TimedDestination()
+        quality = {'bytes_to_browser': 0}
+        await ws_proxy._relay(MessageStream(packets), destination, quality, performance)
+        snapshot = performance.snapshot()
+        self.assertEqual(destination.sent, packets)
+        self.assertEqual(quality['bytes_to_browser'], sum(len(packet.encode()) if isinstance(packet, str) else len(packet) for packet in packets))
+        self.assertEqual(snapshot['frame_messages'], 2)
+        self.assertEqual(snapshot['frame_bytes'], len(packets[0]) + len(packets[2]))
+        self.assertEqual(snapshot['send_samples'], 3)
+        self.assertEqual(snapshot['send_wait_current_ms'], 0)
+        self.assertEqual(snapshot['send_wait_latest_ms'], 30)
+        self.assertEqual(snapshot['send_wait_mean_ms'], 20)
+        self.assertEqual(snapshot['send_wait_max_ms'], 30)
+        self.assertTrue(all(value is None or type(value) in (int, float) for value in snapshot.values()))
+
+    async def test_in_progress_send_wait_is_visible_before_the_frame_is_accepted(self):
+        clock = [10.0]
+        performance = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+        started, finish = asyncio.Event(), asyncio.Event()
+        packet = b'\x00jpeg'
+        class BlockedDestination(MessageStream):
+            async def send(self, message):
+                started.set()
+                await finish.wait()
+                await super().send(message)
+        destination = BlockedDestination()
+        task = asyncio.create_task(ws_proxy._relay(MessageStream([packet]), destination, None, performance))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            clock[0] += 0.519
+            snapshot = performance.snapshot()
+            self.assertEqual(snapshot['send_wait_current_ms'], 519)
+            self.assertEqual(snapshot['frame_messages'], 0)
+            self.assertEqual(snapshot['send_samples'], 0)
+            finish.set()
+            await asyncio.wait_for(task, 1)
+            snapshot = performance.snapshot()
+            self.assertEqual(snapshot['send_wait_current_ms'], 0)
+            self.assertEqual(snapshot['send_wait_latest_ms'], 519)
+            self.assertEqual(snapshot['frame_messages'], 1)
+            self.assertEqual(destination.sent, [packet])
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    def test_send_history_is_bounded_and_samples_track_recent_waits(self):
+        clock = [0.0]
+        performance = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+        packet = b'\x00synthetic-jpeg'
+        for number in range(1, 1001):
+            performance.begin_send()
+            clock[0] += number / 1000
+            performance.finish_send(packet, True)
+        snapshot = performance.snapshot()
+        self.assertEqual(snapshot['send_samples'], 120)
+        self.assertEqual(len(performance._send_waits), performance.SAMPLE_LIMIT)
+        self.assertEqual(snapshot['send_wait_latest_ms'], 1000)
+        self.assertEqual(snapshot['send_wait_max_ms'], 1000)
+        self.assertEqual(snapshot['send_wait_mean_ms'], 940.5)
+        self.assertEqual(snapshot['frame_messages'], 1000)
+        self.assertEqual(snapshot['frame_bytes'], 1000 * len(packet))
+        self.assertTrue(all(type(value) is float for value in performance._send_waits))
+
+    async def test_failed_or_cancelled_send_does_not_count_an_accepted_frame(self):
+        for failure in (OSError('write failed'), asyncio.CancelledError()):
+            clock = [0.0]
+            performance = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+            quality = {'bytes_to_browser': 0}
+            class FailedDestination(MessageStream):
+                async def send(self, message):
+                    clock[0] += 0.250
+                    raise failure
+            with self.subTest(failure=type(failure).__name__), self.assertRaises(type(failure)):
+                await ws_proxy._relay(MessageStream([b'\x00jpeg']), FailedDestination(), quality, performance)
+            snapshot = performance.snapshot()
+            self.assertEqual(snapshot['frame_messages'], 0)
+            self.assertEqual(snapshot['frame_bytes'], 0)
+            self.assertEqual(quality['bytes_to_browser'], 0)
+            self.assertEqual(snapshot['send_wait_current_ms'], 0)
+            self.assertEqual(snapshot['send_wait_latest_ms'], 250)
+
+    async def test_pong_performance_stays_rate_limited_and_read_only(self):
+        performance = ws_proxy._RemoteRelayPerformance(clock=lambda: 0.0)
+        performance.begin_send()
+        performance.finish_send(b'\x00jpeg', True)
+        source = MessageStream(['{"type":"relay_ping","nonce":"first"}', '{"type":"relay_ping","nonce":"too-soon"}'])
+        destination = MessageStream()
+        with patch.object(ws_proxy.load_controller, 'snapshot', return_value={'loop_lag_seconds': 0.125}), \
+                patch.object(ws_proxy.db, '_get') as read, patch.object(ws_proxy.db, '_patch') as write:
+            await ws_proxy._relay_browser_to_agent(source, destination,
+                {'id': 'session', 'capabilities': {'view': True}}, performance, {'agent_rtt_ms': 619})
+        self.assertEqual(destination.sent, [])
+        self.assertEqual(len(source.sent), 1)
+        pong = json.loads(source.sent[0])
+        self.assertEqual(pong['nonce'], 'first')
+        self.assertEqual(pong['performance']['agent_rtt_ms'], 619)
+        self.assertEqual(pong['performance']['relay_loop_lag_ms'], 125)
+        self.assertEqual(pong['performance']['frame_messages'], 1)
+        self.assertTrue(all(value is None or type(value) in (int, float) for value in pong['performance'].values()))
+        read.assert_not_called()
+        write.assert_not_called()
+
+    async def test_telemetry_is_not_returned_without_view_capability(self):
+        source = MessageStream(['{"type":"relay_ping","nonce":"first"}'])
+        performance = ws_proxy._RemoteRelayPerformance()
+        await ws_proxy._relay_browser_to_agent(source, MessageStream(),
+            {'id': 'session', 'capabilities': {'view': False}}, performance, {'agent_rtt_ms': 1})
+        self.assertEqual(source.sent, [])
+
+    def test_optional_metrics_cannot_expose_strings_or_nonfinite_values(self):
+        performance = ws_proxy._RemoteRelayPerformance()
+        for value in ('sensitive-text', True, -1, math.nan, math.inf, 10**1000):
+            with self.subTest(value_type=type(value).__name__):
+                snapshot = performance.snapshot(value, value)
+                self.assertIsNone(snapshot['agent_rtt_ms'])
+                self.assertIsNone(snapshot['relay_loop_lag_ms'])
+        with patch.object(ws_proxy.load_controller, 'snapshot', side_effect=RuntimeError('unavailable')):
+            snapshot = ws_proxy._remote_performance_snapshot(performance, {'agent_rtt_ms': 7})
+        self.assertEqual(snapshot['agent_rtt_ms'], 7)
+        self.assertIsNone(snapshot['relay_loop_lag_ms'])
+        self.assertIsNone(performance.snapshot(relay_loop_lag_seconds=1e308)['relay_loop_lag_ms'])
+
+    async def test_existing_quality_receipt_includes_numeric_aggregates_with_one_write(self):
+        from unittest.mock import AsyncMock
+        performance = ws_proxy._RemoteRelayPerformance(clock=lambda: 0.0)
+        performance.begin_send()
+        performance.finish_send(b'\x00jpeg', True)
+        pong = asyncio.get_running_loop().create_future()
+        pong.set_result(None)
+        agent = SimpleNamespace(ping=AsyncMock(return_value=pong))
+        quality = {'transport': 'server_relay', 'bytes_to_browser': 5, 'agent_rtt_ms': None}
+        calls = []
+        async def off_loop(function, *args):
+            calls.append(function)
+            return function(*args)
+        with patch.object(ws_proxy.asyncio, 'to_thread', new=off_loop), \
+                patch.object(ws_proxy.asyncio, 'sleep', new=AsyncMock(side_effect=asyncio.CancelledError)) as sleep, \
+                patch.object(ws_proxy.load_controller, 'snapshot', return_value={'loop_lag_seconds': 0.025}), \
+                patch.object(ws_proxy.db, '_get') as read, patch.object(ws_proxy.db, '_patch') as write:
+            with self.assertRaises(asyncio.CancelledError):
+                await ws_proxy._measure_remote_quality(agent, {'id': 'session', 'company_id': 'tenant'}, quality, performance)
+        write.assert_called_once()
+        receipt = write.call_args.args[1]['connection_quality']
+        self.assertEqual(receipt['performance']['frame_messages'], 1)
+        self.assertEqual(receipt['performance']['frame_bytes'], 5)
+        self.assertEqual(receipt['performance']['relay_loop_lag_ms'], 25)
+        self.assertIsInstance(receipt['performance']['agent_rtt_ms'], int)
+        self.assertNotIn('performance', quality)
+        self.assertTrue(all(value is None or type(value) in (int, float) for value in receipt['performance'].values()))
+        self.assertEqual(len(calls), 1)
+        read.assert_not_called()
+        sleep.assert_awaited_once_with(15)
 
 
 class RemoteAuthorityProjectionTests(unittest.IsolatedAsyncioTestCase):

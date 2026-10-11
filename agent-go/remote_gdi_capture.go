@@ -26,6 +26,26 @@ func systemGDIBitmapRead(dc, bitmap uintptr, buf []byte, info *bitmapInfoHeader)
 	return lines, err
 }
 
+func grabJPEGRegionForViewport(quality int, region monitorRect, requestedW, requestedH int) ([]byte, int, int, error) {
+	return captureGDIJPEGRegion(quality, region, requestedW, requestedH, systemGDICaptureCall, systemGDIBitmapRead)
+}
+
+// Capture at native coordinates, then resize the raw pixels before JPEG
+// encoding. This retains the same GDI fallback and secure-desktop handling.
+func captureGDIJPEGRegion(quality int, region monitorRect, requestedW, requestedH int, call gdiCaptureCall, readBitmap gdiBitmapRead) ([]byte, int, int, error) {
+	buf, err := captureGDIRegion(region, call, readBitmap)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	w, h := region.width(), region.height()
+	ew, eh := remoteCaptureSize(w, h, requestedW, requestedH)
+	frame, err := encodeBGRAJPEG(downscaleBGRA(buf, w, h, ew, eh), ew, eh, quality)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return frame, ew, eh, nil
+}
+
 func captureGDIRegion(region monitorRect, call gdiCaptureCall, readBitmap gdiBitmapRead) ([]byte, error) {
 	// GetDC/ReleaseDC and the GDI batch flushed below belong to one OS thread.
 	runtime.LockOSThread()
