@@ -35,17 +35,19 @@
       {% else %}
       <div class="bg-base-800 border border-base-600 rounded-lg p-4 mt-3 text-sm text-ink-300 space-y-3">
         <p>BYOK mode — only you know the vault passphrase; the server never
-           stores it. Unlock after every server restart so agents can keep
-           encrypting new data. Protected console pages will show a dedicated unlock screen while locked.</p>
+           saves it. The server chooses a fixed unlock period of 7–30 days.
+           Activity and reopening your browser do not extend it. Unlock again after
+           expiry, a manual lock or a key-service restart. Protected console pages show the unlock screen while locked.</p>
+        {% if vault_expiry %}<p>Unlock expires: <strong>{{ vault_expiry }}</strong>.</p>{% endif %}
         <form @submit.prevent="post($el, '{{ url_for('settings.unlock_vault') }}')" class="flex items-end gap-3">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div>
             <label class="form-label">Vault passphrase</label>
-            <input type="password" name="passphrase" class="form-input" required>
+            <input type="password" name="passphrase" class="form-input" required maxlength="4096" autocomplete="off">
           </div>
           <button type="submit" class="btn btn-primary btn-sm">Unlock</button>
           <button type="button" class="btn btn-secondary btn-sm"
-                  @click="post(null, '{{ url_for('settings.lock_vault') }}')">Lock now</button>
+                  @click="post(null, '{{ url_for('settings.lock_vault') }}')">Lock workspace</button>
         </form>
         <details class="border-t border-base-600 pt-3">
           <summary class="cursor-pointer font-medium">Change BYOK passphrase or return to managed mode</summary>

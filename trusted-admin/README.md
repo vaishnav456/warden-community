@@ -71,7 +71,10 @@ made private retroactively.
 
 The private web UI unlocks through its own session, rejects cross-site form
 requests and unrecognized hosts, escapes data, avoids response caching and locks
-after ten minutes of inactivity. Restarting discards unlocked state. Python does
+at a fixed server-chosen expiry randomly selected from 7 through 30 days.
+Activity never extends the expiry. Lock workspace locks immediately; restarting
+discards unlocked state. This operator migration tool is separate from the regular
+tenant BYOK webpage and has no Admin or Tenant desktop installers. Python does
 not guarantee secure erasure of old memory allocations.
 
 ## Install the ciphertext copy in PostgreSQL

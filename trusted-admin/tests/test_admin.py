@@ -136,7 +136,7 @@ class AdminTests(unittest.TestCase):
             capture(self.vault, self.path, [])
         self.assertEqual(file_digest(self.path), self.report["sha256"])
 
-    def test_web_csrf_private_session_and_idle_lock(self):
+    def test_web_csrf_private_session_and_fixed_expiry(self):
         now = [1.0]
         app = create_app(self.vault_path, self.path, self.checkpoint, clock=lambda: now[0])
         self.apps.append(app)
@@ -157,6 +157,8 @@ class AdminTests(unittest.TestCase):
         self.assertNotIn(b"private_table", other.get("/").data)
         self.assertIn(b"DO-NOT-STORE-CLEAR", owner.get("/tables/0").data)
         now[0] = 602.0
+        self.assertIn(b"DO-NOT-STORE-CLEAR", owner.get("/tables/0").data)
+        now[0] = 31 * 86400
         app.extensions["admin_expire"]()
         self.assertEqual(owner.get("/tables/0").status_code, 302)
 

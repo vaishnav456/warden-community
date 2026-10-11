@@ -148,6 +148,20 @@ class VaultRecoveryTests(unittest.TestCase):
         self.assertEqual(response.json, {"ok": True})
         self.assertTrue(tenant_crypto.is_unlocked("vault-test"))
 
+    def test_security_page_shows_server_expiry_and_lock_revokes_server_key(self):
+        self.assertEqual(self.post(passphrase=self.passphrase).status_code, 303)
+        self.endpoints.side_effect = None
+        self.endpoints.return_value = []
+        with patch("routes.settings.render_template", return_value="security") as render:
+            self.assertEqual(self.client.get("/settings/security").status_code, 200)
+            expiry = render.call_args.kwargs["vault_expiry"]
+            self.assertTrue(expiry.endswith(" UTC"))
+        self.assertEqual(self.post("/settings/security/vault/lock").status_code, 200)
+        self.assertFalse(tenant_crypto.is_unlocked("vault-test"))
+        self.assertEqual(self.client.get("/dashboard").status_code, 302)
+        with self.assertRaises(tenant_crypto.VaultLocked):
+            tenant_crypto.decrypt_value("vault-test", "byok", self.company["wrapped_dek"], self.ciphertext)
+
     def test_managed_mode_does_not_prompt_and_anonymous_user_must_login(self):
         self.company["encryption_mode"] = "managed"
         self.assertEqual(self.client.get("/dashboard").status_code, 200)

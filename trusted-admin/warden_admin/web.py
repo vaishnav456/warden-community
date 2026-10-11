@@ -1,5 +1,6 @@
 """Private, independently installed administration UI. No public decryption API."""
 from collections import deque
+from datetime import datetime, timezone
 import hmac
 import json
 import secrets
@@ -36,7 +37,7 @@ section{background:#172231;border:1px solid #304156;border-radius:14px;padding:2
 {% if previous %}<a href="{{ previous }}">Previous page</a>{% endif %} {% if next %}<a href="{{ next }}">Next page</a>{% endif %}</section>
 {% else %}<section><h2>Encrypted data copy</h2><p>{{ tables | length }} tables verified. This copy is read-only; the current Warden database still serves the application.</p>
 <div class="tables">{% for entry in tables %}<a href="{{ url_for('table_page', index=loop.index0) }}">{{ entry.schema }}.{{ entry.name }}<small>{{ entry.rows }} records</small></a>{% endfor %}</div></section>{% endif %}
-<p>The workspace locks after ten minutes without activity. If this app shares a host with Warden, host administrators can access unlocked data. Move it to a separate trusted machine for isolation.</p></main></html>"""
+<p>Unlock expires after a server-chosen random 7–30 days. Lock workspace ends it immediately. {% if unlocked %}Expiry: {{ unlock_expiry }}.{% endif %} If this app shares a host with Warden, host administrators can access unlocked data.</p></main></html>"""
 
 
 def create_app(vault_path, archive_path, checkpoint_path, *, clock=time.monotonic):
@@ -45,7 +46,7 @@ def create_app(vault_path, archive_path, checkpoint_path, *, clock=time.monotoni
     app.config.update(MAX_CONTENT_LENGTH=8192, SESSION_COOKIE_NAME="warden_admin",
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict")
     mutex = threading.RLock()
-    state = {"vault": None, "archive": None, "owner": None, "activity": 0, "attempts": deque()}
+    state = {"vault": None, "archive": None, "owner": None, "activity": 0, "attempts": deque(), "deadline": 0, "expires": 0}
 
     def clear():
         if state["archive"] is not None:
@@ -60,7 +61,7 @@ def create_app(vault_path, archive_path, checkpoint_path, *, clock=time.monotoni
 
     def expire():
         with mutex:
-            if state["vault"] is not None and clock() - state["activity"] >= 600:
+            if state["vault"] is not None and (clock() >= state["deadline"] or time.time() >= state["expires"]):
                 clear()
 
     def expiration_worker():
@@ -101,7 +102,8 @@ def create_app(vault_path, archive_path, checkpoint_path, *, clock=time.monotoni
 
     def page(**values):
         request.admin_nonce = secrets.token_urlsafe(24)
-        values.update(nonce=request.admin_nonce, csrf=session["csrf"], unlocked=authorized())
+        values.update(nonce=request.admin_nonce, csrf=session["csrf"], unlocked=authorized(),
+                      unlock_expiry=datetime.fromtimestamp(state["expires"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if authorized() else "")
         return render_template_string(PAGE, **values)
 
     @app.template_filter("cell")
@@ -146,6 +148,8 @@ def create_app(vault_path, archive_path, checkpoint_path, *, clock=time.monotoni
             session["owner"] = secrets.token_urlsafe(32)
             session["csrf"] = secrets.token_urlsafe(32)
             state.update(vault=vault, archive=archive, owner=session["owner"], activity=clock())
+            duration = (7 + secrets.randbelow(24)) * 86400
+            state.update(deadline=clock() + duration, expires=time.time() + duration)
             state["attempts"].clear()
             return redirect(url_for("index"))
 

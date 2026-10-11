@@ -66,6 +66,21 @@ organization cache. A key-service restart locks BYOK organizations; an applicati
 restart alone no longer locks them. Existing AES-GCM v2 data, older authenticated
 unversioned data, MFA ciphertext and HMAC lookup tokens remain compatible.
 
+Each successful BYOK unlock receives a fixed period randomly chosen **on the
+server from 7 through 30 days**. The key service checks both its monotonic deadline
+and UTC expiry on every key use, and sweeps expired memory without needing a
+browser request. Reading or writing never extends the period. The web security
+page displays the expiry; **Lock workspace** immediately removes the cached key
+and expiry for that organization. Clients cannot supply or override a duration.
+The usual login, tenant authorization, CSRF and unlock rate limits still apply.
+
+Use the existing HTTPS Warden webpage at `/settings/security/vault`; no desktop
+unlock application or installer is required. This is server-side BYOK: unlocking
+permits the trusted server to decrypt for dashboards and agents. A malicious
+server or host root could capture a phrase or plaintext while unlocked; this
+deployment is not end-to-end encryption. A browser offline cannot fetch data or
+issue a server lock; downloaded plaintext cannot be revoked remotely.
+
 ## Database coverage and recovery
 
 Moving key custody does not encrypt previously readable database columns.

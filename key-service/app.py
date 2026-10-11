@@ -21,7 +21,7 @@ log.propagate = False
 OPERATIONS = {
     **{"tenant." + name: getattr(tenant_crypto, name) for name in (
         "provision_managed", "provision_byok", "rewrap_to_byok", "rewrap_to_managed",
-        "unlock_byok", "lock_company", "is_unlocked", "encrypt_value", "decrypt_value",
+        "unlock_byok", "lock_company", "is_unlocked", "vault_status", "encrypt_value", "decrypt_value",
         "blind_index_value",
     )},
     **{"platform." + name: getattr(platform_secrets, name) for name in (
@@ -29,6 +29,13 @@ OPERATIONS = {
         "decrypt_platform_field", "hash_backup_code", "backup_code_matches",
     )},
 }
+
+
+@app.after_request
+def no_cache(response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @app.get("/health")

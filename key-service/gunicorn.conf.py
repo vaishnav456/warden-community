@@ -13,3 +13,8 @@ loglevel = "info"
 def on_starting(server):
     import logging
     logging.getLogger("key_service.audit").setLevel(logging.INFO)
+
+
+def post_worker_init(worker):
+    from services.tenant_crypto import start_expiry_worker
+    start_expiry_worker()

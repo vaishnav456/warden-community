@@ -11,14 +11,14 @@
   <img src="{{ url_for('static', filename='favicon.svg') }}?v={{ asset_v }}" width="48" height="48" alt="Warden">
   <p class="vault-kicker">WARDEN · BRING YOUR OWN KEY</p>
   <h1>Your organization vault is locked</h1>
-  <p>Your encrypted data is still protected. A server restart or a manual lock clears the unlocked key from server memory.</p>
+  <p>The server chooses an unlock period of 7–30 days. Expiry, Lock workspace or a key-service restart clears the unlocked key from memory. Using the dashboard does not extend the expiry.</p>
   {% if error %}<p class="vault-error" role="alert">{{ error }}</p>{% endif %}
   {% if can_unlock %}
   <p>Enter your existing vault passphrase to resume protected operations. Warden does not save this passphrase; unlocking makes the key available to this running server process, not just this browser session.</p>
   <form method="post" action="{{ url_for('settings.vault') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="vault-passphrase">Vault passphrase</label>
-    <input type="password" id="vault-passphrase" name="passphrase" required autocomplete="off">
+    <input type="password" id="vault-passphrase" name="passphrase" required autocomplete="off" maxlength="4096">
     <button type="submit">Unlock vault</button>
   </form>
   {% else %}
