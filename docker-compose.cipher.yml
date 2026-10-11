@@ -42,6 +42,8 @@ services:
       retries: 10
   cipher-runtime:
     logging: *cipher-logging
+    init: true
+    stop_grace_period: 120s
     build:
       context: .
       dockerfile: cipher-db/Dockerfile
@@ -50,12 +52,16 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    pids_limit: 64
-    mem_limit: 3g
-    memswap_limit: 3g
+    pids_limit: 128
+    mem_limit: 4g
+    memswap_limit: 4g
     ulimits:
       core: {soft: 0, hard: 0}
-    tmpfs: ["/tmp:size=32m,mode=1777"]
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /run/warden-projection:size=3g,mode=0700,uid=10005,gid=10001
+      # Suppress the base image's unused anonymous data volume.
+      - /var/lib/postgresql/data:size=1m,mode=0700,uid=10005,gid=10001
     networks: [cipher-private]
     depends_on:
       cipher-storage-init:
@@ -65,6 +71,8 @@ services:
       key-service:
         condition: service_healthy
     environment:
+      CIPHER_QUERY_ENGINE: native
+      CIPHER_PROJECTION_ROOT: /run/warden-projection
       CIPHER_DATASET: ${WARDEN_CIPHER_DATASET:?Set the captured dataset UUID}
       CIPHER_CONNECTION_FILE: /run/secrets/cipher-connection.json
       CIPHER_CHECKPOINT: /var/lib/warden-cipher/head

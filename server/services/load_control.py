@@ -9,9 +9,12 @@ from pathlib import Path
 
 
 class LoadController:
-    def __init__(self, http_capacity=8):
-        # Matches the single eight-thread Gunicorn worker. Slow requests alone
+    def __init__(self, http_capacity=None):
+        # Matches the single threaded Gunicorn worker. Slow requests alone
         # may be waiting on the database/network while the relay remains idle.
+        if http_capacity is None:
+            from services.http_capacity import http_threads
+            http_capacity = http_threads()
         if type(http_capacity) is not int or http_capacity < 1:
             raise ValueError('HTTP capacity must be a positive integer')
         self.http_capacity = http_capacity

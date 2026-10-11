@@ -171,13 +171,17 @@ class HeartbeatAtRestTests(unittest.TestCase):
         app = Flask(__name__)
         with app.test_request_context():
             g.endpoint = dict(id="endpoint-a", company_id="tenant-a", cpu_pct=8, net_recv_mbps=3)
+            integrity = db._endpoint_encrypt(self.company, "agent_integrity", {"status": "verified"})
             with mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", True), mock.patch.object(db, "_endpoint_company", return_value=self.company), mock.patch.object(db, "_patch") as patch:
-                db.update_endpoint_heartbeat("endpoint-a", 12.5, 40, 64)
+                db.update_endpoint_heartbeat("endpoint-a", 12.5, 40, 64, integrity_report=integrity)
                 row = patch.call_args.args[1]
+                patch.assert_called_once()
+                self.assertEqual(row["agent_integrity_encrypted"], integrity)
                 self.assertTrue(row["heartbeat_encrypted"].startswith("v2:"))
                 for field in db._HEARTBEAT_METRIC_FIELDS:
                     self.assertIsNone(row[field])
                 decoded = db._decrypt_endpoint(dict(id="endpoint-a", company_id="tenant-a", **row), self.company)
+                self.assertEqual(decoded["agent_integrity"], {"status": "verified"})
                 self.assertEqual(decoded["cpu_pct"], 12.5)
                 self.assertEqual(decoded["net_recv_mbps"], 3)
             with mock.patch.object(config, "ENCRYPT_HEARTBEAT_TELEMETRY", True), mock.patch.object(db, "_endpoint_company", return_value=self.company), mock.patch.object(db, "_post") as post:

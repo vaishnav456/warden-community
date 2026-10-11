@@ -210,8 +210,10 @@ is needed. Full host or trusted-application compromise can still expose data.
 Hosted development and production completed verified 86-table migrations on
 2026-10-11 (4,663 and 595,099 records in their final snapshots), with full
 encrypted rollback restoration and application/interface checks. Validation
-includes 13 ciphertext-runtime tests against PostgreSQL and 721 Community
-server tests. Community requires its own verified migration and deployment;
+includes native concurrency, grouped durability, recovery and ciphertext-store
+integration tests and 724 Community server regressions. The live query engine
+uses private volatile PostgreSQL with pooled readers and batched encrypted
+writes; see [fleet capacity](docs/ENCRYPTED_FLEET_CAPACITY.md) for workload limits. Community requires its own verified migration and deployment;
 this source update does not claim a Community live cutover. It preserves Community's configured server URL,
 single organization and login/dashboard entry, without adding Hosted marketing,
 trials, subscriptions or platform administration. See the runtime guide for

@@ -261,13 +261,18 @@ def update_endpoint_heartbeat(endpoint_id, cpu_pct, ram_used_pct, disk_free_gb, 
                               local_ip=None, device_type=None, platform=None,
                               capabilities=None, capability_details=None,
                               interactive_user_marker=False, interactive_user=None,
-                              net_sent_mbps=None, net_recv_mbps=None, topology_telemetry=None):
+                              net_sent_mbps=None, net_recv_mbps=None, topology_telemetry=None,
+                              integrity_report=None):
     import db as _db
     company = _db._endpoint_company(endpoint_id)
     data = {
         "status": "online",
         "last_seen": _db._now_iso(),
     }
+    if integrity_report is not None:
+        # Prepared by the server's independently verified integrity service,
+        # never copied from a client-supplied encrypted field.
+        data["agent_integrity_encrypted"] = integrity_report
     if cpu_pct is not None:
         data["cpu_pct"] = cpu_pct
     if ram_used_pct is not None:

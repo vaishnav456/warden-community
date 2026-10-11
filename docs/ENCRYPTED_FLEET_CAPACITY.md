@@ -6,15 +6,15 @@ has not passed a 10,000-endpoint workload test.
 
 ## Database decision
 
-Keep PostgreSQL as the durable ciphertext store. Replace the single-connection
-PGlite query projection with a concurrent native SQL engine inside the trusted
-application boundary before claiming this scale. Redis is an optional queue or
+Keep PostgreSQL as the durable ciphertext store. The runtime now implements a
+concurrent native PostgreSQL projection inside the trusted application boundary.
+Fleet workload acceptance is still required before claiming this scale. Redis is an optional queue or
 cache alongside it. Cassandra is not the next primary database for Warden.
 
 | Component | Appropriate use | Constraint for this application |
 | --- | --- | --- |
 | PostgreSQL ciphertext store | Durable atomic encrypted record and manifest commits | It must never receive business columns, decrypting functions or keys |
-| Native PostgreSQL query projection, proposed | Concurrent relational reads and existing SQL routines inside the trusted boundary | Readable data, WAL and temporary files must stay in protected volatile memory; integration and recovery require new verification |
+| Native PostgreSQL query projection, implemented | Up to 16 concurrent relational readers, existing SQL routines and a single grouped durable writer inside the trusted boundary | Readable files/WAL/spills/socket remain in private tmpfs, with swap/core dumps disabled and no TCP listener |
 | Redis, optional | Bounded queues, wake-up notifications and measured caches | Persist only authenticated ciphertext and opaque routing IDs; it cannot replace job authorization or the durable source of truth |
 | Cassandra | A separate, deliberately redesigned high-volume append workload, if measurements justify it | CQL lacks joins and subqueries; existing relational routines, foreign keys and query patterns need redesign |
 | Additional PGlite instances | Possible isolated tenant shards after implementing routing and fencing | Starting multiple writers on one dataset is prohibited; one instance still serializes its queries |
@@ -25,8 +25,12 @@ after restore, uses a durable append checkpoint journal, compresses private
 manifest metadata before authenticated encryption and makes GET/HEAD
 transactions read-only. Rows retain their ciphertext format; new manifests and
 the checkpoint journal require the compatible updated runtime for recovery.
-These changes do not remove PGlite's exclusive connection or prove
-10,000-endpoint support.
+The concurrent release replaces the live PGlite connection, groups up to 128
+write requests behind one durable encrypted commit, batches custody encryption
+and ciphertext inserts, and removes the second retained ciphertext copy from
+runtime memory. Reads cannot see undurable writes. Recovery, constraint failures,
+sequence rollback, actual ciphertext storage and query compatibility have new
+native integration tests. This is not yet proof of 10,000-endpoint support.
 
 ## Immediate deployment guardrails
 
@@ -44,8 +48,11 @@ containers were stopped after confirming that live callers use separate sockets.
 Their volumes were retained. Existing live log rotation was already bounded;
 the tighter rotation is saved for the next container recreation.
 
-Keep the single web worker until relay ownership is separated. Database switching
-or additional web workers do not substitute for storage and concurrency testing.
+Keep the single web worker until relay ownership is separated. Its HTTP thread
+count now defaults to 32 and can be configured with `WARDEN_HTTP_THREADS` (4–128).
+Admission uses the same setting. An integrity report shares the heartbeat's
+endpoint update, removing one durable write per reported heartbeat. These
+changes preserve process-local relay ownership; they require workload testing.
 
 ## Workload to reproduce
 
@@ -76,6 +83,32 @@ Proposed acceptance targets, not measured results:
   storage, authenticated membership, rollback rejection and unchanged tenant
   authorization. Record recovery duration and peak memory.
 
+### Isolated measurement on 2026-10-11
+
+The controller benchmark seeded 10,000 synthetic records and issued three
+separate durable write requests and one concurrent read per cycle. The runtime
+had a 2-CPU limit, 4 GiB memory with no swap, a private tmpfs projection and real
+durable ciphertext/checkpoint storage on the existing shared virtual disk.
+The first run targeting 333 cycles/second completed 1,572 cycles, dropped 5,088
+at its bounded admission limit, and drained in 27.83 seconds: 56 cycles/second,
+p95 9.292 seconds and p99 9.372 seconds. No SQL requests failed and the
+overlapping integrity audit passed. The 999/second burst reached 50 cycles/second.
+
+A second run with phase diagnostics and isolated qualification tests running
+alongside it reached 49 cycles/second. Mean write-batch phases were 201 ms of
+SQL execution, 216 ms for checkpoint intent, 152 ms for the ciphertext-store
+commit and 217 ms for checkpoint confirmation. These measurements identify
+durable storage flush latency as a substantial remaining bottleneck. Encryption
+in this synthetic run used a generated test key; it excludes the real custody
+service, HTTP, endpoint authentication, dashboards and remote streams.
+
+This fails the fleet acceptance target. The native runtime improves concurrency
+but this host has not demonstrated 10,000-endpoint capacity. Keep the agent's
+30-second polling interval and 10-second timeout. Evaluate faster durable
+storage, reviewed reductions in heartbeat write fan-out and isolated dataset
+shards against the full workload before increasing fleet size. Never disable
+persistent-store or checkpoint flushes to improve the benchmark score.
+
 ## Implementation sequence
 
 1. Profile SQL execution, runtime queueing, custody calls, encrypted commits and
@@ -87,12 +120,12 @@ Proposed acceptance targets, not measured results:
 2. Consolidate the heartbeat's related work into reviewed atomic operations.
    Preserve lease fencing, tenant/BYOK checks and response signatures. A longer
    agent timeout alone does not solve saturation or prove delivery.
-3. Build a native concurrent query projection behind the existing encrypted
+3. Implemented: a native concurrent query projection behind the existing encrypted
    request/response interface. Keep the persistent opaque PostgreSQL store and
    separate custody service. The app must not receive direct plaintext SQL
    credentials. The projection's data directory, WAL, temporary files and logs
    need volatile mounts, disabled swap/core dumps and no readable backup path.
-4. Retain a single fenced durable writer initially. Preserve deferred-constraint
+4. Implemented: a single fenced durable writer with bounded group commits. Preserve deferred-constraint
    checks, sequence-only writes, authenticated manifests and private checkpoints.
    Acknowledge only after the encrypted commit is durable. Test every crash
    boundary between projection execution, durable commit and acknowledgment;
@@ -113,7 +146,9 @@ Proposed acceptance targets, not measured results:
    and independent checkpoints. Benchmark again before assigning fleet capacity.
 
 Deploy candidates to development first and retain verified encrypted recovery
-backups. Neither Redis nor a native projection is enabled by this document.
+backups. Redis remains optional and is not enabled by this document. The native
+projection is implemented in source; deployed status and measured workload
+results must be verified separately.
 Community retains its local entry flow, single organization and configured
 server URL; this design does not introduce hosted platform or trial features.
 

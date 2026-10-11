@@ -6,11 +6,14 @@ export async function connect(path) {
   const client=new pg.Client({...config,application_name:'warden-cipher-store',connectionTimeoutMillis:10000});
   let healthy=true;
   const readers=new Set();
+  const guards=new pg.Pool({...config,max:16,application_name:'warden-cipher-head',connectionTimeoutMillis:10000});
+  guards.on('error',()=>{healthy=false;});
   client.on('error',()=>{healthy=false;}); // No connection errors/DSNs are logged.
   await client.connect();
   const query=(sql,args)=>{if(!healthy)throw new Error('Ciphertext storage unavailable');return client.query(sql,args);};
   return {
     query,
+    independentQuery:(sql,args)=>{if(!healthy)throw new Error('Ciphertext storage unavailable');return guards.query(sql,args);},
     get healthy(){return healthy;},
     async acquireWriter(dataset){
       if(!(await query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired',[dataset])).rows[0].acquired)throw new Error('Encrypted database already has a writer');
@@ -30,6 +33,6 @@ export async function connect(path) {
       }catch(error){try{await reader.query('ROLLBACK');}catch{}throw error;}
       finally{readers.delete(reader);await reader.end();}
     },
-    close:async()=>{await Promise.allSettled([...readers].map(reader=>reader.end()));await client.end();},
+    close:async()=>{await Promise.allSettled([...readers].map(reader=>reader.end()));await guards.end();await client.end();},
   };
 }

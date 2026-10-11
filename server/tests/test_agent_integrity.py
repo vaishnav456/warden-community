@@ -43,3 +43,11 @@ class AgentIntegrityTests(unittest.TestCase):
         for digest in ("", "b"*63, "g"*64, None):
             with self.assertRaises(ValueError):
                 agent_integrity.manifest(self.endpoint,self.challenge,"2.6.55",digest)
+
+    def test_deferred_report_still_rejects_claimed_verification_and_checks_alerts(self):
+        with mock.patch.object(agent_integrity.db, "get_company_by_id", return_value=dict(id="tenant-a")), mock.patch.object(agent_integrity.db, "_patch") as patch, mock.patch.object(agent_integrity.db, "_endpoint_encrypt", return_value="enc:prepared") as encrypt, mock.patch.object(agent_integrity.db, "get_open_alert", return_value=None), mock.patch.object(agent_integrity.db, "create_alert") as alert:
+            encrypted = agent_integrity.record_report(self.endpoint, dict(agent_version="2.6.55", agent_integrity=dict(sha256=self.hash, status="verified")), defer_patch=True)
+            self.assertEqual(encrypted, "enc:prepared")
+            self.assertEqual(encrypt.call_args.args[2]["status"], "unverified")
+            patch.assert_not_called()
+            alert.assert_called_once()

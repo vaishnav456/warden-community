@@ -31,12 +31,12 @@ export class RestCompiler {
       tables.get(column.name).columns.set(column.column,column);
     }
     const primary=(await tx.query(`SELECT c.relname AS name,ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY k(num,pos)
-      JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num ORDER BY pos) AS columns
+      JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num ORDER BY pos)::text[] AS columns
       FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE i.indisprimary AND n.nspname='endpt'`)).rows;
     for(const item of primary)tables.get(item.name).pk=item.columns;
     const fks=(await tx.query(`SELECT con.conname AS name,src.relname AS source,dst.relname AS target,
-      ARRAY(SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY k(num,pos) JOIN pg_attribute a ON a.attrelid=src.oid AND a.attnum=k.num ORDER BY pos) AS source_columns,
-      ARRAY(SELECT a.attname FROM unnest(con.confkey) WITH ORDINALITY k(num,pos) JOIN pg_attribute a ON a.attrelid=dst.oid AND a.attnum=k.num ORDER BY pos) AS target_columns
+      ARRAY(SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY k(num,pos) JOIN pg_attribute a ON a.attrelid=src.oid AND a.attnum=k.num ORDER BY pos)::text[] AS source_columns,
+      ARRAY(SELECT a.attname FROM unnest(con.confkey) WITH ORDINALITY k(num,pos) JOIN pg_attribute a ON a.attrelid=dst.oid AND a.attnum=k.num ORDER BY pos)::text[] AS target_columns
       FROM pg_constraint con JOIN pg_class src ON src.oid=con.conrelid JOIN pg_class dst ON dst.oid=con.confrelid
       JOIN pg_namespace ns ON ns.oid=src.relnamespace JOIN pg_namespace nd ON nd.oid=dst.relnamespace
       WHERE con.contype='f' AND ns.nspname='endpt' AND nd.nspname='endpt'`)).rows;

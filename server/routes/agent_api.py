@@ -534,8 +534,9 @@ def heartbeat():
     """
     body = g.get("heartbeat_body", request.get_json(silent=True) or {})
     endpoint = g.endpoint
+    integrity_report = None
     if config.ENCRYPT_HEARTBEAT_TELEMETRY:
-        record_agent_integrity(endpoint, body)
+        integrity_report = record_agent_integrity(endpoint, body, defer_patch=True)
 
     reported_platform = str(body.get("platform") or "").strip().lower()
     if reported_platform not in {"windows", "linux", "darwin"}:
@@ -622,6 +623,7 @@ def heartbeat():
         net_sent_mbps=_metric(body.get("net_sent_mbps")),
         net_recv_mbps=_metric(body.get("net_recv_mbps")),
         topology_telemetry=topology_telemetry,
+        integrity_report=integrity_report,
     )
 
     if valid_interactive_user and interactive_user:
