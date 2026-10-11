@@ -24,6 +24,28 @@ def _valid_claim(req):
     return bool(_CLAIM_RE.fullmatch(supplied) and expected and secrets.compare_digest(supplied, expected))
 
 
+@bp.post("/api/build/claim")
+@build_service_auth_required
+def claim():
+    """Keep builder automation inside the application's encrypted query path."""
+    rows = db._rpc("claim_next_build", {"p_lease_seconds": 900})
+    response = jsonify(rows[0] if rows else None)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.post("/api/build/<req_id>/renew")
+@build_service_auth_required
+def renew(req_id):
+    token = (request.headers.get("X-Build-Claim") or "").strip()
+    if not _CLAIM_RE.fullmatch(token):
+        return jsonify(error="invalid_build_claim"), 400
+    result = db._rpc("renew_build_claim", {"p_build_id": req_id, "p_claim_token": token, "p_lease_seconds": 900})
+    if result is not True:
+        return jsonify(error="stale_build_claim"), 409
+    return jsonify(ok=True)
+
+
 @bp.route("/api/build/pending", methods=["GET"])
 @build_service_auth_required
 def pending():
@@ -137,6 +159,8 @@ def fail(req_id):
         return jsonify({"error": "invalid_build_error"}), 400
     if not db.fail_claimed_build(req_id, req["claim_token"], error):
         return jsonify({"error": "stale_build_claim"}), 409
+    if req.get("enrollment_token_id"):
+        db.deactivate_enrollment_token(req["enrollment_token_id"])
     return jsonify({"ok": True})
 
 

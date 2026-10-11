@@ -195,3 +195,22 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Security 
 ## Trademark
 
 The source licenses do not grant permission to imply that modified deployments are official Warden services. See [TRADEMARKS.md](TRADEMARKS.md).
+
+## Complete-record ciphertext storage
+
+The shared [ciphertext database runtime](cipher-db/README.md) stores every field
+of every application record inside authenticated ciphertext, including original
+IDs, names, numbers and timestamps. Empty tables and schema definitions are
+included. PostgreSQL and its private application interface expose only opaque
+identifiers and encrypted envelopes. SQL and decryption run in trusted server
+memory, while the separate key service keeps custody of the master key.
+Existing web BYOK unlock/lock rules remain in place; no Admin/Tenant executable
+is needed. Full host or trusted-application compromise can still expose data.
+
+The Hosted development snapshot pilot verified 86 tables and 4,663 records,
+including original transaction routines and application reads/writes. Community
+requires its own verified migration and deployment; this source update does not
+claim a Community live cutover. It preserves Community's configured server URL,
+single organization and login/dashboard entry, without adding Hosted marketing,
+trials, subscriptions or platform administration. See the runtime guide for
+private configuration, tests, migration and recovery.

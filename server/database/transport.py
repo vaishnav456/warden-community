@@ -24,6 +24,14 @@ class RowPage(list):
 
 
 def _open(path, method, schema, data=_NO_BODY, prefer=None, rpc=False):
+    if os.environ.get('WARDEN_DATABASE_MODE') == 'ciphertext' and not os.environ.get('CIPHER_SOCKET'):
+        raise RuntimeError('Ciphertext database configuration is incomplete')
+    if os.environ.get('CIPHER_SOCKET'):
+        from database.cipher_transport import open_request
+        return open_request(path, method, schema,
+                            None if data is _NO_BODY else data,
+                            has_data=data is not _NO_BODY,
+                            prefer=prefer if prefer is not None else (None if rpc else 'return=representation'))
     import db
     headers = dict(db._RPC_HEADERS if rpc else db._HEADERS)
     headers['Accept-Profile' if method in ('GET', 'HEAD') else 'Content-Profile'] = schema

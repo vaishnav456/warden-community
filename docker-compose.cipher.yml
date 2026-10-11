@@ -1,0 +1,95 @@
+# Apply after docker-compose.keys.yml only AFTER a verified capture/cutover.
+# Bootstrap/private operator files are never mounted in the public web service.
+services:
+  cipher-storage-init:
+    image: alpine:3.20
+    user: "0:0"
+    network_mode: none
+    command: ["sh", "-c", "chown 10005:10001 /run/warden-cipher && chmod 0750 /run/warden-cipher"]
+    volumes:
+      - warden-cipher-socket:/run/warden-cipher
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+  cipher-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - ${WARDEN_CIPHER_POSTGRES_ENV_FILE:?Set an absolute private bootstrap environment file}
+    networks: [cipher-private]
+    security_opt: ["no-new-privileges:true"]
+    ulimits:
+      core: {soft: 0, hard: 0}
+    volumes:
+      - warden-cipher-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  cipher-runtime:
+    build:
+      context: .
+      dockerfile: cipher-db/Dockerfile
+    restart: unless-stopped
+    user: "10005:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 3g
+    memswap_limit: 3g
+    ulimits:
+      core: {soft: 0, hard: 0}
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [cipher-private]
+    depends_on:
+      cipher-storage-init:
+        condition: service_completed_successfully
+      cipher-postgres:
+        condition: service_healthy
+      key-service:
+        condition: service_healthy
+    environment:
+      CIPHER_DATASET: ${WARDEN_CIPHER_DATASET:?Set the captured dataset UUID}
+      CIPHER_CONNECTION_FILE: /run/secrets/cipher-connection.json
+      CIPHER_CHECKPOINT: /var/lib/warden-cipher/head
+      CIPHER_SOCKET: /run/warden-cipher/runtime.sock
+      CIPHER_TOKEN_FILE: /run/secrets/cipher-token
+      KEY_SERVICE_SOCKET: /run/warden-keys/service.sock
+      KEY_SERVICE_TOKEN_FILE: /run/secrets/warden-key-token
+    volumes:
+      - warden-cipher-socket:/run/warden-cipher
+      - warden-key-socket:/run/warden-keys:ro
+      - ${WARDEN_CIPHER_CONFIG_DIRECTORY:?Set an absolute private config directory}/connection.json:/run/secrets/cipher-connection.json:ro
+      - ${WARDEN_CIPHER_CONFIG_DIRECTORY:?Set an absolute private config directory}/client-token:/run/secrets/cipher-token:ro
+      - ${WARDEN_CIPHER_STATE_DIRECTORY:?Set the captured private checkpoint directory}:/var/lib/warden-cipher
+      - ${WARDEN_KEY_DIRECTORY:?Set the existing private key directory}/client-token:/run/secrets/warden-key-token:ro
+  warden-server:
+    depends_on:
+      cipher-runtime:
+        condition: service_healthy
+    environment:
+      WARDEN_DATABASE_MODE: ciphertext
+      SUPABASE_URL: http://127.0.0.1:9
+      SUPABASE_SERVICE_KEY: ciphertext-interface
+      CIPHER_DATASET: ${WARDEN_CIPHER_DATASET:?Set the captured dataset UUID}
+      CIPHER_SOCKET: /run/warden-cipher/runtime.sock
+      CIPHER_TOKEN_FILE: /run/secrets/cipher-token
+    ulimits:
+      core: {soft: 0, hard: 0}
+    volumes:
+      - warden-cipher-socket:/run/warden-cipher:ro
+      - ${WARDEN_CIPHER_CONFIG_DIRECTORY:?Set an absolute private config directory}/client-token:/run/secrets/cipher-token:ro
+  build-service:
+    environment:
+      WARDEN_DATABASE_MODE: ciphertext
+      SUPABASE_URL: http://127.0.0.1:9
+      SUPABASE_KEY: ciphertext-interface
+networks:
+  cipher-private:
+    internal: true
+volumes:
+  warden-cipher-socket:
+  warden-cipher-postgres:

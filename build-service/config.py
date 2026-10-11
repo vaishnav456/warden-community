@@ -67,8 +67,11 @@ def _require(name: str) -> str:
     return val
 
 
-SUPABASE_URL       = _require("SUPABASE_URL")
-SUPABASE_KEY       = _require("SUPABASE_KEY")
+DATABASE_MODE = _os.environ.get("WARDEN_DATABASE_MODE", "legacy")
+if DATABASE_MODE not in {"legacy", "ciphertext"}:
+    raise RuntimeError("Invalid WARDEN_DATABASE_MODE")
+SUPABASE_URL = "http://127.0.0.1:9" if DATABASE_MODE == "ciphertext" else _require("SUPABASE_URL")
+SUPABASE_KEY = "ciphertext-interface" if DATABASE_MODE == "ciphertext" else _require("SUPABASE_KEY")
 AGENT_GO_SOURCE_DIR = _pathlib.Path(_require("AGENT_GO_SOURCE_DIR"))
 AGENT_POSIX_SOURCE_DIR = _pathlib.Path(
     _os.environ.get("AGENT_POSIX_SOURCE_DIR", "/agent-posix")

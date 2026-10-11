@@ -35,15 +35,6 @@ def cleanup_expired_tokens():
     import db as _db
     cutoff = (_db.datetime.now(_db.timezone.utc) - _db.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        url = (
-            f"{_db.config.SUPABASE_URL}/refresh_tokens"
-            f"?revoked=eq.true&created_at=lt.{_db._q(cutoff)}"
-        )
-        headers = dict(_db._HEADERS)
-        headers["Content-Profile"] = "endpt"
-        req = _db.urllib.request.Request(url, method="DELETE", headers=headers)
-        from contextlib import closing
-        with closing(_db.urllib.request.urlopen(req, timeout=10, context=_db._SSL_CTX)):
-            pass
+        _db._delete(f"refresh_tokens?revoked=eq.true&created_at=lt.{_db._q(cutoff)}")
     except Exception:
         pass

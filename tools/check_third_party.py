@@ -32,6 +32,12 @@ def check(root):
         for name, version in re.findall(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?==([^\s#]+)", text, re.MULTILINE):
             if ("python", normalized(name), version) not in covered:
                 errors.append(f"Missing pinned Python dependency: {service}: {name}=={version}")
+    lock = json.loads((root / "cipher-db/package-lock.json").read_text(encoding="utf-8"))
+    for package, details in lock["packages"].items():
+        if package:
+            name = package.removeprefix("node_modules/")
+            if ("npm", normalized(name), details["version"]) not in covered:
+                errors.append(f"Missing locked npm dependency: {name}@{details['version']}")
     for asset in ("alpine", "htmx", "chartjs", "tailwindcss"):
         if not (root / "server/static/vendor/licenses" / (asset + ".txt")).is_file():
             errors.append("Missing packaged browser license: " + asset)

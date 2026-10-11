@@ -76,3 +76,4 @@ Thumbs.db
 *.warden-vault
 *.warden-checkpoint
 *.warden-archive
+node_modules/
