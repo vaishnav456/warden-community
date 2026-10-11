@@ -21,9 +21,11 @@ cache alongside it. Cassandra is not the next primary database for Warden.
 
 The immediate performance release streams integrity audits on a separate
 repeatable-read snapshot, batches sequence reads, rebuilds planner statistics
-after restore, uses a durable append checkpoint journal and makes GET/HEAD
-transactions read-only. These changes preserve
-the stored format. They do not remove PGlite's exclusive connection or prove
+after restore, uses a durable append checkpoint journal, compresses private
+manifest metadata before authenticated encryption and makes GET/HEAD
+transactions read-only. Rows retain their ciphertext format; new manifests and
+the checkpoint journal require the compatible updated runtime for recovery.
+These changes do not remove PGlite's exclusive connection or prove
 10,000-endpoint support.
 
 ## Workload to reproduce
@@ -104,3 +106,4 @@ server URL; this design does not introduce hosted platform or trial features.
 - [Redis data types: caching, queuing and event processing](https://redis.io/docs/latest/develop/data-types/)
 - [Redis persistence and durability choices](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
 - [Cassandra CQL data manipulation and query restrictions](https://cassandra.apache.org/doc/stable/cassandra/developing/cql/dml.html)
+- [Node.js bounded DEFLATE decompression](https://nodejs.org/api/zlib.html)
