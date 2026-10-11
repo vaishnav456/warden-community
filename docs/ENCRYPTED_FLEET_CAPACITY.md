@@ -28,6 +28,25 @@ the checkpoint journal require the compatible updated runtime for recovery.
 These changes do not remove PGlite's exclusive connection or prove
 10,000-endpoint support.
 
+## Immediate deployment guardrails
+
+The encrypted Compose overlay bounds the build worker to 2 GiB and 256 processes,
+and the ciphertext PostgreSQL service to 1 GiB and 128 processes. Their swap
+allowance equals their memory limit. These are shared-host starting limits,
+not 10,000-endpoint sizing; monitor build completion, OOM events and query latency
+and adjust to measured workloads. Core services use bounded local Docker logs
+(three 10 MiB files); changed log settings take effect when containers are
+recreated. Existing deployment overrides may differ.
+
+On the current server, build/database memory and process limits were updated
+without restarting the web service, and two unused migration key-service
+containers were stopped after confirming that live callers use separate sockets.
+Their volumes were retained. Existing live log rotation was already bounded;
+the tighter rotation is saved for the next container recreation.
+
+Keep the single web worker until relay ownership is separated. Database switching
+or additional web workers do not substitute for storage and concurrency testing.
+
 ## Workload to reproduce
 
 The current agent polls every 30 seconds and has a 10-second heartbeat timeout.

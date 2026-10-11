@@ -2,6 +2,9 @@
 # Bootstrap/private operator files are never mounted in the public web service.
 services:
   key-service:
+    logging: &cipher-logging
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
     mem_limit: 512m
     memswap_limit: 512m
     ulimits:
@@ -18,6 +21,10 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER]
   cipher-postgres:
+    logging: *cipher-logging
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 128
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
@@ -34,6 +41,7 @@ services:
       timeout: 5s
       retries: 10
   cipher-runtime:
+    logging: *cipher-logging
     build:
       context: .
       dockerfile: cipher-db/Dockerfile
@@ -72,6 +80,7 @@ services:
       - ${WARDEN_CIPHER_STATE_DIRECTORY:?Set the captured private checkpoint directory}:/var/lib/warden-cipher
       - ${WARDEN_KEY_DIRECTORY:?Set the existing private key directory}/client-token:/run/secrets/warden-key-token:ro
   warden-server:
+    logging: *cipher-logging
     mem_limit: 1g
     memswap_limit: 1g
     depends_on:
@@ -90,6 +99,12 @@ services:
       - warden-cipher-socket:/run/warden-cipher:ro
       - ${WARDEN_CIPHER_CONFIG_DIRECTORY:?Set an absolute private config directory}/client-token:/run/secrets/cipher-token:ro
   build-service:
+    logging: *cipher-logging
+    # Build memory includes its tmpfs work area. Keep compilation bounded so
+    # it cannot evict or OOM the live SQL projection on a shared host.
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 256
     environment:
       WARDEN_DATABASE_MODE: ciphertext
       SUPABASE_URL: http://127.0.0.1:9
