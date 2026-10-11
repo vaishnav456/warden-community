@@ -87,6 +87,20 @@ account data and MFA-secret decryption. Authorization, consent and BYOK
 enforcement remain in place. These changes do
 not include new agent binaries or a fleet update.
 
+The agent capture source skips confirmed cursor-only DXGI acquisitions after
+its first successful snapshot and sizes fallback GDI images to the requested
+viewport before JPEG encoding. Initial snapshots, monitor changes and uncertain
+metadata still require a complete image. Applying these capture changes requires
+a separately qualified agent build and device update.
+
+Pointer movement is coalesced to one latest position per browser display frame;
+button, key and scroll actions first send the pending position. The remote
+statistics tooltip separates browser decode time, bounded queue depth, relay
+send waits and relay–device RTT. Browser–relay RTT excludes the device leg;
+frame age measures time since the last displayed update, not input latency.
+These numeric measurements reuse existing ping and quality reports without
+per-frame database writes or cached authorization.
+
 ## Security design
 
 Warden treats the control plane, endpoint agents, Home Nodes, build service, and release pipeline as separate trust boundaries. Important controls include signed commands, short-lived device certificates, organization envelope encryption, endpoint job leasing, TLS validation, and explicit organization authorization.

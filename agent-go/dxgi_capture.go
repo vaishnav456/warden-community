@@ -183,6 +183,7 @@ type dxgiCapturer struct {
 	device, context, dupl, staging unsafe.Pointer
 	width, height                  int
 	left, top                      int32
+	hasSnapshot                    bool
 }
 
 // newDXGICapturer sets up a Desktop Duplication session for the given
@@ -280,14 +281,13 @@ func newDXGICapturer(outputIndex int) (cap *dxgiCapturer, err error) {
 // grabBGRA returns one captured frame as a raw top-down BGRA buffer, plus the
 // list of regions that actually changed since the previous frame (used to
 // send partial updates instead of re-encoding the whole screen — see
-// remote_helper.go's capture loop). An empty (nil) dirty list with a nil
-// error means DXGI signalled a new frame but reported no dirty rects at all
-// — this happens for cursor-only updates with no desktop image change, and
-// should be treated like errNoNewFrame by the caller.
+// remote_helper.go's capture loop). Cursor-only updates return errNoNewFrame
+// once this capturer has supplied a snapshot. An empty dirty list with a nil
+// error requires a full frame (for example, if update metadata was unavailable).
 //
-// Returns errNoNewFrame if nothing changed on screen since the last call
-// (not a failure — Desktop Duplication only signals on actual screen
-// changes), or errAccessLost if the desktop/display mode changed and this
+// Returns errNoNewFrame if the desktop image did not change since the last
+// call (an idle timeout or pointer-only acquisition), or errAccessLost if
+// the desktop/display mode changed and this
 // capturer must be closed and recreated.
 func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err error) {
 	var frameInfo dxgiOutduplFrameInfo
@@ -306,15 +306,26 @@ func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err e
 		comRelease(resource)
 		comCall(c.dupl, 14) // ReleaseFrame
 	}()
+	// AcquireNextFrame also wakes for hardware-pointer changes. A zero
+	// desktop timestamp means the image has not changed, so copying and
+	// encoding it again only creates traffic. The first acquisition still
+	// supplies a baseline, even if only the pointer caused it to wake.
+	if c.hasSnapshot && frameInfo.LastPresentTime == 0 &&
+		frameInfo.AccumulatedFrames == 0 && frameInfo.TotalMetadataBufferSize == 0 {
+		return nil, 0, 0, nil, errNoNewFrame
+	}
+	// If this image cannot be copied, the next acquisition must retry the
+	// snapshot even when it is triggered by a cursor-only update.
+	c.hasSnapshot = false
 
 	// Must be read while this frame is still acquired (before ReleaseFrame).
 	dirty, dirtyErr := c.getDirtyRects(256)
 	moves, moveErr := c.getMoveRects(256)
-	if dirtyErr != nil || moveErr != nil {
+	if dirtyErr != nil || moveErr != nil || frameInfo.LastPresentTime == 0 {
 		// Non-fatal: fall back to treating the whole frame as dirty rather
 		// than failing the capture outright (e.g. a very fragmented change
-		// pattern exceeding the 256-rect buffer — full-frame is the right
-		// answer for that case anyway, not worth a bigger buffer/retry).
+		// pattern exceeding the 256-rect buffer). Contradictory metadata
+		// without a desktop timestamp is also uncertain; send a full image.
 		dirty = nil
 	} else {
 		dirty = captureUpdateRects(dirty, moves)
@@ -340,6 +351,7 @@ func (c *dxgiCapturer) grabBGRA() (buf []byte, w, h int, dirty []dxgiRect, err e
 		src := unsafe.Slice((*byte)(unsafe.Pointer(mapped.PData+uintptr(y)*uintptr(mapped.RowPitch))), rowBytes)
 		copy(out[y*rowBytes:(y+1)*rowBytes], src)
 	}
+	c.hasSnapshot = true
 	return out, c.width, c.height, dirty, nil
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"image/jpeg"
 	"runtime"
 	"strings"
 	"testing"
@@ -16,9 +17,11 @@ type fakeGDICapture struct {
 	threadID      uint32
 	events        []string
 	operations    []uintptr
+	regions       []monitorRect
 	readLines     []uintptr
 	readErrors    []error
 	black         bool
+	splitColors   bool
 	copyFails     []bool
 	restoreFails  bool
 	reads, copies int
@@ -66,6 +69,8 @@ func (f *fakeGDICapture) call(proc *windows.LazyProc, args ...uintptr) (uintptr,
 			f.t.Fatal("BitBlt destination bitmap was not selected")
 		}
 		f.operations = append(f.operations, args[8])
+		left, top := int32(args[6]), int32(args[7])
+		f.regions = append(f.regions, monitorRect{left, top, left + int32(args[3]), top + int32(args[4])})
 		if f.copies < len(f.copyFails) && f.copyFails[f.copies] {
 			result = 0
 			err = windows.ERROR_INVALID_PARAMETER
@@ -106,7 +111,14 @@ func (f *fakeGDICapture) readBitmap(dc, bitmap uintptr, buf []byte, bi *bitmapIn
 	}
 	if !f.black {
 		for i := 0; i < len(buf); i += 4 {
-			copy(buf[i:i+4], []byte{20, 40, 80, 255})
+			pixel := []byte{20, 40, 80, 255}
+			if f.splitColors {
+				pixel = []byte{200, 20, 20, 255}
+				if (i/4)%int(bi.biWidth) >= int(bi.biWidth)/2 {
+					pixel = []byte{20, 20, 200, 255}
+				}
+			}
+			copy(buf[i:i+4], pixel)
 		}
 	}
 	result := uintptr(-bi.biHeight)
@@ -217,5 +229,79 @@ func TestGDICaptureInvalidDimensionsDoNotAllocate(t *testing.T) {
 	}
 	if len(fake.events) != 0 {
 		t.Fatal("invalid dimensions allocated GDI handles")
+	}
+}
+
+func TestGDIViewportJPEGUsesNativeCaptureAndEncodedViewport(t *testing.T) {
+	// Offset bounds include a monitor to the left of the primary display.
+	// Encoding resolution must not change the source rectangle/input space.
+	region := monitorRect{Left: -1200, Top: 100, Right: -1120, Bottom: 140}
+	for _, tc := range []struct {
+		name                       string
+		viewW, viewH, wantW, wantH int
+		black                      bool
+	}{
+		{"wide-short", 120, 10, 20, 10, false},
+		{"tall-narrow", 20, 120, 20, 10, false},
+		{"near-native", 79, 40, 79, 39, false},
+		{"native", 0, 0, 80, 40, false},
+		{"no-upscale", 160, 80, 80, 40, false},
+		{"black", 40, 20, 40, 20, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeGDICapture{t: t, black: tc.black}
+			frame, w, h, err := captureGDIJPEGRegion(60, region, tc.viewW, tc.viewH, fake.call, fake.readBitmap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := jpeg.Decode(bytes.NewReader(frame))
+			if err != nil {
+				t.Fatalf("invalid JPEG: %v", err)
+			}
+			if w != tc.wantW || h != tc.wantH || decoded.Bounds().Dx() != w || decoded.Bounds().Dy() != h {
+				t.Fatalf("encoded %dx%d/%v, want %dx%d", w, h, decoded.Bounds(), tc.wantW, tc.wantH)
+			}
+			if len(fake.regions) == 0 {
+				t.Fatal("no GDI capture performed")
+			}
+			for _, captured := range fake.regions {
+				if captured != region {
+					t.Fatalf("viewport changed native monitor capture: %v", captured)
+				}
+			}
+			r, g, b, _ := decoded.At(w/2, h/2).RGBA()
+			if tc.black {
+				if r > 2*257 || g > 2*257 || b > 2*257 {
+					t.Fatalf("black desktop changed during resize/encoding: %d,%d,%d", r, g, b)
+				}
+			} else if r < 70*257 || r > 90*257 || g < 30*257 || g > 50*257 || b < 10*257 || b > 30*257 {
+				t.Fatalf("BGRA channels changed during resize/encoding: %d,%d,%d", r, g, b)
+			}
+		})
+	}
+}
+
+func TestGDIViewportCaptureFailureDoesNotEncodePartialReadback(t *testing.T) {
+	fake := &fakeGDICapture{t: t, readLines: []uintptr{1, 1}}
+	frame, w, h, err := captureGDIJPEGRegion(60, monitorRect{0, 0, 4, 3}, 2, 2, fake.call, fake.readBitmap)
+	if err == nil || frame != nil || w != 0 || h != 0 {
+		t.Fatalf("failed readback became a frame: %dx%d error %v", w, h, err)
+	}
+}
+
+func TestGDIViewportJPEGResizesTheEntireNativeMonitor(t *testing.T) {
+	fake := &fakeGDICapture{t: t, splitColors: true}
+	frame, w, h, err := captureGDIJPEGRegion(60, monitorRect{-80, 50, 0, 90}, 20, 10, fake.call, fake.readBitmap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(frame))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftR, _, leftB, _ := decoded.At(w/4, h/2).RGBA()
+	rightR, _, rightB, _ := decoded.At(w*3/4, h/2).RGBA()
+	if leftB < leftR+80*257 || rightR < rightB+80*257 {
+		t.Fatalf("viewport cropped instead of resizing whole monitor: left R/B %d/%d, right R/B %d/%d", leftR, leftB, rightR, rightB)
 	}
 }

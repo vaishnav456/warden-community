@@ -159,22 +159,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 		sizeMu.Lock()
 		rw, rh := requestedW, requestedH
 		sizeMu.Unlock()
-		if rw <= 0 || rh <= 0 || rw >= nativeW || rh >= nativeH {
-			return nativeW, nativeH
-		}
-		scale := float64(rw) / float64(nativeW)
-		if s := float64(rh) / float64(nativeH); s < scale {
-			scale = s
-		}
-		w := int(float64(nativeW) * scale)
-		h := int(float64(nativeH) * scale)
-		if w < 1 {
-			w = 1
-		}
-		if h < 1 {
-			h = 1
-		}
-		return w, h
+		return remoteCaptureSize(nativeW, nativeH, rw, rh)
 	}
 	sw, sh := monitors[0].width(), monitors[0].height()
 	if err := writeMsg('S', []byte(fmt.Sprintf("%dx%d", sw, sh))); err != nil {
@@ -275,6 +260,9 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 				// dirty rectangle is meaningful only on top of a full frame from
 				// that same output, so force a new baseline when switching back.
 				captureState.reset()
+				if dxgi != nil {
+					dxgi.hasSnapshot = false
+				}
 				lastSelectedMonitor = selectedIndex
 			}
 			// EnumDisplayMonitors and DXGI EnumOutputs do not promise the same
@@ -399,7 +387,13 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 				// Even if GDI also fails, the next delta cannot assume the
 				// browser received those changes; require a fresh full image.
 				captureState.invalidateBaseline()
-				frame, _, _, gdiErr := grabJPEGRegion(60, region)
+				if dxgiMatchesSelection {
+					dxgi.hasSnapshot = false
+				}
+				sizeMu.Lock()
+				rw, rh := requestedW, requestedH
+				sizeMu.Unlock()
+				frame, _, _, gdiErr := grabJPEGRegionForViewport(60, region, rw, rh)
 				if gdiErr != nil {
 					// Previously swallowed entirely: a persistent capture
 					// failure (e.g. BitBlt/GetDIBits erroring on this

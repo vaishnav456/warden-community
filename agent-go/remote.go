@@ -433,16 +433,7 @@ func grabJPEG(quality int) ([]byte, int, int, error) {
 }
 
 func grabJPEGRegion(quality int, region monitorRect) ([]byte, int, int, error) {
-	buf, err := captureGDIRegion(region, systemGDICaptureCall, systemGDIBitmapRead)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	w, h := region.width(), region.height()
-	frame, err := encodeBGRAJPEG(buf, w, h, quality)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	return frame, w, h, nil
+	return grabJPEGRegionForViewport(quality, region, 0, 0)
 }
 
 // encodeBGRAJPEG converts a raw top-down BGRA buffer (the format both the
