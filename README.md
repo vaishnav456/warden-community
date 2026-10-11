@@ -156,6 +156,21 @@ when populated fields are not uniformly versioned ciphertext. Valid older
 ciphertext needs authenticated checks through Warden, and empty tables do not
 prove that future writes will be encrypted.
 
+## Trusted admin and all-table encryption
+
+The separate [trusted admin application](trusted-admin/README.md) creates and
+verifies encrypted copies of every application table, including full rows and
+table definitions. It has a private localhost interface and can move from the
+Warden host to a separate trusted machine without changing the public server.
+The public application receives no keys or decryption API for these copies.
+
+This is a migration workspace, not a completed live migration. Existing Warden
+tables and agents still use the current server workflows. Client-only reporting,
+command signing, enrollment and automation must replace those workflows before
+live cutover. Running the admin app on the same host also leaves unlocked data
+accessible to a host attacker; move it to a trusted machine for host isolation.
+See its guide for installation, verification, portability and the cutover checks.
+
 ## Optional agent modules
 
 See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release. Community remains application-only, with no landing page or hosted subscriptions.

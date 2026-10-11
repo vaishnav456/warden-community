@@ -1,4 +1,4 @@
-# Secrets — never commit
+# Secrets â€” never commit
 .env
 .env.*
 !.env.example
@@ -70,3 +70,9 @@ htmlcov/
 # OS
 Thumbs.db
 .DS_Store
+
+# Trusted admin keys, encrypted migration copies and local checkpoints.
+/trusted-admin/private/
+*.warden-vault
+*.warden-checkpoint
+*.warden-archive
