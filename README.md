@@ -207,6 +207,20 @@ prove that future writes will be encrypted.
 
 ## Trusted admin and all-table encryption
 
+For organizations with automatic agent updates enabled, a verified newer release
+can supersede an unfinished campaign for an older version. The old campaign is
+marked cancelled with a supersession reason; its targets, job records and history
+remain intact. Existing update jobs finish before the normal updater considers
+the newer release. Explicit pauses, failed updates, failed canaries and rollbacks
+remain protected. A known worker-error pause is released only after every
+referenced job has completed successfully.
+
+The newer release uses the normal updater's platform, entitlement, remote-session,
+recent-update and update/reinstall checks. It does not inherit the old campaign's
+canary approval or batching schedule. This follows the organization's automatic
+latest-release policy; organizations requiring each release to complete a reviewed
+campaign should keep automatic updates disabled. The pre-dispatch update/reinstall
+checks do not create an atomic lock against concurrent manual reinstall requests.
 The separate [trusted admin application](trusted-admin/README.md) creates and
 verifies encrypted copies of every application table, including full rows and
 table definitions. It has a private localhost interface and can move from the

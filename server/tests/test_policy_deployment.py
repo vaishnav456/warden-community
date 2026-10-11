@@ -119,6 +119,7 @@ class ScheduledJobRaceTests(unittest.TestCase):
                mock.patch.object(scheduler.db, "get_latest_completed_build", return_value=build), \
                mock.patch("services.agent_rollouts.campaigns", return_value=[]), \
                mock.patch.object(scheduler.db, "get_active_remote_session", return_value=None), \
+               mock.patch.object(scheduler.db, "has_inflight_job", return_value=False), \
              mock.patch.object(scheduler, "update_payload", return_value={"version": "2.6.37"}), \
              mock.patch("services.fleet_reads.update_blockers", return_value={"endpoint-1"}) as recent, \
              mock.patch.object(scheduler.db, "create_system_job_once") as create_once:

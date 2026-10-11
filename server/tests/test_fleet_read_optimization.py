@@ -143,6 +143,7 @@ class FleetReadTests(unittest.TestCase):
              mock.patch('services.fleet_reads.update_blockers',return_value={'0'}), \
              mock.patch.object(db,'get_latest_completed_build',return_value=build), \
              mock.patch.object(db,'get_active_remote_session',return_value=None) as remote, \
+             mock.patch.object(db,'has_inflight_job',return_value=False), \
              mock.patch.object(scheduler,'update_payload',return_value={'sha256':'a'*64}) as payload, \
              mock.patch('services.fleet_tools.defer_updates',return_value=False), \
              mock.patch.object(db,'create_system_job_once',return_value={'id':'job'}) as create:
@@ -150,6 +151,51 @@ class FleetReadTests(unittest.TestCase):
         self.assertEqual(payload.call_count,1)
         self.assertEqual(remote.call_count,4)
         self.assertEqual(create.call_count,4)
+
+    def test_supersession_rereads_protection_and_preserves_every_device_dispatch_gate(self):
+        companies=[dict(id='tenant',is_active=True,auto_update_agents=True)]
+        names=('eligible','recent','remote','updating','reinstalling','deferred','human-paused')
+        endpoints=[dict(id=name,company_id='tenant',branch_id='branch',status='online',platform='windows',agent_version='2.6.59') for name in names]
+        rows=[dict(id='old',status='expanding',targets={name:{} for name in names})]
+        created=[]
+        def reconcile(current):
+            rows[0]['status']='cancelled'
+            # A human can create a new pause after the supersession read.
+            rows.append(dict(id='human',status='paused',targets={'human-paused':{}}))
+            return {'old'}
+        def campaign_read(**kwargs):
+            return [row for row in rows if row['status'] in {'canary','expanding','paused','rolling_back'}]
+        def inflight(endpoint,kind):
+            return (endpoint=='updating' and kind=='UPDATE_AGENT') or (endpoint=='reinstalling' and kind=='REINSTALL_AGENT')
+        def create(company,branch,endpoint,kind,payload):
+            created.append(dict(endpoint=endpoint,type=kind,version=payload['version']))
+            return dict(id='queued')
+        build=dict(id='new',status='completed',agent_version='2.6.60',sha256='a'*64,target_platform='windows-amd64')
+        with mock.patch.object(db,'get_auto_update_company',return_value=companies[0]), \
+             mock.patch('services.agent_rollouts.reconcile_obsolete_campaigns',side_effect=reconcile), \
+             mock.patch('services.agent_rollouts.campaigns',side_effect=campaign_read), \
+             mock.patch.object(db,'get_endpoints',return_value=endpoints), \
+             mock.patch('services.fleet_reads.update_blockers',return_value={'recent'}), \
+             mock.patch.object(db,'get_latest_completed_build',return_value=build), \
+             mock.patch.object(db,'get_active_remote_session',side_effect=lambda key:dict(id='session') if key=='remote' else None), \
+             mock.patch.object(db,'has_inflight_job',side_effect=inflight), \
+             mock.patch.object(scheduler,'update_payload',return_value={'version':'2.6.60'}), \
+             mock.patch('services.fleet_tools.defer_updates',side_effect=lambda ep:ep['id']=='deferred'), \
+             mock.patch.object(db,'create_system_job_once',side_effect=create):
+            scheduler._check_auto_updates()
+        self.assertEqual(created,[dict(endpoint='eligible',type='UPDATE_AGENT',version='2.6.60')])
+        self.assertEqual(rows[0]['status'],'cancelled')
+        self.assertEqual(rows[1]['status'],'paused')
+
+    def test_reconciliation_failure_keeps_every_endpoint_protected(self):
+        company=dict(id='tenant',is_active=True,auto_update_agents=True)
+        with mock.patch.object(db,'get_auto_update_company',return_value=company), \
+             mock.patch('services.agent_rollouts.reconcile_obsolete_campaigns',side_effect=TimeoutError('Database response unavailable')), \
+             mock.patch.object(db,'create_system_job_once') as create, \
+             mock.patch.object(scheduler,'update_payload') as payload:
+            scheduler._check_auto_updates()
+        create.assert_not_called()
+        payload.assert_not_called()
 
     def test_split_roles_require_explicit_opt_in(self):
         with mock.patch.dict(os.environ,{},clear=True):

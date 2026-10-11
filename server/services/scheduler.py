@@ -123,10 +123,13 @@ def _check_auto_updates():
     builds = {}
     payloads = {}
 
-    from services.agent_rollouts import campaigns, ACTIVE
+    from services.agent_rollouts import campaigns, ACTIVE, reconcile_obsolete_campaigns
     # A paused campaign must also block ordinary auto-updates: otherwise its
     # failure stop/canary boundary could be bypassed by this scheduler.
     try:
+        reconcile_obsolete_campaigns(companies)
+        # Read the protected set again after reconciliation, including any
+        # newly created or explicitly paused campaign from another worker.
         protected = {key for row in campaigns(active_only=True) if row['status'] in ACTIVE for key in row['targets']}
     except Exception as exc:
         log.warning('Cannot verify rollout boundaries; auto-updates deferred: %s', exc)
@@ -185,6 +188,9 @@ def _check_auto_updates():
                 payload = dict(payloads[target])
                 from services.fleet_tools import defer_updates
                 if defer_updates(dict(ep,company_id=company_id)):
+                    continue
+                if db.has_inflight_job(ep["id"], "UPDATE_AGENT") \
+                        or db.has_inflight_job(ep["id"], "REINSTALL_AGENT"):
                     continue
                 created = db.create_system_job_once(
                     company_id, ep.get("branch_id"), ep["id"], "UPDATE_AGENT", payload,
