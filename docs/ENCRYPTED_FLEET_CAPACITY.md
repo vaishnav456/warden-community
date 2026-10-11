@@ -109,6 +109,37 @@ storage, reviewed reductions in heartbeat write fan-out and isolated dataset
 shards against the full workload before increasing fleet size. Never disable
 persistent-store or checkpoint flushes to improve the benchmark score.
 
+### Live response and relay measurements
+
+After the native rollout, the measured production sign-in POST took 5.580
+seconds and the following dashboard GET took 5.680 seconds. Seven fresh
+successful heartbeats took 1.008–4.726 seconds, with no response exceeding the
+installed agent's 10-second timeout in that small sample. Native SQL reads
+averaged 2–8 ms in bounded runtime diagnostics; durable write batches still
+spent hundreds of milliseconds in persistence. These are observations of the
+current small fleet, not proof of an infrastructure capacity or latency SLA.
+
+The ciphertext database and private checkpoint use the same ext4 virtual
+device. An isolated `pg_test_fsync` probe on the development filesystem showed
+large variability: one 8 KiB `fdatasync` write averaged 87 ms, while two writes
+averaged 162 ms; `fsync` averaged roughly 290–300 ms. `open_datasync` was faster
+for one write but slower for two. Keep the existing durable WAL settings until
+a representative benchmark justifies a change. CPU and memory availability do
+not remove these flush waits. A separate low-latency durable disk for the
+ciphertext store and checkpoint is the principal infrastructure candidate.
+
+Remote setup also waits for the installed agent's 30-second poll: a fresh
+session's job waited 14.836 seconds for pickup and completed about three seconds
+later. Reducing that wait needs a separately tested command wake-up channel or
+agent polling change; it cannot be fixed by adding HTTP workers alone. Streaming
+does not make a database commit for each frame. The browser frame queue now
+coalesces obsolete updates before a newer full snapshot, bounds pending frames
+and bytes, and waits for a full baseline after overflow or decode failure.
+JPEG/encrypted relay traffic no longer negotiates a second Deflate compression
+layer. These preserve authorization and consent; endpoint capture and installed
+agent binaries remain separate deployment items. Idle frame age measures time
+since the last drawn update, not end-to-end input latency.
+
 ## Implementation sequence
 
 1. Profile SQL execution, runtime queueing, custody calls, encrypted commits and
@@ -161,3 +192,6 @@ server URL; this design does not introduce hosted platform or trial features.
 - [Redis persistence and durability choices](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
 - [Cassandra CQL data manipulation and query restrictions](https://cassandra.apache.org/doc/stable/cassandra/developing/cql/dml.html)
 - [Node.js bounded DEFLATE decompression](https://nodejs.org/api/zlib.html)
+- [PostgreSQL WAL flush configuration and durability](https://www.postgresql.org/docs/16/runtime-config-wal.html)
+- [PostgreSQL filesystem flush diagnostic](https://www.postgresql.org/docs/16/pgtestfsync.html)
+- [WebSocket compression CPU and memory tradeoffs](https://websockets.readthedocs.io/en/stable/topics/compression.html)
