@@ -194,7 +194,7 @@ class FleetReadTests(unittest.TestCase):
         self.assertEqual(len(data['endpoints']),1)
         self.assertEqual(data['recent_jobs'][0]['_label'],'Other')
         self.assertEqual(data['recent_alerts'][0]['_label'],'Other')
-        extra.assert_called_once_with('tenant',branch_id=None,endpoint_ids=['e2'])
+        extra.assert_called_once_with('tenant',branch_id=None,endpoint_ids=['e2'],labels_only=True)
         all_rows.assert_not_called()
 
 

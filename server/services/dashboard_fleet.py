@@ -3,6 +3,17 @@ import json
 import urllib.error
 import db
 
+# The dashboard cards need labels, last metrics and precomputed fleet flags.
+# Keep bulk/private device material out of the per-field custody calls.
+ENDPOINT_CARD_FIELDS = frozenset({
+    'id', 'company_id', 'branch_id', 'platform', 'hostname', 'display_name',
+    'os_name', 'status', 'last_seen', 'heartbeat_encrypted',
+    'cpu_pct', 'ram_used_pct', 'disk_free_gb', 'agent_memory_mb',
+    'agent_uptime_sec', 'net_sent_mbps', 'net_recv_mbps',
+    '_online', '_fresh', '_agent_update', '_agent_unknown', '_encryption',
+    '_patch_attention', '_offline_age',
+})
+
 
 def missing_function(error):
     if not isinstance(error, urllib.error.HTTPError) or error.code != 404:
@@ -45,6 +56,7 @@ def snapshot(company_id, branch_id, now):
     for row in result['endpoints']:
         if not isinstance(row, dict) or str(row.get('company_id')) != str(company_id) or (branch_id and str(row.get('branch_id')) != str(branch_id)):
             raise RuntimeError('Invalid fleet sample ownership')
-        decrypted.append(db._decrypt_endpoint(row, company))
+        card = {field: value for field, value in row.items() if field in ENDPOINT_CARD_FIELDS}
+        decrypted.append(db._decrypt_endpoint(card, company))
     result['endpoints'] = decrypted
     return result
