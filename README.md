@@ -59,6 +59,13 @@ Windows currently has the broadest management coverage. Linux, macOS, Warden Hom
 
 See [LICENSING.md](LICENSING.md) for the complete boundary.
 
+Read-only dashboard routines use the existing memory-based SQL read workers.
+Related login writes, and heartbeat updates with sampled metrics, use one
+encrypted atomic request to reduce durable flushes. Notification counts are
+reused within a single request and invalidated by writes. Session, replay and
+vault checks retain their existing enforcement; persistent encryption and
+durability remain enabled.
+
 ## Security design
 
 Warden treats the control plane, endpoint agents, Home Nodes, build service, and release pipeline as separate trust boundaries. Important controls include signed commands, short-lived device certificates, organization envelope encryption, endpoint job leasing, TLS validation, and explicit organization authorization.
@@ -211,7 +218,7 @@ Hosted development and production completed verified 86-table migrations on
 2026-10-11 (4,663 and 595,099 records in their final snapshots), with full
 encrypted rollback restoration and application/interface checks. Validation
 includes native concurrency, grouped durability, recovery and ciphertext-store
-integration tests and 725 Community server regressions. The live query engine
+integration tests and 742 Community server regressions. The live query engine
 uses private volatile PostgreSQL with pooled readers and batched encrypted
 writes. Remote streaming avoids redundant JPEG/opaque traffic compression and bounds queued frames and bytes, resynchronizing after overflow or corruption; see [fleet capacity](docs/ENCRYPTED_FLEET_CAPACITY.md) for workload limits. Community requires its own verified migration and deployment;
 this source update does not claim a Community live cutover. It preserves Community's configured server URL,

@@ -37,7 +37,7 @@ def issue_access_token(admin):
     return jwt.encode(payload, config.SECRET_KEY, algorithm="HS256")
 
 
-def issue_refresh_token(admin_id, ip, user_agent):
+def issue_refresh_token(admin_id, ip, user_agent, *, record_login=False):
     import secrets
     token = secrets.token_urlsafe(48)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -47,8 +47,9 @@ def issue_refresh_token(admin_id, ip, user_agent):
     absolute_expires_at = (
         datetime.now(timezone.utc) + timedelta(hours=config.SESSION_ABSOLUTE_HOURS)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    options = {"record_login": True} if record_login else {}
     db.create_refresh_token(
-        admin_id, token_hash, ip, user_agent, expires_at, absolute_expires_at
+        admin_id, token_hash, ip, user_agent, expires_at, absolute_expires_at, **options
     )
     return token
 

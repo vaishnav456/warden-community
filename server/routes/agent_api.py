@@ -9,6 +9,7 @@ import io
 import ipaddress
 import json
 import math
+import os
 import re
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -604,6 +605,12 @@ def heartbeat():
     else:
         topology_telemetry = None
 
+    from services.load_control import controller as load_controller
+    # Keep the existing history sampling policy. In ciphertext mode, prepare
+    # the selected sample with the live update so both use one durable commit.
+    cipher_heartbeat = bool(os.environ.get("CIPHER_SOCKET"))
+    include_metric = bool(cipher_heartbeat and cpu_pct is not None
+                          and load_controller.allow_metric(endpoint["id"]))
     db.update_endpoint_heartbeat(
         endpoint_id=endpoint["id"],
         cpu_pct=cpu_pct,
@@ -624,6 +631,7 @@ def heartbeat():
         net_recv_mbps=_metric(body.get("net_recv_mbps")),
         topology_telemetry=topology_telemetry,
         integrity_report=integrity_report,
+        include_metric=include_metric,
     )
 
     if valid_interactive_user and interactive_user:
@@ -651,8 +659,8 @@ def heartbeat():
             current_app.logger.exception("BitLocker status update deferred for endpoint %s", endpoint["id"])
 
     # Record metrics
-    from services.load_control import controller as load_controller
-    if cpu_pct is not None and load_controller.allow_metric(endpoint["id"]):
+    if (not cipher_heartbeat and cpu_pct is not None
+            and load_controller.allow_metric(endpoint["id"])):
         db.insert_metric(
             endpoint["id"],
             cpu_pct,

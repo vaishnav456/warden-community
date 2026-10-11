@@ -1,6 +1,14 @@
 """Notifications database operations."""
 
 
+def invalidate_request_cache():
+    from flask import g, has_request_context
+    if has_request_context():
+        # Any mutation may trigger a notification. The transport calls this
+        # before attempting it because a failed response can hide a commit.
+        g.pop('_db_unread_count_cache', None)
+
+
 def create_notification(admin_id, company_id, title, message, notif_type="info", link=None):
     import db as _db
     _db._post("notifications", {
@@ -21,7 +29,19 @@ def get_notifications(admin_id, unread_only=False, limit=30):
 
 def count_unread_notifications(admin_id):
     import db as _db
-    return _db._count(f"notifications?admin_id=eq.{_db._q(admin_id)}&is_read=eq.false&select=id")
+    from flask import g, has_request_context
+    # The route and template often need the same badge count. Share only this
+    # integer for one request; authentication and vault state are never cached.
+    cache = None
+    key = str(admin_id)
+    if has_request_context():
+        cache = g.setdefault('_db_unread_count_cache', {})
+        if key in cache:
+            return cache[key]
+    count = _db._count(f"notifications?admin_id=eq.{_db._q(admin_id)}&is_read=eq.false&select=id")
+    if cache is not None:
+        cache[key] = count
+    return count
 
 def mark_notifications_read(admin_id):
     import db as _db

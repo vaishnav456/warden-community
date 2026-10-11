@@ -24,6 +24,8 @@ class RowPage(list):
 
 
 def _open(path, method, schema, data=_NO_BODY, prefer=None, rpc=False):
+    if method in {'POST', 'PATCH', 'DELETE'}:
+        _invalidate_request_reads()
     if os.environ.get('WARDEN_DATABASE_MODE') == 'ciphertext' and not os.environ.get('CIPHER_SOCKET'):
         raise RuntimeError('Ciphertext database configuration is incomplete')
     if os.environ.get('CIPHER_SOCKET'):
@@ -54,6 +56,24 @@ def _open(path, method, schema, data=_NO_BODY, prefer=None, rpc=False):
                              int(os.environ.get('WARDEN_DB_HTTP_POOL_SIZE', '8')))
         return _pool.open(request)
     return db.urllib.request.urlopen(request, timeout=15, context=db._SSL_CTX)
+
+
+def _invalidate_request_reads():
+    from database.notifications import invalidate_request_cache
+    invalidate_request_cache()
+    from flask import g, has_request_context
+    if has_request_context():
+        g.pop('_db_company_cache', None)
+
+
+@observe_database
+def batch(operations):
+    """Use a single durable ciphertext transaction for coupled writes."""
+    _invalidate_request_reads()
+    if not os.environ.get('CIPHER_SOCKET'):
+        raise RuntimeError('Atomic ciphertext batch requires the private runtime')
+    from database.cipher_transport import open_batch
+    return open_batch(operations)
 
 
 @observe_database
