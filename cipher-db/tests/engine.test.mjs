@@ -136,6 +136,17 @@ test('sequence-only changes persist and storage tampering during a running sessi
   await assert.rejects(f.engine.audit());await assert.rejects(f.engine.execute('SELECT 1'));
   await f.engine.close();
 });
+test('read-only transactions preserve revision and reject writes and sequence changes',async()=>{
+  const f=await fixture();
+  try{
+    const revision=(await f.store.head()).revision;
+    assert.equal((await f.engine.transaction(tx=>tx.query('SELECT count(*)::int AS n FROM endpt.parents'),{readOnly:true})).rows[0].n,0);
+    await assert.rejects(f.engine.transaction(tx=>tx.query("INSERT INTO endpt.parents(name) VALUES('blocked')"),{readOnly:true}));
+    await assert.rejects(f.engine.transaction(tx=>tx.query("SELECT nextval('endpt.parents_id_seq')"),{readOnly:true}));
+    assert.equal((await f.store.head()).revision,revision);
+    assert.equal((await f.engine.execute("INSERT INTO endpt.parents(name) VALUES('first') RETURNING id::text")).rows[0].id,'1');
+  }finally{await f.engine.close();}
+});
 test('application role retains audit immutability and cannot access the private journal',async()=>{
   const store=new MemoryCipherStore(),box=new TestBox(),checkpoint=new MemoryCheckpoint(),dataset=randomUUID();
   const engine=await CipherDatabase.create(store,box,checkpoint,dataset,`CREATE ROLE service_role;

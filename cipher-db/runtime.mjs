@@ -19,7 +19,29 @@ await connection.acquireWriter(dataset);
 const box=new KeyServiceBox(process.env.KEY_SERVICE_SOCKET,process.env.KEY_SERVICE_TOKEN_FILE);
 const engine=await CipherDatabase.open(new PostgresCipherStore(connection,dataset),box,new FileCheckpoint(process.env.CIPHER_CHECKPOINT),dataset);
 const rest=new RestCompiler(engine);
-const auditTimer=setInterval(()=>engine.audit().catch(()=>console.error('Encrypted storage audit failed; runtime closed')),300000);
+// Bounded aggregate timings contain no SQL, identities, paths or data.
+let timings={read:{count:0,queue:0,guard:0,query:0,persist:0},write:{count:0,queue:0,guard:0,query:0,persist:0}};
+engine.observeTransaction=sample=>{
+  const group=timings[sample.readOnly?'read':'write'];group.count++;
+  for(const name of ['queue','guard','query','persist'])group[name]+=sample[name];
+};
+const timingTimer=setInterval(()=>{
+  for(const [kind,group] of Object.entries(timings))if(group.count){
+    const mean={};for(const name of ['queue','guard','query','persist'])mean[name+'_ms']=Math.round(group[name]/group.count);
+    console.log(JSON.stringify({event:'encrypted_query_timings',kind,count:group.count,...mean}));
+  }
+  timings={read:{count:0,queue:0,guard:0,query:0,persist:0},write:{count:0,queue:0,guard:0,query:0,persist:0}};
+},30000);timingTimer.unref();
+let auditing=false;
+async function audit(){
+  if(auditing)return;auditing=true;const start=Date.now();
+  try{await engine.audit();console.log(JSON.stringify({event:'encrypted_storage_audit',milliseconds:Date.now()-start,status:'verified'}));}
+  catch{console.error('Encrypted storage audit failed; runtime closed');}
+  finally{auditing=false;}
+}
+const auditTimer=setInterval(audit,300000);
+// A trusted Linux operator can request a scan without restarting the service.
+process.on('SIGUSR2',audit);
 auditTimer.unref();
 const used=new Map(),started=Date.now();
 function authorized(req){const supplied=Buffer.from(req.headers.authorization||''),expected=Buffer.from('Bearer '+token);return supplied.length===expected.length&&timingSafeEqual(supplied,expected);}
@@ -53,7 +75,7 @@ try{const entry=await lstat(socket);if(!entry.isSocket())throw new Error('Invali
 catch(error){if(error.code!=='ENOENT')throw error;}
 await new Promise((resolve,reject)=>{server.once('error',()=>reject(new Error('Private runtime socket unavailable')));server.listen(socket,resolve);});
 await chmod(socket,0o660);
-async function stop(){clearInterval(auditTimer);server.close();await engine.close();await connection.close();await unlink(socket).catch(()=>{});}
+async function stop(){clearInterval(auditTimer);clearInterval(timingTimer);server.close();await engine.close();await connection.close();await unlink(socket).catch(()=>{});}
 process.once('SIGTERM',()=>stop().then(()=>process.exit(0)));
 process.once('SIGINT',()=>stop().then(()=>process.exit(0)));
 console.log('Encrypted application runtime ready');

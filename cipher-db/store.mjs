@@ -1,4 +1,6 @@
 import { cipherParts } from './crypto.mjs';
+import {member,hex} from './integrity.mjs';
+import {setImmediate as yieldTurn} from 'node:timers/promises';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export function identifier(value) {
@@ -45,6 +47,41 @@ export class PostgresCipherStore {
         collections.set(id, records);
       }
       return {revision:header.revision, manifest:header.manifest, collections};
+    });
+  }
+  async auditSnapshot(capture){
+    if(!this.connection.snapshot)throw new Error('Independent audit snapshot required');
+    return this.connection.snapshot(async tx=>{
+      // First snapshot read and expected digests are captured under the writer
+      // mutex; afterwards writes can proceed while this stable snapshot scans.
+      const expected=await capture(async()=>{
+        const result=await tx.query('SELECT revision,manifest FROM warden_cipher.head WHERE id=$1',[this.dataset]);
+        if(result.rows.length!==1)throw new Error('Missing encrypted head');
+        identifier(result.rows[0].revision);ciphertext(result.rows[0].manifest);return result.rows[0];
+      });
+      const unexpected=await tx.query("SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' AND n.nspname<>'information_schema' AND c.relkind IN('r','p','m','f') AND NOT(n.nspname='warden_cipher' AND c.relkind='r' AND (c.relname='head' OR c.relname ~ '^r_[0-9a-f]{32}$')) LIMIT 1");
+      if(unexpected.rows.length)throw new Error('Unexpected persistent relation');
+      const names=(await tx.query("SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='warden_cipher' AND c.relkind='r' AND c.relname ~ '^r_[0-9a-f]{32}$'")).rows;
+      const wanted=new Set(expected.map(item=>'r_'+identifier(item.id).replaceAll('-','')));
+      if(names.length!==wanted.size||names.some(item=>!wanted.has(item.relname)))throw new Error('Storage table membership changed');
+      for(const item of expected){
+        await tx.query('DECLARE cipher_audit_cursor NO SCROLL CURSOR FOR SELECT id,payload FROM '+table(item.id));
+        let count=0,sum=0n;
+        for(;;){
+          const batch=(await tx.query('FETCH FORWARD 256 FROM cipher_audit_cursor')).rows;
+          if(!batch.length)break;
+          for(const row of batch){
+            if(typeof row.payload!=='string'||!row.payload.startsWith('wdb1:')||row.payload.length>192*1024*1024)throw new Error('Ciphertext required');
+            // The authenticated digest binds every byte already validated at
+            // startup/commit; scanning does not need to decode every envelope.
+            sum+=member(identifier(row.id),row.payload);count++;
+          }
+          await yieldTurn();
+        }
+        await tx.query('CLOSE cipher_audit_cursor');
+        if(count!==item.count||hex(sum)!==item.digest)throw new Error('Encrypted record integrity changed');
+      }
+      return true;
     });
   }
   async initialize(manifest, revision, collections) {

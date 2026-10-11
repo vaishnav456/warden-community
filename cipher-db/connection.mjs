@@ -5,6 +5,7 @@ export async function connect(path) {
   const config=JSON.parse(await readFile(path,'utf8'));
   const client=new pg.Client({...config,application_name:'warden-cipher-store',connectionTimeoutMillis:10000});
   let healthy=true;
+  const readers=new Set();
   client.on('error',()=>{healthy=false;}); // No connection errors/DSNs are logged.
   await client.connect();
   const query=(sql,args)=>{if(!healthy)throw new Error('Ciphertext storage unavailable');return client.query(sql,args);};
@@ -18,6 +19,17 @@ export async function connect(path) {
       try {await query('BEGIN');const result=await callback({query});await query('COMMIT');return result;}
       catch(error){try{await query('ROLLBACK');}catch{}throw error;}
     },
-    close:()=>client.end(),
+    async snapshot(callback){
+      if(!healthy)throw new Error('Ciphertext storage unavailable');
+      const reader=new pg.Client({...config,application_name:'warden-cipher-audit',connectionTimeoutMillis:10000});
+      readers.add(reader);reader.on('error',()=>{});
+      try{
+        await reader.connect();await reader.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+        const result=await callback({query:(sql,args)=>reader.query(sql,args)});
+        await reader.query('COMMIT');return result;
+      }catch(error){try{await reader.query('ROLLBACK');}catch{}throw error;}
+      finally{readers.delete(reader);await reader.end();}
+    },
+    close:async()=>{await Promise.allSettled([...readers].map(reader=>reader.end()));await client.end();},
   };
 }

@@ -1,22 +1,17 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { PGlite, types } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { sealDocument, unsealDocument, rowPurpose, manifestPurpose } from './crypto.mjs';
 import { identifier } from './store.mjs';
 import { stamp } from './checkpoint.mjs';
+import {member,hex,integrity} from './integrity.mjs';
 
 const PRIVATE = '_warden_private_runtime';
 const quote = value => '"' + value.replaceAll('"','""') + '"';
 const relation = table => quote(table.schema) + '.' + quote(table.name);
 const key = columns => JSON.stringify(columns);
-const hash = value => createHash('sha256').update(value).digest('hex');
-
-const MOD=1n<<256n;
-const member=(id,payload)=>BigInt('0x'+hash(id+':'+hash(payload)));
-const hex=value=>((value%MOD+MOD)%MOD).toString(16).padStart(64,'0');
 // An authenticated 256-bit multiset accumulator plus count binds membership.
 // Changes cost O(changed records); they never clone or hash the whole dataset.
-function integrity(rows) {let sum=0n;for(const [id,payload] of rows) sum+=member(id,payload);return hex(sum);}
 function same(a,b) { return JSON.stringify(a) === JSON.stringify(b); }
 async function memoryDatabase(schema) {
   const db = await PGlite.create({dataDir:'memory://', extensions:{pgcrypto},
@@ -46,12 +41,10 @@ async function sequences(db) {
     JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='S'
     AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' AND n.nspname NOT IN ('information_schema',$1)
     ORDER BY n.nspname,c.relname`,[PRIVATE]);
-  const values = [];
-  for (const item of result.rows) {
-    const value = (await db.query('SELECT last_value::text,is_called FROM '+relation(item))).rows[0];
-    values.push({...item,...value});
-  }
-  return values;
+  if(!result.rows.length)return [];
+  const literal=value=>"'"+value.replaceAll("'","''")+"'";
+  return (await db.query(result.rows.map(item=>'SELECT '+literal(item.schema)+'::text AS schema,'+
+    literal(item.name)+'::text AS name,last_value::text,is_called FROM '+relation(item)).join(' UNION ALL '))).rows;
 }
 async function journal(db,tables) {
   await db.exec(`CREATE SCHEMA ${PRIVATE};
@@ -190,6 +183,8 @@ export class CipherDatabase {
       }
       await db.exec('SET session_replication_role=origin');
       for(const item of manifest.sequences) await db.query('SELECT setval($1::regclass,$2::bigint,$3)',[relation(item),item.last_value,item.is_called]);
+      // Restore planner statistics in memory after bulk loading the snapshot.
+      await db.exec('ANALYZE');
       await journal(db,tables);
       const old=this.db;
       this.db=db; this.manifest=manifest; this.state=state; this.indexes=indexes;
@@ -199,15 +194,28 @@ export class CipherDatabase {
   async execute(sql,parameters=[]) {
     return this.transaction(tx=>tx.query(sql,parameters));
   }
-  async application(callback) {
+  async application(callback,options={}) {
     return this.transaction(async tx=>{
       await tx.query('SET LOCAL ROLE service_role');
       const result=await callback(tx);
       await tx.query('RESET ROLE');
       return result;
-    });
+    },options);
   }
   async audit() {
+    if(this.auditPending)return this.auditPending;
+    if(this.store.auditSnapshot){
+      const task=this.store.auditSnapshot(readHead=>this.exclusive(async()=>{
+        const head=await readHead();await this.checkpoint.verify(stamp(this.dataset,head));
+        if(head.revision!==this.state.revision)throw new Error('Storage changed');
+        return this.manifest.tables.map(({id,count,digest})=>({id,count,digest}));
+      })).catch(async()=>{
+        await this.exclusive(async()=>{this.closed=true;await this.db.close();}).catch(()=>{});
+        throw new Error('Encrypted storage audit failed');
+      });
+      this.auditPending=task;
+      try{return await task;}finally{this.auditPending=undefined;}
+    }
     return this.exclusive(async()=>{
       try {
         const state=await this.store.read();await this.checkpoint.verify(stamp(this.dataset,state));
@@ -218,15 +226,22 @@ export class CipherDatabase {
       }catch{this.closed=true;await this.db.close();throw new Error('Encrypted storage audit failed');}
     });
   }
-  async transaction(callback) {
-    return this.exclusive(async()=>{
+  async transaction(callback,{readOnly=false}={}) {
+    const started=performance.now();let entered,guarded,queried;
+    try{return await this.exclusive(async()=>{
+      entered=performance.now();
       const current=await this.store.head();
       await this.checkpoint.verify(stamp(this.dataset,current));
       if(current.revision!==this.state.revision) await this.restore();
+      guarded=performance.now();
       let committed=false;
       try {
         return await this.db.transaction(async tx=>{
+          if(readOnly)await tx.query('SET TRANSACTION READ ONLY');
           const result=await callback(tx);
+          queried=performance.now();
+          // PostgreSQL rejects writes and sequence changes in this path.
+          if(readOnly)return result;
           // Deferred constraints/triggers must finish before the durable
           // encrypted commit; a rejected SQL commit must not persist its rows.
           await tx.query('SET CONSTRAINTS ALL IMMEDIATE');
@@ -292,12 +307,19 @@ export class CipherDatabase {
           const head=await this.store.head();
           await this.checkpoint.verify(stamp(this.dataset,head));
           if(head.revision!==this.state.revision||committed)await this.restore();
-          else for(const item of this.manifest.sequences)await this.db.query('SELECT setval($1::regclass,$2::bigint,$3)',[relation(item),item.last_value,item.is_called]);
+          else if(!readOnly)for(const item of this.manifest.sequences)await this.db.query('SELECT setval($1::regclass,$2::bigint,$3)',[relation(item),item.last_value,item.is_called]);
         } catch {this.closed=true; await this.db.close();}
         const safe=new Error(committed?'Encrypted commit requires recovery':'Application transaction failed');
         safe.code=error.code || 'CIPHER_TRANSACTION';safe.status=error.status;throw safe;
       }
-    });
+    });}finally{
+      if(entered!==undefined&&this.observeTransaction){
+        const ended=performance.now();
+        this.observeTransaction({readOnly,queue:entered-started,guard:(guarded??ended)-entered,
+          query:guarded===undefined?0:(queried??ended)-guarded,
+          persist:queried===undefined?0:ended-queried});
+      }
+    }
   }
   async close() {if(this.closed)return;await this.exclusive(async()=>{this.closed=true; await this.db.close();});}
 }
