@@ -255,6 +255,24 @@ live cutover. Running the admin app on the same host also leaves unlocked data
 accessible to a host attacker; move it to a trusted machine for host isolation.
 See its guide for installation, verification, portability and the cutover checks.
 
+## Reverse proxy authentication limits
+
+Opening the sign-in page must not consume the password-attempt allowance. For
+Nginx deployments, map the request method and normalized URI to a rate-limit
+key that is empty only for `GET /login` and `HEAD /login`. Preserve the existing
+trusted client-IP key, request rate and burst for password submissions and all
+other authentication requests. General request limits still apply to the page.
+Use `429` for rejected authentication requests so an exhausted allowance is not
+reported as a service outage. See the [Nginx rate-limit documentation](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html).
+
+Declare the mapping in the HTTP configuration and use a new shared-memory zone
+name when changing a zone's key expression. Nginx cannot reuse an existing zone
+with a different key during graceful reload. Preserve the existing upstream,
+TLS, forwarded-header trust and security directives. Test both allowed page
+requests and rejected excess password attempts against an isolated upstream,
+check configuration syntax, then verify the reload and live page response.
+Keep actual server configuration, credentials and rollback copies private.
+
 ## Optional agent modules
 
 See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release.
