@@ -279,6 +279,14 @@ requests and rejected excess password attempts against an isolated upstream,
 check configuration syntax, then verify the reload and live page response.
 Keep actual server configuration, credentials and rollback copies private.
 
+Give authentication its own connection-count zone. Sharing the general
+application's zone lets background requests fill the smaller authentication
+allowance even when no sign-in is running. Preserve the trusted client-IP key
+and authentication concurrency limit; change only its zone reference. On HTTP/2
+and HTTP/3, each concurrent request counts as a connection. Test held background
+requests and excess simultaneous sign-ins independently. See the
+[Nginx connection-limit documentation](https://nginx.org/en/docs/http/ngx_http_limit_conn_module.html).
+
 ## Optional agent modules
 
 See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release.
