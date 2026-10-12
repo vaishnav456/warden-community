@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {RemoteFrameQueue,RemoteFrameRenderer,RemotePointerSender,parseRemoteFrame,remoteViewportSize} from '../static/js/remote_frame_queue.mjs';
+import {RemoteFrameQueue,RemoteFrameRenderer,RemotePointerSender,RemoteButtonState,parseRemoteFrame,remoteViewportSize} from '../static/js/remote_frame_queue.mjs';
 const frame=(type,size=10)=>{
   const bytes=new Uint8Array(size);bytes[0]=type;
   if(type===1&&size>=9){const view=new DataView(bytes.buffer,1,8);view.setUint16(4,1,true);view.setUint16(6,1,true);}
@@ -160,4 +160,39 @@ test('reset drops unsent positions across disconnects without affecting later mo
   const h=pointerHarness(),position={x:8,y:9};h.sender.push(position);position.x=99;
   h.sender.reset();h.tick();assert.equal(h.sent.length,0);
   h.sender.push(position);h.tick();assert.deepEqual(h.sent,[{type:'mousemove',x:99,y:9}]);
+});
+
+const buttonHarness=()=>{
+  const h=pointerHarness();let open=true;
+  const send=packet=>{h.sender.flush();if(!open)return false;h.sent.push(packet);return true;};
+  return {...h,buttons:new RemoteButtonState({send}),setOpen(value){open=value;}};
+};
+
+test('ordinary button release followed by capture loss is idempotent',()=>{
+  const h=buttonHarness(),position={x:17,y:31};
+  assert.equal(h.buttons.press('left',position),true);
+  assert.equal(h.buttons.release('left',position),true);
+  h.buttons.releaseAll(position);h.buttons.releaseAll(position);
+  assert.deepEqual(h.sent,[{type:'mousedown',button:'left',...position},{type:'mouseup',button:'left',...position}]);
+  assert.equal(h.buttons.held.size,0);
+});
+
+test('capture loss or session cleanup flushes motion then releases every held button once',()=>{
+  const h=buttonHarness(),position={x:9,y:12};
+  for(const button of ['left','right','middle'])h.buttons.press(button,position);
+  assert.equal(h.buttons.press('left',position),false);
+  h.sender.push({x:23,y:24});h.buttons.releaseAll({x:23,y:24});h.buttons.releaseAll(position);h.tick();
+  assert.deepEqual(h.sent.slice(3),[{type:'mousemove',x:23,y:24},
+    ...['left','right','middle'].map(button=>({type:'mouseup',button,x:23,y:24}))]);
+  assert.equal(h.buttons.held.size,0);assert.equal(h.callbacks.size,0);
+});
+
+test('blocked presses never become held and a lost socket cannot leak state into reconnect',()=>{
+  const h=buttonHarness(),position={x:3,y:4};h.setOpen(false);
+  assert.equal(h.buttons.press('left',position),false);h.buttons.releaseAll(position);assert.equal(h.sent.length,0);
+  h.setOpen(true);h.buttons.press('right',position);h.setOpen(false);h.buttons.releaseAll(position);
+  assert.equal(h.buttons.held.size,0);h.setOpen(true);h.buttons.releaseAll(position);
+  h.buttons.press('left',position);h.buttons.release('left',position);
+  assert.deepEqual(h.sent.map(p=>[p.type,p.button]),[['mousedown','right'],['mousedown','left'],['mouseup','left']]);
+  assert.equal(h.buttons.press('extra',position),false);assert.equal(h.buttons.held.size,0);
 });

@@ -44,6 +44,9 @@ const (
 	remoteDXGIIdle
 	remoteDXGIAccumulated
 	remoteEncodedBytes
+	remoteInputAttempts
+	remoteInputAccepted
+	remoteInputRejected
 	remotePerformanceCounterCount
 )
 
@@ -82,6 +85,9 @@ type remotePerformanceWindow struct {
 	DXGIIdle        uint64                   `json:"dxgi_idle"`
 	DXGIAccumulated uint64                   `json:"dxgi_accumulated"`
 	EncodedBytes    uint64                   `json:"encoded_bytes"`
+	InputAttempts   uint64                   `json:"input_attempts"`
+	InputAccepted   uint64                   `json:"input_accepted"`
+	InputRejected   uint64                   `json:"input_rejected"`
 	Timings         remotePerformanceTimings `json:"timings"`
 }
 
@@ -140,7 +146,8 @@ func (p *remotePerformance) observe(stage remotePerformanceStage, elapsed time.D
 }
 
 func (p *remotePerformance) add(counter remotePerformanceCounter, value uint64) {
-	if counter < 0 || counter >= remotePerformanceCounterCount {
+	// Native input outcomes must be recorded together by inputOutcome.
+	if counter < 0 || counter >= remoteInputAttempts {
 		return
 	}
 	limit := remotePerformanceMaxCount
@@ -153,6 +160,23 @@ func (p *remotePerformance) add(counter remotePerformanceCounter, value uint64) 
 		p.counters[counter] = limit
 	} else {
 		p.counters[counter] += value
+	}
+}
+
+// Windows API acceptance is an outcome of one attempted native input, not
+// evidence that the target application processed it. Keep the paired counters
+// atomic with snapshot and stop all three when their shared total reaches cap.
+func (p *remotePerformance) inputOutcome(accepted bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.counters[remoteInputAttempts] >= remotePerformanceMaxCount {
+		return
+	}
+	p.counters[remoteInputAttempts]++
+	if accepted {
+		p.counters[remoteInputAccepted]++
+	} else {
+		p.counters[remoteInputRejected]++
 	}
 }
 
@@ -186,6 +210,7 @@ func (p *remotePerformance) snapshot(now time.Time) remotePerformanceWindow {
 		FullFrames:    c[remoteFullFrames], PartialFrames: c[remotePartialFrames],
 		DXGIFrames: c[remoteDXGIFrames], GDIFrames: c[remoteGDIFrames], ReplayFrames: c[remoteReplayFrames],
 		DXGIIdle: c[remoteDXGIIdle], DXGIAccumulated: c[remoteDXGIAccumulated], EncodedBytes: c[remoteEncodedBytes],
+		InputAttempts: c[remoteInputAttempts], InputAccepted: c[remoteInputAccepted], InputRejected: c[remoteInputRejected],
 		Timings: remotePerformanceTimings{samples[remoteDXGIWait], samples[remoteDXGIReadback], samples[remoteGDICapture],
 			samples[remoteJPEGEncode], samples[remotePipeWrite], samples[remoteWSWriterWait], samples[remoteWSWrite],
 			samples[remoteInputQueue], samples[remoteInputPipeWrite], samples[remoteInputPipeQueue], samples[remoteInputDispatch]},
@@ -208,10 +233,13 @@ func (w remotePerformanceWindow) valid() bool {
 			return false
 		}
 	}
-	for _, count := range []uint64{w.FullFrames, w.PartialFrames, w.DXGIFrames, w.GDIFrames, w.ReplayFrames, w.DXGIIdle, w.DXGIAccumulated} {
+	for _, count := range []uint64{w.FullFrames, w.PartialFrames, w.DXGIFrames, w.GDIFrames, w.ReplayFrames, w.DXGIIdle, w.DXGIAccumulated, w.InputAttempts, w.InputAccepted, w.InputRejected} {
 		if count > remotePerformanceMaxCount {
 			return false
 		}
+	}
+	if w.InputAttempts != w.InputAccepted+w.InputRejected {
+		return false
 	}
 	if w.EncodedBytes > remotePerformanceMaxBytes {
 		return false
@@ -278,10 +306,17 @@ func decodeRemoteHelperPerformance(data []byte) (remotePerformanceWindow, error)
 	if !ok {
 		return invalid()
 	}
-	window, ok := remotePerformanceJSONFields(envelope["window"], []string{
+	if json.Unmarshal(envelope["version"], &report.Version) != nil || (report.Version != 1 && report.Version != 2) {
+		return invalid()
+	}
+	fields := []string{
 		"window_ms", "native_w", "native_h", "encoded_w", "encoded_h", "input_queue_max",
 		"full_frames", "partial_frames", "dxgi_frames", "gdi_frames", "replay_frames", "dxgi_idle", "dxgi_accumulated", "encoded_bytes", "timings",
-	})
+	}
+	if report.Version == 2 {
+		fields = append(fields, "input_attempts", "input_accepted", "input_rejected")
+	}
+	window, ok := remotePerformanceJSONFields(envelope["window"], fields)
 	if !ok {
 		return invalid()
 	}
@@ -301,7 +336,7 @@ func decodeRemoteHelperPerformance(data []byte) (remotePerformanceWindow, error)
 	if err := decoder.Decode(&report); err != nil {
 		return invalid()
 	}
-	if decoder.Decode(new(any)) != io.EOF || report.Version != 1 || !report.Window.valid() {
+	if decoder.Decode(new(any)) != io.EOF || !report.Window.valid() {
 		return invalid()
 	}
 	return report.Window, nil

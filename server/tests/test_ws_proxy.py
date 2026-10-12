@@ -64,6 +64,8 @@ class RemoteRelayPerformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quality['bytes_to_browser'], sum(len(packet.encode()) if isinstance(packet, str) else len(packet) for packet in packets))
         self.assertEqual(snapshot['frame_messages'], 2)
         self.assertEqual(snapshot['frame_bytes'], len(packets[0]) + len(packets[2]))
+        self.assertEqual(snapshot['received_frame_messages'], 2)
+        self.assertEqual(snapshot['received_frame_bytes'], len(packets[0]) + len(packets[2]))
         self.assertEqual(snapshot['send_samples'], 3)
         self.assertEqual(snapshot['send_wait_current_ms'], 0)
         self.assertEqual(snapshot['send_wait_latest_ms'], 30)
@@ -89,6 +91,8 @@ class RemoteRelayPerformanceTests(unittest.IsolatedAsyncioTestCase):
             snapshot = performance.snapshot()
             self.assertEqual(snapshot['send_wait_current_ms'], 519)
             self.assertEqual(snapshot['frame_messages'], 0)
+            self.assertEqual(snapshot['received_frame_messages'], 1)
+            self.assertEqual(snapshot['received_frame_bytes'], len(packet))
             self.assertEqual(snapshot['send_samples'], 0)
             finish.set()
             await asyncio.wait_for(task, 1)
@@ -133,6 +137,8 @@ class RemoteRelayPerformanceTests(unittest.IsolatedAsyncioTestCase):
             snapshot = performance.snapshot()
             self.assertEqual(snapshot['frame_messages'], 0)
             self.assertEqual(snapshot['frame_bytes'], 0)
+            self.assertEqual(snapshot['received_frame_messages'], 1)
+            self.assertEqual(snapshot['received_frame_bytes'], 5)
             self.assertEqual(quality['bytes_to_browser'], 0)
             self.assertEqual(snapshot['send_wait_current_ms'], 0)
             self.assertEqual(snapshot['send_wait_latest_ms'], 250)
@@ -204,10 +210,110 @@ class RemoteRelayPerformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt['performance']['relay_loop_lag_ms'], 25)
         self.assertIsInstance(receipt['performance']['agent_rtt_ms'], int)
         self.assertNotIn('performance', quality)
-        self.assertTrue(all(value is None or type(value) in (int, float) for value in receipt['performance'].values()))
+        self.assertEqual(receipt['performance']['agent_performance_history'], [])
+        self.assertTrue(all(value is None or type(value) in (int, float)
+                            for key, value in receipt['performance'].items()
+                            if key != 'agent_performance_history'))
         self.assertEqual(len(calls), 1)
         read.assert_not_called()
         sleep.assert_awaited_once_with(15)
+
+    async def test_only_authorized_control_inputs_count_and_successful_sends_are_timed(self):
+        clock = [0.0]
+        counters = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+        packets = ['{"type":"mousemove","x":51,"y":52}',
+                   '{"type":"keydown","key":"private-input"}',
+                   '{"type":"viewport_size","w":1024,"h":768}',
+                   '{"type":"unknown","contents":"private-input"}',
+                   b'private-input', 'invalid-json']
+        class TimedDestination(MessageStream):
+            async def send(self, message):
+                clock[0] += 0.012
+                await super().send(message)
+        destination = TimedDestination()
+        with patch.object(ws_proxy.db, '_get') as read, patch.object(ws_proxy.db, '_patch') as write:
+            await ws_proxy._relay_browser_to_agent(MessageStream(packets), destination,
+                {'id': 'session', 'capabilities': {'control': True, 'view': True}}, counters)
+        self.assertEqual(destination.sent, packets[:3])
+        snapshot = counters.snapshot()
+        self.assertEqual(snapshot['accepted_input_messages'], 2)
+        self.assertEqual(snapshot['forwarded_input_messages'], 2)
+        self.assertEqual(snapshot['input_send_samples'], 2)
+        self.assertEqual(snapshot['input_send_wait_mean_ms'], 12)
+        self.assertEqual(snapshot['input_send_wait_max_ms'], 12)
+        self.assertNotIn('private-input', json.dumps(snapshot))
+        self.assertTrue(all(value is None or type(value) in (int, float) for value in snapshot.values()))
+        read.assert_not_called()
+        write.assert_not_called()
+
+    async def test_rejected_control_input_never_counts_or_reaches_agent(self):
+        counters = ws_proxy._RemoteRelayPerformance()
+        destination = MessageStream()
+        await ws_proxy._relay_browser_to_agent(MessageStream(['{"type":"mousedown","x":1,"y":2}']),
+            destination, {'id': 'session', 'capabilities': {'view': True, 'control': False}}, counters)
+        self.assertEqual(destination.sent, [])
+        self.assertEqual(counters.snapshot()['accepted_input_messages'], 0)
+        self.assertEqual(counters.snapshot()['forwarded_input_messages'], 0)
+        self.assertEqual(counters.snapshot()['input_send_samples'], 0)
+
+    async def test_blocked_control_send_counts_acceptance_before_completion(self):
+        clock = [10.0]
+        counters = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+        entered, release = asyncio.Event(), asyncio.Event()
+        class BlockedDestination(MessageStream):
+            async def send(self, message):
+                entered.set()
+                await release.wait()
+        task = asyncio.create_task(ws_proxy._relay_browser_to_agent(
+            MessageStream(['{"type":"scroll","dy":1}']), BlockedDestination(),
+            {'id': 'session', 'capabilities': {'control': True}}, counters))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            clock[0] += 0.250
+            snapshot = counters.snapshot()
+            self.assertEqual(snapshot['accepted_input_messages'], 1)
+            self.assertEqual(snapshot['forwarded_input_messages'], 0)
+            self.assertEqual(snapshot['input_send_wait_current_ms'], 250)
+            release.set()
+            await asyncio.wait_for(task, 1)
+            snapshot = counters.snapshot()
+            self.assertEqual(snapshot['forwarded_input_messages'], 1)
+            self.assertEqual(snapshot['input_send_wait_current_ms'], 0)
+            self.assertEqual(snapshot['input_send_wait_latest_ms'], 250)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_failed_control_send_retains_acceptance_without_success(self):
+        for failure in (OSError('write failed'), asyncio.CancelledError()):
+            clock = [0.0]
+            counters = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+            class FailedDestination(MessageStream):
+                async def send(self, message):
+                    clock[0] += 0.100
+                    raise failure
+            with self.subTest(failure=type(failure).__name__), self.assertRaises(type(failure)):
+                await ws_proxy._relay_browser_to_agent(MessageStream(['{"type":"mouseup"}']),
+                    FailedDestination(), {'id': 'session', 'capabilities': {'control': True}}, counters)
+            snapshot = counters.snapshot()
+            self.assertEqual(snapshot['accepted_input_messages'], 1)
+            self.assertEqual(snapshot['forwarded_input_messages'], 0)
+            self.assertEqual(snapshot['input_send_wait_current_ms'], 0)
+            self.assertEqual(snapshot['input_send_wait_latest_ms'], 100)
+
+    def test_control_send_timing_ring_is_bounded_and_contains_only_numbers(self):
+        clock = [0.0]
+        counters = ws_proxy._RemoteRelayPerformance(clock=lambda: clock[0])
+        for number in range(1, 1001):
+            counters.begin_input_send()
+            clock[0] += number / 1000
+            counters.finish_input_send(True)
+        snapshot = counters.snapshot()
+        self.assertEqual(snapshot['accepted_input_messages'], 1000)
+        self.assertEqual(snapshot['forwarded_input_messages'], 1000)
+        self.assertEqual(snapshot['input_send_samples'], counters.SAMPLE_LIMIT)
+        self.assertEqual(snapshot['input_send_wait_mean_ms'], 940.5)
+        self.assertTrue(all(type(value) is float for value in counters._input_send_waits))
 
 
 class RemoteAuthorityProjectionTests(unittest.IsolatedAsyncioTestCase):

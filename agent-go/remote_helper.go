@@ -154,7 +154,9 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 
 	setDPIAware()
 	releaseModifierKeys()
+	releaseRemoteMouseButtons()
 	defer releaseModifierKeys()
+	defer releaseRemoteMouseButtons()
 	monitors := displayMonitors()
 	selectedMonitor := 0
 	var monitorMu sync.RWMutex
@@ -208,7 +210,7 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 				return
 			case <-ticker.C:
 				now := time.Now()
-				report := remoteHelperPerformance{Version: 1, Window: performance.snapshot(now)}
+				report := remoteHelperPerformance{Version: 2, Window: performance.snapshot(now)}
 				data, err := json.Marshal(report)
 				if err != nil || len(data) > remoteHelperPerformanceMaxBytes {
 					continue
@@ -598,7 +600,10 @@ func runRemoteHelper(outPipeName, inPipeName string) int {
 							_ = writeMsg('S', []byte(fmt.Sprintf("%dx%d", selected.width(), selected.height())))
 						}
 					} else {
-						dispatchInput(evt, currentMonitor())
+						attempted, accepted := dispatchInput(evt, currentMonitor())
+						if attempted {
+							performance.inputOutcome(accepted)
+						}
 					}
 				}
 				performance.observe(remoteInputDispatch, time.Since(dispatchStarted))

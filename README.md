@@ -77,6 +77,12 @@ Deflate by default; set `WARDEN_REMOTE_WS_COMPRESSION=none` to disable it, or
 by 19–35%; this does not establish bandwidth or FPS improvements for an affected
 remote session.
 
+Agent 2.6.62 resets held mouse buttons when the remote helper starts, while the
+viewer releases them at capture loss, disconnect and view-only transitions.
+The [remote diagnostics guide](docs/REMOTE_DESKTOP_DIAGNOSTICS.md) explains
+separate server receive/forward counters, bounded encrypted timing history and
+native Windows input acceptance. Older agent reports remain supported.
+
 The relay yields between forwarded messages, while the browser uses direct
 binary header parsing and generation-aware, bounded frame rendering. It replaces
 obsolete updates with a newer full snapshot and requires a full baseline after
@@ -254,6 +260,24 @@ command signing, enrollment and automation must replace those workflows before
 live cutover. Running the admin app on the same host also leaves unlocked data
 accessible to a host attacker; move it to a trusted machine for host isolation.
 See its guide for installation, verification, portability and the cutover checks.
+
+## Reverse proxy authentication limits
+
+Opening the sign-in page must not consume the password-attempt allowance. For
+Nginx deployments, map the request method and normalized URI to a rate-limit
+key that is empty only for `GET /login` and `HEAD /login`. Preserve the existing
+trusted client-IP key, request rate and burst for password submissions and all
+other authentication requests. General request limits still apply to the page.
+Use `429` for rejected authentication requests so an exhausted allowance is not
+reported as a service outage. See the [Nginx rate-limit documentation](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html).
+
+Declare the mapping in the HTTP configuration and use a new shared-memory zone
+name when changing a zone's key expression. Nginx cannot reuse an existing zone
+with a different key during graceful reload. Preserve the existing upstream,
+TLS, forwarded-header trust and security directives. Test both allowed page
+requests and rejected excess password attempts against an isolated upstream,
+check configuration syntax, then verify the reload and live page response.
+Keep actual server configuration, credentials and rollback copies private.
 
 ## Optional agent modules
 

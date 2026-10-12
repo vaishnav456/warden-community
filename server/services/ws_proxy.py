@@ -19,6 +19,7 @@ Session pairing:
 """
 import asyncio
 import collections
+import copy
 import hashlib
 import json
 import logging
@@ -193,6 +194,8 @@ async def _cleanup_home_pair(session_id: str) -> None:
 class _RemoteRelayPerformance:
     """Numeric-only counters and a fixed-size sample of browser send waits."""
     SAMPLE_LIMIT = 120
+    REPORT_LIMIT = 12
+    REPORT_MAX_AGE_SECONDS = 90
 
     def __init__(self, clock=None):
         self._clock = clock or time.monotonic
@@ -200,15 +203,49 @@ class _RemoteRelayPerformance:
         self._send_waits = collections.deque(maxlen=self.SAMPLE_LIMIT)
         self.frame_messages = 0
         self.frame_bytes = 0
+        self.received_frame_messages = 0
+        self.received_frame_bytes = 0
+        self.accepted_input_messages = 0
+        self.forwarded_input_messages = 0
+        self._input_send_started = None
+        self._input_send_waits = collections.deque(maxlen=self.SAMPLE_LIMIT)
         self._agent_report = None
         self._agent_reported_at = None
+        self._agent_report_sequence = 0
+        self._agent_reports = collections.deque(maxlen=self.REPORT_LIMIT)
+
+    def _prune_reports(self, now):
+        while self._agent_reports and now - self._agent_reports[0][1] > self.REPORT_MAX_AGE_SECONDS:
+            self._agent_reports.popleft()
 
     def observe_agent(self, report):
         validated = validate_agent_performance(report)
         if validated is not None:
-            self._agent_report = validated
-            self._agent_reported_at = self._clock()
+            now = self._clock()
+            self._prune_reports(now)
+            # Sequence identifies one accepted report across repeated database
+            # snapshots. Identical idle windows remain distinct observations.
+            self._agent_report_sequence += 1
+            self._agent_report = copy.deepcopy(validated)
+            self._agent_reported_at = now
+            self._agent_reports.append((self._agent_report_sequence, now, copy.deepcopy(validated)))
         return validated
+
+    def receive_agent_message(self, message):
+        if isinstance(message, (bytes, bytearray, memoryview)):
+            self.received_frame_messages += 1
+            self.received_frame_bytes += len(message)
+
+    def begin_input_send(self):
+        self.accepted_input_messages += 1
+        self._input_send_started = self._clock()
+
+    def finish_input_send(self, delivered):
+        if self._input_send_started is not None:
+            self._input_send_waits.append(max(0.0, self._clock() - self._input_send_started) * 1000)
+            self._input_send_started = None
+        if delivered:
+            self.forwarded_input_messages += 1
 
     def begin_send(self):
         self._send_started = self._clock()
@@ -221,7 +258,7 @@ class _RemoteRelayPerformance:
             self.frame_messages += 1
             self.frame_bytes += len(message)
 
-    def snapshot(self, agent_rtt_ms=None, relay_loop_lag_seconds=None):
+    def snapshot(self, agent_rtt_ms=None, relay_loop_lag_seconds=None, *, include_history=False):
         def metric(value, multiplier=1):
             if type(value) not in (int, float):
                 return None
@@ -232,8 +269,16 @@ class _RemoteRelayPerformance:
                 return None
 
         waits = self._send_waits
-        current = max(0.0, self._clock() - self._send_started) * 1000 if self._send_started is not None else 0.0
+        now = self._clock()
+        self._prune_reports(now)
+        current = max(0.0, now - self._send_started) * 1000 if self._send_started is not None else 0.0
+        input_waits = self._input_send_waits
+        input_current = max(0.0, now - self._input_send_started) * 1000 if self._input_send_started is not None else 0.0
         result = {
+            # Count application messages yielded by the agent iterator before
+            # browser send backpressure; neither counter acknowledges display.
+            'received_frame_messages': self.received_frame_messages,
+            'received_frame_bytes': self.received_frame_bytes,
             'frame_messages': self.frame_messages,
             # Application bytes before WebSocket compression; not wire bytes.
             'frame_bytes': self.frame_bytes,
@@ -242,15 +287,30 @@ class _RemoteRelayPerformance:
             'send_wait_latest_ms': round(waits[-1], 3) if waits else None,
             'send_wait_mean_ms': round(math.fsum(waits) / len(waits), 3) if waits else None,
             'send_wait_max_ms': round(max(waits), 3) if waits else None,
+            'accepted_input_messages': self.accepted_input_messages,
+            'forwarded_input_messages': self.forwarded_input_messages,
+            'input_send_samples': len(input_waits),
+            'input_send_wait_current_ms': round(input_current, 3),
+            'input_send_wait_latest_ms': round(input_waits[-1], 3) if input_waits else None,
+            'input_send_wait_mean_ms': round(math.fsum(input_waits) / len(input_waits), 3) if input_waits else None,
+            'input_send_wait_max_ms': round(max(input_waits), 3) if input_waits else None,
             'agent_rtt_ms': metric(agent_rtt_ms),
             'relay_loop_lag_ms': metric(relay_loop_lag_seconds, 1000),
         }
-        if self._agent_reported_at is not None and 0 <= self._clock() - self._agent_reported_at <= 20:
-            result['agent_performance'] = self._agent_report
+        if self._agent_reported_at is not None and 0 <= now - self._agent_reported_at <= 20:
+            result['agent_performance'] = copy.deepcopy(self._agent_report)
+            result['agent_performance_sequence'] = self._agent_report_sequence
+            result['agent_performance_age_ms'] = round((now - self._agent_reported_at) * 1000, 3)
+        if include_history:
+            result['agent_performance_history'] = [
+                {'sequence': sequence, 'age_ms': round((now - received_at) * 1000, 3), 'report': copy.deepcopy(report)}
+                for sequence, received_at, report in self._agent_reports
+                if 0 <= now - received_at <= self.REPORT_MAX_AGE_SECONDS
+            ]
         return result
 
 
-def _remote_performance_snapshot(performance, quality):
+def _remote_performance_snapshot(performance, quality, *, include_history=False):
     if performance is None:
         return None
     try:
@@ -258,12 +318,14 @@ def _remote_performance_snapshot(performance, quality):
     except Exception:
         loop_lag = None  # Diagnostics must not become a relay dependency.
     agent_rtt = quality.get('agent_rtt_ms') if isinstance(quality, dict) else None
-    return performance.snapshot(agent_rtt, loop_lag)
+    return performance.snapshot(agent_rtt, loop_lag, include_history=include_history)
 
 
 async def _relay(src, dst, quality=None, performance=None) -> None:
     """Forward all messages from src → dst until the connection closes."""
     async for msg in src:
+        if performance is not None:
+            performance.receive_agent_message(msg)
         if performance is not None and isinstance(msg, str):
             try:
                 report = json.loads(msg)
@@ -342,7 +404,16 @@ async def _relay_browser_to_agent(src, dst, session, performance=None, quality=N
                 message_type or "<missing>", required or "known-operation", session.get("id"),
             )
             continue
-        await dst.send(msg)
+        control_input = required == 'control' and performance is not None
+        if control_input:
+            performance.begin_input_send()
+        delivered = False
+        try:
+            await dst.send(msg)
+            delivered = True
+        finally:
+            if control_input:
+                performance.finish_input_send(delivered)
 
 
 def _remote_authority_current(session, require_consent=False):
@@ -412,7 +483,7 @@ async def _measure_remote_quality(agent_ws,session,quality,performance=None):
         quality['measured_at']=datetime.now(timezone.utc).isoformat()
         try:
             receipt = dict(quality)
-            snapshot = _remote_performance_snapshot(performance, quality)
+            snapshot = _remote_performance_snapshot(performance, quality, include_history=True)
             if snapshot is not None:
                 receipt['performance'] = snapshot
             await asyncio.to_thread(db._patch,f"remote_sessions?id=eq.{db._q(session['id'])}&company_id=eq.{db._q(session['company_id'])}",{'connection_quality':receipt})

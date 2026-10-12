@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {validateRemoteAgentPerformance, remoteAgentPerformanceText} from '../static/js/remote_agent_performance.mjs';
+import {validateRemoteAgentPerformance, remoteAgentPerformanceText, remoteAgentInputNotice} from '../static/js/remote_agent_performance.mjs';
 
 const names = ['dxgi_wait','dxgi_readback','gdi_capture','jpeg_encode','pipe_write','ws_writer_wait','ws_write','input_queue','input_pipe_write','input_pipe_queue','input_dispatch'];
 function window() {
@@ -9,6 +9,70 @@ function window() {
     timings:Object.fromEntries(names.map(name=>[name,{samples:1,mean_ms:2,max_ms:3}]))};
 }
 const report = () => ({type:'remote_agent_performance',version:1,service:window(),helper:window(),helper_age_ms:10});
+const outcomeFields = ['input_attempts', 'input_accepted', 'input_rejected'];
+function outcomeReport() {
+  const result=report(); result.version=2;
+  Object.assign(result.service,{input_attempts:0,input_accepted:0,input_rejected:0});
+  Object.assign(result.helper,{input_attempts:10,input_accepted:8,input_rejected:2});
+  return result;
+}
+
+test('version two copies native outcomes while version one retains the exact old shape', () => {
+  const input=outcomeReport(), result=validateRemoteAgentPerformance(input);
+  assert.deepEqual(result,input);
+  input.helper.input_rejected=10;
+  assert.equal(result.helper.input_rejected,2);
+  assert.ok(validateRemoteAgentPerformance({type:'remote_agent_performance',version:2,service:outcomeReport().service}));
+  assert.ok(outcomeFields.every(field=>!Object.hasOwn(validateRemoteAgentPerformance(report()).helper,field)));
+  for(const field of outcomeFields) {
+    const old=report(); old.helper[field]=0;
+    assert.equal(validateRemoteAgentPerformance(old),null);
+  }
+});
+
+test('both version two windows require complete bounded integer outcomes and conserve attempts', () => {
+  for(const stage of ['service','helper']) {
+    for(const field of outcomeFields) {
+      const missing=outcomeReport();delete missing[stage][field];
+      assert.equal(validateRemoteAgentPerformance(missing),null);
+      for(const value of [true,null,'private-input',-1,1.5,NaN,Infinity,1e6+1,1e100]) {
+        const input=outcomeReport();input[stage][field]=value;
+        assert.equal(validateRemoteAgentPerformance(input),null);
+      }
+    }
+    const mismatch=outcomeReport();mismatch[stage].input_attempts+=1;
+    assert.equal(validateRemoteAgentPerformance(mismatch),null);
+    const bounded=outcomeReport();Object.assign(bounded[stage],{input_attempts:1e6,input_accepted:999999,input_rejected:1});
+    assert.deepEqual(validateRemoteAgentPerformance(bounded),bounded);
+    bounded[stage].input_contents='private';
+    assert.equal(validateRemoteAgentPerformance(bounded),null);
+  }
+});
+
+test('version two text separates Windows native acceptance from an application response', () => {
+  const text=remoteAgentPerformanceText(outcomeReport());
+  assert.match(text,/10 native input attempts: Windows accepted 8, rejected 2/);
+  assert.match(text,/acceptance does not prove an application responded/);
+  assert.match(text,/readback attempts 1/);
+  assert.match(text,/Capture window 5.0 seconds/);
+  assert.doesNotMatch(text,/acceptance is not measured/);
+});
+
+test('input rejection notice requires a valid fresh version two helper with actual rejected outcomes', () => {
+  assert.equal(remoteAgentInputNotice(outcomeReport()),'Windows rejected remote input.');
+  const edge=outcomeReport();edge.helper_age_ms=15000;
+  assert.equal(remoteAgentInputNotice(edge),'Windows rejected remote input.');
+  for(const input of [report(),null,{...outcomeReport(),helper_age_ms:15001},
+    {type:'remote_agent_performance',version:2,service:outcomeReport().service}]) {
+    assert.equal(remoteAgentInputNotice(input),'');
+  }
+  const accepted=outcomeReport();accepted.helper.input_accepted=10;accepted.helper.input_rejected=0;
+  assert.equal(remoteAgentInputNotice(accepted),'');
+  const invalid=outcomeReport();delete invalid.helper.input_rejected;
+  assert.equal(remoteAgentInputNotice(invalid),'');
+  invalid.helper.input_rejected='private';
+  assert.equal(remoteAgentInputNotice(invalid),'');
+});
 
 test('bounded valid report survives and has independent nested timing values', () => {
   const input=report(), result=validateRemoteAgentPerformance(input);
@@ -47,6 +111,25 @@ test('text separates input, upload, capture and idle wait rather than reporting 
   assert.match(text,/Agent upload 2 ms/);
   assert.match(text,/encoded 1280×720/);
   assert.match(text,/acquisition wait .*includes idle time/);
+  assert.match(text,/Agent sent 12 frames in 5.0 seconds/);
+  assert.match(text,/0 repeated snapshots/);
+  assert.match(text,/readback attempts 1/);
+  assert.match(text,/input dispatch .*1 attempts; Windows acceptance is not measured/);
   assert.doesNotMatch(text,/input RTT/);
   assert.match(remoteAgentPerformanceText({...report(),helper_age_ms:16000}),/Fresh capture timing is pending/);
+});
+
+test('capture counts describe repeats and independent window age without inventing fresh FPS', () => {
+  const input=report();
+  input.service.window_ms=6500;
+  input.helper.window_ms=5000;
+  input.helper.replay_frames=12;
+  input.helper.timings.dxgi_readback={samples:0,mean_ms:0,max_ms:0};
+  input.helper_age_ms=3340;
+  const text=remoteAgentPerformanceText(input);
+  assert.match(text,/Agent sent 12 frames in 6.5 seconds/);
+  assert.match(text,/Capture window 5.0 seconds, received 3340 ms before the service report; windows can differ/);
+  assert.match(text,/12 repeated snapshots/);
+  assert.match(text,/readback attempts 0/);
+  assert.doesNotMatch(text,/12 fresh/);
 });

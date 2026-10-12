@@ -243,8 +243,8 @@
 </div>
 
 <script type="module" nonce="{{ csp_nonce }}">
-import { RemoteFrameRenderer, RemotePointerSender, remoteViewportSize } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
-import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ url_for('static', filename='js/remote_agent_performance.mjs', v=asset_v) | tojson }};
+import { RemoteFrameRenderer, RemotePointerSender, RemoteButtonState, remoteViewportSize } from {{ url_for('static', filename='js/remote_frame_queue.mjs', v=asset_v) | tojson }};
+import { validateRemoteAgentPerformance, remoteAgentPerformanceText, remoteAgentInputNotice } from {{ url_for('static', filename='js/remote_agent_performance.mjs', v=asset_v) | tojson }};
 (function () {
   const ENDPOINT_ID = {{ endpoint.id | tojson }};
   const SESSION_ID  = {{ session.id  | tojson }};
@@ -272,6 +272,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
   let frameCount = 0, lastStatsAt = performance.now(), lastFrameAt = 0;
   let pointerSender = null, relayPerformance = null;
   let agentPerformance = null, agentPerformanceAt = 0;
+  let lastInputNoticeAt = -Infinity;
   let receivedFrames = 0, receivedBytes = 0, decodeErrors = 0;
   const decodeTimes = [];
   const drawTimes = [];
@@ -347,6 +348,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
 
   // ── WebSocket ────────────────────────────────────────────────────────────────
   function connect() {
+    releaseAllRemoteButtons();
     frameRenderer.reset();
     pointerSender?.reset();
     relayPerformance = null;
@@ -362,6 +364,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
     // even when the agent side never joined at all.
     ws.onopen  = () => { setStatus('Waiting for device…', ''); canvas.focus(); addSessionEvent('Relay connected; waiting for endpoint'); };
     ws.onclose = (event) => {
+      releaseAllRemoteButtons();
       frameRenderer.reset();
       pointerSender?.reset();
       if (event.code === 1013) {
@@ -388,7 +391,14 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
         try { msg = JSON.parse(e.data); } catch { return; }
         if (msg.type === 'remote_agent_performance') {
           const report = validateRemoteAgentPerformance(msg);
-          if (report) { agentPerformance = report; agentPerformanceAt = performance.now(); }
+          if (report) {
+            agentPerformance = report; agentPerformanceAt = performance.now();
+            const notice = remoteAgentInputNotice(report);
+            if (notice && agentPerformanceAt - lastInputNoticeAt >= 10000) {
+              lastInputNoticeAt = agentPerformanceAt;
+              showToast(notice);
+            }
+          }
           return;
         }
         if (msg.type === 'relay_pong') {
@@ -400,6 +410,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
         }
 
         if (msg.type === 'init') {
+          releaseAllRemoteButtons();
           sw = msg.w; sh = msg.h;
           frameRenderer.reset();
           pointerSender?.reset();
@@ -592,13 +603,14 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
   if (!SUPPORT_MODE) statusPollTimer = setInterval(pollStatus, 3000);
 
   function send(obj) {
-    if (!REMOTE_CAPABILITIES.control && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','ctrl_alt_del','reboot_reconnect'].includes(obj.type)) return;
-    if (!REMOTE_CAPABILITIES.clipboard && obj.type === 'clipboard_write') return;
-    if (!REMOTE_CAPABILITIES.process_manager && ['process_list','process_kill'].includes(obj.type)) return;
-    if (!REMOTE_CAPABILITIES.reboot && obj.type === 'reboot_reconnect') return;
-    if (viewOnly && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','clipboard_write','ctrl_alt_del'].includes(obj.type)) return;
+    if (!REMOTE_CAPABILITIES.control && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','ctrl_alt_del','reboot_reconnect'].includes(obj.type)) return false;
+    if (!REMOTE_CAPABILITIES.clipboard && obj.type === 'clipboard_write') return false;
+    if (!REMOTE_CAPABILITIES.process_manager && ['process_list','process_kill'].includes(obj.type)) return false;
+    if (!REMOTE_CAPABILITIES.reboot && obj.type === 'reboot_reconnect') return false;
+    if (viewOnly && ['mousemove','mousedown','mouseup','scroll','keydown','keyup','clipboard_write','ctrl_alt_del'].includes(obj.type)) return false;
     if (obj.type !== 'mousemove') pointerSender?.flush();
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify(obj)); return true; } catch { return false; }
   }
   pointerSender = new RemotePointerSender({ send,
     requestFrame: callback => requestAnimationFrame(callback),
@@ -772,18 +784,16 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
   // scaling moves the pointer outside the canvas between press and release.
   // Without this, Windows can retain a stuck mouse-down state and ordinary
   // dialog buttons (including OK) stop responding until another release lands.
-  const pressedRemoteButtons = new Set();
+  const remoteButtons = new RemoteButtonState({ send });
   let lastPointerPosition = { x: 0, y: 0 };
 
   function releaseRemoteButton(button) {
-    if (!pressedRemoteButtons.has(button)) return;
-    pressedRemoteButtons.delete(button);
-    send({ type: 'mouseup', button, ...lastPointerPosition });
+    remoteButtons.release(button, lastPointerPosition);
   }
 
   function releaseAllRemoteButtons() {
-    pointerSender.flush();
-    Array.from(pressedRemoteButtons).forEach(releaseRemoteButton);
+    pointerSender?.flush();
+    remoteButtons.releaseAll(lastPointerPosition);
   }
 
   canvas.addEventListener('pointermove', e => {
@@ -795,9 +805,9 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
     canvas.focus();
     lastPointerPosition = canvasXY(e);
     const button = btnName(e);
-    pressedRemoteButtons.add(button);
-    try { canvas.setPointerCapture(e.pointerId); } catch {}
-    send({ type: 'mousedown', button, ...lastPointerPosition });
+    if (remoteButtons.press(button, lastPointerPosition)) {
+      try { canvas.setPointerCapture(e.pointerId); } catch {}
+    }
   });
   canvas.addEventListener('pointerup', e => {
     e.preventDefault();
@@ -806,6 +816,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
     try { canvas.releasePointerCapture(e.pointerId); } catch {}
   });
   canvas.addEventListener('pointercancel', releaseAllRemoteButtons);
+  canvas.addEventListener('lostpointercapture', releaseAllRemoteButtons);
   window.addEventListener('blur', releaseAllRemoteButtons);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) releaseAllRemoteButtons();
@@ -1247,7 +1258,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
   setInterval(() => {
     const now = performance.now();
     const elapsed = (now - lastStatsAt) / 1000;
-    const fps = elapsed ? Math.round(frameCount / elapsed) : 0;
+    const fps = elapsed ? (frameCount / elapsed).toFixed(1) : '0.0';
     const age = lastFrameAt ? Math.round(now - lastFrameAt) : 0;
     const stats = document.getElementById('quality-stats');
     stats.textContent = `${fps} fps · ${age || '—'} ms frame age · ${relayRTT === null ? '—' : relayRTT} ms relay RTT`;
@@ -1256,7 +1267,8 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
     const decode = decodeTimes.length ? Math.round(decodeTimes.reduce((sum, time) => sum + time, 0) / decodeTimes.length) : '—';
     const draw = drawTimes.length ? Math.round(drawTimes.reduce((sum, time) => sum + time, 0) / drawTimes.length) : '—';
     const drawMax = drawTimes.length ? Math.round(Math.max(...drawTimes)) : '—';
-    stats.title = `Frame age is time since the last update, not input latency; idle screens update less often. Received ${Math.round(receivedFrames / elapsed)} fps, ${Math.round(receivedBytes / elapsed / 1024)} KB/s before compression. Browser decode ${decode} ms; queue ${frameRenderer.queue.length} frames; decode failures ${decodeErrors}. Relay–device RTT ${number('agent_rtt_ms')} ms; relay send wait ${number('send_wait_current_ms')} ms current, ${number('send_wait_mean_ms')} ms average, ${number('send_wait_max_ms')} ms maximum; relay loop delay ${number('relay_loop_lag_ms')} ms.`;
+    stats.title = `Frame age is time since the last update, not input latency; idle screens update less often. Received ${(receivedFrames / elapsed).toFixed(1)} fps, ${Math.round(receivedBytes / elapsed / 1024)} KB/s before compression. Browser decode ${decode} ms; queue ${frameRenderer.queue.length} frames; decode failures ${decodeErrors}. Relay–device RTT ${number('agent_rtt_ms')} ms; relay send wait ${number('send_wait_current_ms')} ms current, ${number('send_wait_mean_ms')} ms average, ${number('send_wait_max_ms')} ms maximum; relay loop delay ${number('relay_loop_lag_ms')} ms.`;
+    stats.title += ` Server totals: ${number('received_frame_messages')} frames received from the agent, ${number('frame_messages')} forwarded to the browser socket; forwarding is not a browser receipt acknowledgement. Control inputs ${number('accepted_input_messages')} accepted, ${number('forwarded_input_messages')} sent to the agent socket; input send wait ${number('input_send_wait_current_ms')} ms current, ${number('input_send_wait_mean_ms')} ms average/${number('input_send_wait_max_ms')} ms maximum.`;
     stats.title += ` Browser canvas call ${draw} ms average/${drawMax} ms maximum; browser timer delay ${Math.round(Math.max(0, now - lastStatsAt - 2000))} ms (includes background throttling).`;
     if (agentPerformance && now - agentPerformanceAt <= 20000) stats.title += ' ' + remoteAgentPerformanceText(agentPerformance);
     receivedFrames = receivedBytes = 0;
@@ -1269,6 +1281,7 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
     if (disconnecting) return;
     disconnecting = true;
     allowReconnect = false;
+    releaseAllRemoteButtons();
     releaseRemoteModifiers();
     ws && ws.close();
     fetch(`/endpoints/${ENDPOINT_ID}/end-session/${SESSION_ID}`,
@@ -1277,6 +1290,8 @@ import { validateRemoteAgentPerformance, remoteAgentPerformanceText } from {{ ur
   });
 
   window.addEventListener('beforeunload', () => {
+    releaseAllRemoteButtons();
+    releaseRemoteModifiers();
     stopStatusPoll();
     clearTimeout(viewportSendTimer);
     clearTimeout(toast._t);

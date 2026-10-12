@@ -18,7 +18,7 @@ func remoteTestSummaries(t remotePerformanceTimings) []remoteTimingSummary {
 
 func remoteTestHelperJSON(t *testing.T, w remotePerformanceWindow) []byte {
 	t.Helper()
-	data, err := json.Marshal(remoteHelperPerformance{Version: 1, Window: w})
+	data, err := json.Marshal(remoteHelperPerformance{Version: 2, Window: w})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,11 +167,12 @@ func TestRemotePerformanceConcurrentReportsConserveMeasurements(t *testing.T) {
 			for index := 0; index < observations; index++ {
 				p.observe(remoteInputQueue, time.Millisecond)
 				p.add(remoteFullFrames, 1)
+				p.inputOutcome(index%2 == 0)
 			}
 		}()
 	}
 	close(begin)
-	var samples, frames uint64
+	var samples, frames, attempts, accepted, rejected uint64
 	for index := 1; index <= 100; index++ {
 		w := p.snapshot(start.Add(time.Duration(index) * time.Millisecond))
 		if !w.valid() || (w.Timings.InputQueue.Samples > 0 && w.Timings.InputQueue.MeanMS != 1) {
@@ -179,13 +180,47 @@ func TestRemotePerformanceConcurrentReportsConserveMeasurements(t *testing.T) {
 		}
 		samples += w.Timings.InputQueue.Samples
 		frames += w.FullFrames
+		attempts += w.InputAttempts
+		accepted += w.InputAccepted
+		rejected += w.InputRejected
 	}
 	group.Wait()
 	w := p.snapshot(start.Add(time.Second))
 	samples += w.Timings.InputQueue.Samples
 	frames += w.FullFrames
+	attempts += w.InputAttempts
+	accepted += w.InputAccepted
+	rejected += w.InputRejected
 	if samples != workers*observations || frames != workers*observations {
 		t.Fatalf("observations lost across concurrent resets: samples=%d frames=%d", samples, frames)
+	}
+	if attempts != workers*observations || accepted != workers*observations/2 || rejected != workers*observations/2 {
+		t.Fatalf("native outcomes lost across concurrent resets: attempts=%d accepted=%d rejected=%d", attempts, accepted, rejected)
+	}
+}
+
+func TestRemotePerformanceInputOutcomesShareSaturationAndReset(t *testing.T) {
+	start := time.Unix(100, 0)
+	p := newRemotePerformance(start)
+	p.counters[remoteInputAttempts] = remotePerformanceMaxCount - 1
+	p.counters[remoteInputAccepted] = remotePerformanceMaxCount - 2
+	p.counters[remoteInputRejected] = 1
+	p.inputOutcome(false)
+	p.inputOutcome(true)
+	p.inputOutcome(false)
+	// The generic counter API must not split an outcome or alter its invariant.
+	p.add(remoteInputAttempts, 1)
+	p.add(remoteInputAccepted, 1)
+	p.add(remoteInputRejected, 1)
+	w := p.snapshot(start.Add(remotePerformanceInterval))
+	if !w.valid() || w.InputAttempts != remotePerformanceMaxCount || w.InputAccepted != remotePerformanceMaxCount-2 || w.InputRejected != 2 {
+		t.Fatalf("saturated paired outcomes are inconsistent: %+v", w)
+	}
+	p.inputOutcome(true)
+	p.inputOutcome(false)
+	w = p.snapshot(start.Add(2 * remotePerformanceInterval))
+	if !w.valid() || w.InputAttempts != 2 || w.InputAccepted != 1 || w.InputRejected != 1 {
+		t.Fatalf("new window retained old outcomes: %+v", w)
 	}
 }
 
@@ -195,6 +230,7 @@ func TestRemoteHelperPerformanceRoundTripAtBounds(t *testing.T) {
 		InputQueueMax: 128, FullFrames: remotePerformanceMaxCount, PartialFrames: remotePerformanceMaxCount,
 		DXGIFrames: remotePerformanceMaxCount, GDIFrames: remotePerformanceMaxCount, ReplayFrames: remotePerformanceMaxCount,
 		DXGIIdle: remotePerformanceMaxCount, DXGIAccumulated: remotePerformanceMaxCount, EncodedBytes: remotePerformanceMaxBytes,
+		InputAttempts: remotePerformanceMaxCount, InputAccepted: remotePerformanceMaxCount - 1, InputRejected: 1,
 	}
 	sample := remoteTimingSummary{Samples: remotePerformanceMaxCount, MeanMS: 60000, MaxMS: 60000}
 	w.Timings = remotePerformanceTimings{sample, sample, sample, sample, sample, sample, sample, sample, sample, sample, sample}
@@ -228,12 +264,12 @@ func TestRemoteHelperPerformanceRoundTripAtBounds(t *testing.T) {
 func TestRemoteHelperPerformanceRejectsMalformedOrUnboundedReports(t *testing.T) {
 	valid := string(remoteTestHelperJSON(t, remotePerformanceWindow{}))
 	cases := map[string]string{
-		"duplicate version":       strings.Replace(valid, `"version":1`, `"version":2,"version":1`, 1),
+		"duplicate version":       strings.Replace(valid, `"version":2`, `"version":1,"version":2`, 1),
 		"duplicate window field":  strings.Replace(valid, `"window_ms":0`, `"window_ms":-1,"window_ms":0`, 1),
 		"duplicate stage":         strings.Replace(valid, `"input_queue":{"samples":0,"mean_ms":0,"max_ms":0}`, `"input_queue":null,"input_queue":{"samples":0,"mean_ms":0,"max_ms":0}`, 1),
 		"duplicate summary field": strings.Replace(valid, `"mean_ms":0`, `"mean_ms":-1,"mean_ms":0`, 1),
 		"missing window":          `{"version":1}`, "null window": `{"version":1,"window":null}`,
-		"missing envelope version":     strings.Replace(valid, `"version":1,`, "", 1),
+		"missing envelope version":     strings.Replace(valid, `"version":2,`, "", 1),
 		"missing window clock":         strings.Replace(valid, `"window_ms":0,`, "", 1),
 		"case changed window key":      strings.Replace(valid, `"window_ms":0`, `"Window_MS":0`, 1),
 		"null window count":            strings.Replace(valid, `"full_frames":0`, `"full_frames":null`, 1),
@@ -243,7 +279,7 @@ func TestRemoteHelperPerformanceRejectsMalformedOrUnboundedReports(t *testing.T)
 		"case changed stage":           strings.Replace(valid, `"input_queue":`, `"Input_Queue":`, 1),
 		"case changed summary key":     strings.Replace(valid, `"mean_ms":0`, `"Mean_MS":0`, 1),
 		"null timings":                 strings.Replace(valid, `"timings":{`, `"timings":null,"ignored_timings":{`, 1),
-		"empty":                        "", "malformed": "{", "wrong version": strings.Replace(valid, `"version":1`, `"version":2`, 1),
+		"empty":                        "", "malformed": "{", "wrong version": strings.Replace(valid, `"version":2`, `"version":3`, 1),
 		"unknown envelope": strings.TrimSuffix(valid, "}") + `,"input":"private"}`,
 		"unknown window":   strings.Replace(valid, `"window":{`, `"window":{"mouse_x":5,`, 1),
 		"unknown stage":    strings.Replace(valid, `"timings":{`, `"timings":{"input_contents":{},`, 1),
@@ -263,6 +299,17 @@ func TestRemoteHelperPerformanceRejectsMalformedOrUnboundedReports(t *testing.T)
 		"mean greater than max":     strings.Replace(valid, `"samples":0,"mean_ms":0,"max_ms":0`, `"samples":1,"mean_ms":2,"max_ms":1`, 1),
 		"max above cap":             strings.Replace(valid, `"samples":0,"mean_ms":0,"max_ms":0`, `"samples":1,"mean_ms":1,"max_ms":60001`, 1),
 		"nonfinite JSON":            strings.Replace(valid, `"window_ms":0`, `"window_ms":1e999`, 1),
+		"missing attempts":          strings.Replace(valid, `"input_attempts":0,`, "", 1),
+		"missing accepted":          strings.Replace(valid, `"input_accepted":0,`, "", 1),
+		"missing rejected":          strings.Replace(valid, `"input_rejected":0,`, "", 1),
+		"inconsistent outcomes":     strings.Replace(valid, `"input_attempts":0`, `"input_attempts":1`, 1),
+		"outcome boolean":           strings.Replace(valid, `"input_accepted":0`, `"input_accepted":true`, 1),
+		"outcome string":            strings.Replace(valid, `"input_rejected":0`, `"input_rejected":"private-input"`, 1),
+		"outcome null":              strings.Replace(valid, `"input_accepted":0`, `"input_accepted":null`, 1),
+		"outcome fractional":        strings.Replace(valid, `"input_attempts":0`, `"input_attempts":0.5`, 1),
+		"outcome above cap":         strings.Replace(valid, `"input_attempts":0`, `"input_attempts":1000001`, 1),
+		"outcome overflow":          strings.Replace(valid, `"input_rejected":0`, `"input_rejected":18446744073709551616`, 1),
+		"outcome private field":     strings.Replace(valid, `"input_attempts":0`, `"input_attempts":0,"key":"private"`, 1),
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -270,6 +317,39 @@ func TestRemoteHelperPerformanceRejectsMalformedOrUnboundedReports(t *testing.T)
 				t.Fatal("malformed or out-of-bounds helper report accepted")
 			}
 		})
+	}
+}
+
+func TestRemoteHelperPerformanceKeepsExactVersionOneCompatibility(t *testing.T) {
+	w := remotePerformanceWindow{FullFrames: 7, Timings: remotePerformanceTimings{InputDispatch: remoteTimingSummary{Samples: 1, MeanMS: 2, MaxMS: 2}}}
+	var legacy map[string]any
+	if err := json.Unmarshal(remoteTestHelperJSON(t, w), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["version"] = 1
+	window := legacy["window"].(map[string]any)
+	for _, name := range []string{"input_attempts", "input_accepted", "input_rejected"} {
+		delete(window, name)
+	}
+	encode := func() []byte {
+		data, err := json.Marshal(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	decoded, err := decodeRemoteHelperPerformance(encode())
+	if err != nil || decoded != w {
+		t.Fatalf("exact old schema rejected or modified: %+v %v", decoded, err)
+	}
+	window["input_attempts"] = 0
+	if _, err := decodeRemoteHelperPerformance(encode()); err == nil {
+		t.Fatal("version one accepted an outcome field from a newer schema")
+	}
+	delete(window, "input_attempts")
+	legacy["version"] = 2
+	if _, err := decodeRemoteHelperPerformance(encode()); err == nil {
+		t.Fatal("version two accepted missing native outcome fields")
 	}
 }
 

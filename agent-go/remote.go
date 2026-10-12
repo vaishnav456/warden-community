@@ -308,35 +308,68 @@ type keyINPUT struct {
 	_2      [8]byte // offset 24 — pad to 32 bytes to match MOUSEINPUT union size
 }
 
-func sendMouseInput(dx, dy int32, flags, data uint32) {
+func sendMouseInput(dx, dy int32, flags, data uint32) bool {
 	var inp [40]byte
 	// type = INPUT_MOUSE (0)
 	*(*mouseINPUT)(unsafe.Pointer(&inp[8])) = mouseINPUT{
 		dx: dx, dy: dy, mouseData: data, dwFlags: flags,
 	}
-	procSendInput.Call(1, uintptr(unsafe.Pointer(&inp[0])), 40)
+	sent, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp[0])), 40)
+	return sent == 1
 }
 
-func sendKeyInput(vk uint16, flags uint32) {
+func sendKeyInput(vk uint16, flags uint32) bool {
 	var inp [40]byte
 	*(*uint32)(unsafe.Pointer(&inp[0])) = 1 // INPUT_KEYBOARD
 	*(*keyINPUT)(unsafe.Pointer(&inp[8])) = keyINPUT{wVk: vk, dwFlags: flags}
-	procSendInput.Call(1, uintptr(unsafe.Pointer(&inp[0])), 40)
+	sent, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp[0])), 40)
+	return sent == 1
 }
 
-func sendUnicodeKey(text string, flags uint32) {
+func sendUnicodeKey(text string, flags uint32) bool {
 	units, err := windows.UTF16FromString(text)
-	if err != nil {
-		return
+	if err != nil || len(units) <= 1 {
+		return false
 	}
-	for _, unit := range units[:len(units)-1] { // omit terminating NUL
+	accepted := true
+	for _, unit := range units[:len(units)-1] {
 		var inp [40]byte
-		*(*uint32)(unsafe.Pointer(&inp[0])) = 1 // INPUT_KEYBOARD
-		*(*keyINPUT)(unsafe.Pointer(&inp[8])) = keyINPUT{
-			wScan: unit, dwFlags: keyUnicode | flags,
+		*(*uint32)(unsafe.Pointer(&inp[0])) = 1
+		*(*keyINPUT)(unsafe.Pointer(&inp[8])) = keyINPUT{wScan: unit, dwFlags: keyUnicode | flags}
+		sent, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp[0])), 40)
+		if sent != 1 {
+			accepted = false
 		}
-		procSendInput.Call(1, uintptr(unsafe.Pointer(&inp[0])), 40)
 	}
+	return accepted
+}
+
+func setRemoteCursorPos(x, y int32) bool {
+	ok, _, _ := procSetCursorPos.Call(uintptr(x), uintptr(y))
+	return ok != 0
+}
+
+// Startup and graceful-exit resets recover button-up events lost with the
+// previous helper or socket. Reset every supported button without moving it.
+func releaseRemoteMouseButtonsWith(sendMouse func(int32, int32, uint32, uint32) bool) {
+	for _, flags := range []uint32{mouseLeftUp, mouseRightUp, mouseMidUp} {
+		sendMouse(0, 0, flags, 0)
+	}
+}
+
+func releaseRemoteMouseButtons() { releaseRemoteMouseButtonsWith(sendMouseInput) }
+
+// Boolean outcomes acknowledge only acceptance by the Windows API, not
+// processing by a target application. This adapter also keeps tests synthetic.
+type remoteInputNativeAPI struct {
+	cursor  func(int32, int32) bool
+	mouse   func(int32, int32, uint32, uint32) bool
+	key     func(uint16, uint32) bool
+	unicode func(string, uint32) bool
+}
+
+var systemRemoteInputAPI = remoteInputNativeAPI{
+	cursor: setRemoteCursorPos, mouse: sendMouseInput, key: sendKeyInput, unicode: sendUnicodeKey,
 }
 
 func releaseModifierKeys() {
@@ -615,13 +648,17 @@ func keyboardEventVK(event map[string]interface{}) uint16 {
 	return vk
 }
 
-func dispatchInput(event map[string]interface{}, region monitorRect) {
+func dispatchInput(event map[string]interface{}, region monitorRect) (attempted, accepted bool) {
+	return dispatchInputWith(event, region, systemRemoteInputAPI)
+}
+
+func dispatchInputWith(event map[string]interface{}, region monitorRect, native remoteInputNativeAPI) (attempted, accepted bool) {
 	t, _ := event["type"].(string)
 	switch t {
 	case "mousemove":
 		x, _ := event["x"].(float64)
 		y, _ := event["y"].(float64)
-		procSetCursorPos.Call(uintptr(int32(x)+region.Left), uintptr(int32(y)+region.Top))
+		return true, native.cursor(int32(x)+region.Left, int32(y)+region.Top)
 
 	case "mousedown", "mouseup":
 		btn, _ := event["button"].(string)
@@ -646,30 +683,18 @@ func dispatchInput(event map[string]interface{}, region monitorRect) {
 				flags = mouseLeftUp
 			}
 		}
-		// The browser sends x/y with every mousedown/mouseup (see
-		// remote_view.html's canvasXY() spread into the event payload),
-		// but this used to discard them and fire the button event at
-		// whatever position the cursor was last left at by a separate,
-		// earlier "mousemove" message. That relied on the browser's own
-		// mousemove throttling (coalesced to its repaint rate) having
-		// already landed the real cursor at the exact click pixel by the
-		// time the click message arrived -- fine for a slow, deliberate
-		// click in open space, but exactly what breaks for small targets
-		// (a title bar's minimize button, a narrow list row) where a few
-		// stale pixels means the click lands on the wrong element or
-		// nothing at all. Combining MOUSEEVENTF_MOVE|ABSOLUTE with the
-		// button flag in one SendInput call makes the move and the click
-		// atomic and always click exactly where this specific event says,
-		// instead of trusting a previous message's cursor position.
+		// Place the cursor for this click, then inject its button transition.
+		// Both calls must succeed to acknowledge the native input attempt.
 		x, _ := event["x"].(float64)
 		y, _ := event["y"].(float64)
-		procSetCursorPos.Call(uintptr(int32(x)+region.Left), uintptr(int32(y)+region.Top))
-		sendMouseInput(0, 0, flags, 0)
+		moved := native.cursor(int32(x)+region.Left, int32(y)+region.Top)
+		clicked := native.mouse(0, 0, flags, 0)
+		return true, moved && clicked
 
 	case "scroll":
 		delta, _ := event["delta"].(float64)
 		data := uint32(-int32(delta) * wheelDelta)
-		sendMouseInput(0, 0, mouseWheel, data)
+		return true, native.mouse(0, 0, mouseWheel, data)
 
 	case "keydown", "keyup":
 		key, _ := event["key"].(string)
@@ -688,8 +713,7 @@ func dispatchInput(event map[string]interface{}, region monitorRect) {
 			if t == "keyup" {
 				flags = keyUp
 			}
-			sendUnicodeKey(key, flags)
-			break
+			return true, native.unicode(key, flags)
 		}
 		vk := keyboardEventVK(event)
 		if vk != 0 {
@@ -697,7 +721,7 @@ func dispatchInput(event map[string]interface{}, region monitorRect) {
 			if t == "keyup" {
 				flags = keyUp
 			}
-			sendKeyInput(vk, flags)
+			return true, native.key(vk, flags)
 		}
 
 	case "clipboard_write":
@@ -710,6 +734,7 @@ func dispatchInput(event map[string]interface{}, region monitorRect) {
 			sendKeyInput(0x11, keyUp) // Ctrl up
 		}
 	}
+	return false, false
 }
 
 // ── Relay session ─────────────────────────────────────────────────────────────
@@ -1158,7 +1183,7 @@ func runRelaySession(relayURL, relayAPIKey string, session *relaySession) {
 				// Helper snapshots wake this same pump even when no desktop pixels change.
 				now := time.Now()
 				if now.Sub(lastPerformanceReport) >= remotePerformanceInterval {
-					report := remotePerformanceReport{Type: "remote_agent_performance", Version: 1, Service: performance.snapshot(now), Helper: helperWindow}
+					report := remotePerformanceReport{Type: "remote_agent_performance", Version: 2, Service: performance.snapshot(now), Helper: helperWindow}
 					if helperWindow != nil {
 						age := remoteDurationMS(now.Sub(helperReceived))
 						report.HelperAgeMS = &age
