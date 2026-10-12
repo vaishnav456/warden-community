@@ -143,3 +143,22 @@ export class RemotePointerSender {
     this.pending = null;
   }
 }
+
+// Track only buttons actually queued to the live session. Cleanup is idempotent
+// across pointer-up, capture loss, navigation and WebSocket teardown.
+export class RemoteButtonState {
+  constructor({ send }) { this.send = send; this.held = new Set(); }
+  press(button, position) {
+    if (!['left', 'right', 'middle'].includes(button) || this.held.has(button)) return false;
+    if (this.send({ type: 'mousedown', button, ...position }) !== true) return false;
+    this.held.add(button);
+    return true;
+  }
+  release(button, position) {
+    if (!this.held.delete(button)) return false;
+    return this.send({ type: 'mouseup', button, ...position }) === true;
+  }
+  releaseAll(position) {
+    for (const button of [...this.held]) this.release(button, position);
+  }
+}

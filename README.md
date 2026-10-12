@@ -77,6 +77,12 @@ Deflate by default; set `WARDEN_REMOTE_WS_COMPRESSION=none` to disable it, or
 by 19–35%; this does not establish bandwidth or FPS improvements for an affected
 remote session.
 
+Agent 2.6.62 resets held mouse buttons when the remote helper starts, while the
+viewer releases them at capture loss, disconnect and view-only transitions.
+The [remote diagnostics guide](docs/REMOTE_DESKTOP_DIAGNOSTICS.md) explains
+separate server receive/forward counters, bounded encrypted timing history and
+native Windows input acceptance. Older agent reports remain supported.
+
 The relay yields between forwarded messages, while the browser uses direct
 binary header parsing and generation-aware, bounded frame rendering. It replaces
 obsolete updates with a newer full snapshot and requires a full baseline after

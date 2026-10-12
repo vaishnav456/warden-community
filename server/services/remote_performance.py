@@ -7,6 +7,7 @@ TIMING_FIELDS = ('dxgi_wait', 'dxgi_readback', 'gdi_capture', 'jpeg_encode',
 COUNTER_FIELDS = ('full_frames', 'partial_frames', 'dxgi_frames', 'gdi_frames',
                   'replay_frames', 'dxgi_idle', 'dxgi_accumulated')
 DIMENSION_FIELDS = ('native_w', 'native_h', 'encoded_w', 'encoded_h')
+INPUT_OUTCOME_FIELDS = ('input_attempts', 'input_accepted', 'input_rejected')
 
 
 def _number(value, maximum, integer=False):
@@ -18,15 +19,18 @@ def _number(value, maximum, integer=False):
         return False
 
 
-def _window(value):
-    fields = set(COUNTER_FIELDS + DIMENSION_FIELDS + ('window_ms', 'input_queue_max', 'encoded_bytes', 'timings'))
+def _window(value, version):
+    counters = COUNTER_FIELDS + (INPUT_OUTCOME_FIELDS if version == 2 else ())
+    fields = set(counters + DIMENSION_FIELDS + ('window_ms', 'input_queue_max', 'encoded_bytes', 'timings'))
     if not isinstance(value, dict) or set(value) != fields:
         return None
-    for names, maximum, integer in ((COUNTER_FIELDS, 1000000, True), (DIMENSION_FIELDS, 16384, True),
+    for names, maximum, integer in ((counters, 1000000, True), (DIMENSION_FIELDS, 16384, True),
                                     (('window_ms',), 60000, False), (('input_queue_max',), 128, True),
                                     (('encoded_bytes',), 1073741824, True)):
         if any(not _number(value[name], maximum, integer) for name in names):
             return None
+    if version == 2 and value['input_attempts'] != value['input_accepted'] + value['input_rejected']:
+        return None
     timings = value['timings']
     if not isinstance(timings, dict) or set(timings) != set(TIMING_FIELDS):
         return None
@@ -46,15 +50,16 @@ def _window(value):
 
 def validate_agent_performance(value):
     if not isinstance(value, dict) or value.get('type') != 'remote_agent_performance' \
-            or type(value.get('version')) is not int or value['version'] != 1 \
+            or type(value.get('version')) is not int or value['version'] not in (1, 2) \
             or set(value) not in ({'type', 'version', 'service'}, {'type', 'version', 'service', 'helper', 'helper_age_ms'}):
         return None
-    service = _window(value['service'])
+    version = value['version']
+    service = _window(value['service'], version)
     if service is None:
         return None
-    result = {'type': 'remote_agent_performance', 'version': 1, 'service': service}
+    result = {'type': 'remote_agent_performance', 'version': version, 'service': service}
     if 'helper' in value:
-        helper = _window(value['helper'])
+        helper = _window(value['helper'], version)
         if helper is None or not _number(value['helper_age_ms'], 60000):
             return None
         result.update(helper=helper, helper_age_ms=value['helper_age_ms'])
