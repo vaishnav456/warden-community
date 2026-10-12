@@ -287,6 +287,15 @@ and HTTP/3, each concurrent request counts as a connection. Test held background
 requests and excess simultaneous sign-ins independently. See the
 [Nginx connection-limit documentation](https://nginx.org/en/docs/http/ngx_http_limit_conn_module.html).
 
+Give `/remote-ws/` and `/agent-relay/` a separate, shared connection-count zone
+using the existing trusted client-IP key. Preserve their combined concurrency
+limit and keep ordinary application requests in the general zone. Otherwise,
+background HTTP requests can cause a remote handshake to return 503 before the
+agent and browser pair. Verify both directions under background traffic, the
+combined remote limit, and the unchanged general and authentication limits.
+Verify that active upgraded connections survive a graceful reload. Keep actual
+proxy configuration and recovery copies private.
+
 ## Optional agent modules
 
 See [Optional agent modules](docs/AGENT_MODULES.md) for separate Core and Helpdesk build targets and organization controls. The new Windows module installation path still needs a native pilot before release.
